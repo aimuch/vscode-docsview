@@ -101,6 +101,16 @@ Markdown / CSV 的文本编辑器右上角有两个 DocsView 图标：**打开�
 - 超过约 40 MB 的 CSV 不提供表格视图
 - 加密（带密码）的 Office 文件无法打开
 
+## 下载安装
+
+每次推送到 `main`，GitHub Actions 都会编译、测试（含真实 VS Code 中的冒烟测试）并在 [Releases](https://github.com/aimuch/vscode-docsview/releases) 发布离线安装包 `docsview-<版本>.vsix`。版本号的补丁位是构建序号（例如 `0.1.23`），主、次版本号取自 `package.json`。
+
+下载后在 VS Code 扩展视图右上角 **…** → **从 VSIX 安装…**，或运行：
+
+```bash
+code --install-extension docsview-0.1.23.vsix
+```
+
 ## 开发
 
 ```bash

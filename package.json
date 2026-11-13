@@ -6,6 +6,14 @@
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aimuch/vscode-docsview.git"
+  },
+  "homepage": "https://github.com/aimuch/vscode-docsview#readme",
+  "bugs": {
+    "url": "https://github.com/aimuch/vscode-docsview/issues"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -275,12 +283,14 @@
     "smoke": "node esbuild.mjs --dev && node scripts/smoke.mjs",
     "samples": "node scripts/gen-samples.mjs",
     "vscode:prepublish": "npm run build:prod",
-    "package": "vsce package --no-dependencies --allow-missing-repository"
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "~1.90.0",
     "@vscode/markdown-it-katex": "^1.1.2",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.1.1",
     "@xmldom/xmldom": "^0.9.12",
     "docx": "^9.15.3",
     "docx-preview": "^0.4.1",
