@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
+import { rowsToDelimited, rowsToXlsx } from '../convert';
+import { saveConverted } from '../fileActions';
 import { configureWebview, debounce, handleCommonMessage, t, onWebviewMessage } from '../webviewHtml';
 import type { TextEdit } from './csvParser';
 import { CsvSession } from './csvSession';
@@ -86,6 +88,19 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
             sync();
             void apply(session.editCells(message.changes));
             break;
+          case 'convert': {
+            sync();
+            const rows = session.model().rows as string[][];
+            const format = message.format;
+            const bytes =
+              format === 'xlsx'
+                ? rowsToXlsx(rows, name)
+                : Promise.resolve(new TextEncoder().encode(rowsToDelimited(rows, format, eol())));
+            void bytes
+              .then((b) => saveConverted(document.uri, format, b))
+              .catch((err: unknown) => vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)));
+            break;
+          }
           case 'structure':
             sync();
             void apply(session.structure(message.op, message.at, message.count));

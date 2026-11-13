@@ -10,6 +10,8 @@ import type {
 } from '../common/protocol';
 import { renderShell } from '../common/shell';
 import { pickLang, translate, type Lang, type StringKey } from '../common/strings';
+import { extensionOf, isDefaultEditor, setDefaultEditor } from './fileActions';
+import { showHistory, supportsHistory } from './history';
 import { reportStatus } from './status';
 
 // ---------------------------------------------------------------- appearance settings
@@ -24,6 +26,7 @@ const SETTING_KEYS: Record<keyof Appearance, string> = {
   scheme: 'appearance.colorScheme',
   invertPages: 'appearance.invertPages',
   highlight: 'highlightRowColumn',
+  lockEdits: 'table.lockEditing',
   language: 'language',
 };
 
@@ -38,6 +41,7 @@ export function readAppearance(): Appearance {
     scheme: pick(SETTING_KEYS.scheme, SCHEMES),
     invertPages: config.get<boolean>(SETTING_KEYS.invertPages, false),
     highlight: config.get<boolean>(SETTING_KEYS.highlight, true),
+    lockEdits: config.get<boolean>(SETTING_KEYS.lockEdits, false),
     language: pick(SETTING_KEYS.language, LANGUAGES),
   };
 }
@@ -77,6 +81,19 @@ function hasSourceTab(uri: vscode.Uri): boolean {
   return vscode.window.tabGroups.all.some((group) =>
     group.tabs.some((tab) => tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === key),
   );
+}
+
+function postFileState(view: View): void {
+  if (!view.uri) {
+    return;
+  }
+  const message: HostMessage = {
+    type: 'fileState',
+    isDefault: isDefaultEditor(view.uri),
+    ext: extensionOf(view.uri),
+    history: supportsHistory(view.uri),
+  };
+  void view.webview.postMessage(message);
 }
 
 function postViewState(view: View): void {
@@ -139,7 +156,8 @@ export function watchViews(): vscode.Disposable[] {
       if (
         !e.affectsConfiguration('docsview.appearance') &&
         !e.affectsConfiguration('docsview.language') &&
-        !e.affectsConfiguration('docsview.highlightRowColumn')
+        !e.affectsConfiguration('docsview.highlightRowColumn') &&
+        !e.affectsConfiguration('docsview.table.lockEditing')
       ) {
         return;
       }
@@ -155,6 +173,11 @@ export function watchViews(): vscode.Disposable[] {
       }
     }),
     vscode.window.tabGroups.onDidChangeTabs(() => views.forEach(postViewState)),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('workbench.editorAssociations')) {
+        views.forEach(postFileState);
+      }
+    }),
   ];
 }
 
@@ -213,9 +236,18 @@ export function handleCommonMessage(
       for (const view of views) {
         if (view.webview === webview) {
           postViewState(view);
+          postFileState(view);
         }
       }
       break;
+    case 'setDefault': {
+      void setDefaultEditor(uri, message.on);
+      break;
+    }
+    case 'history': {
+      void showHistory(uri);
+      break;
+    }
     case 'setAppearance': {
       const config = vscode.workspace.getConfiguration('docsview');
       for (const key of Object.keys(message.patch) as (keyof Appearance)[]) {

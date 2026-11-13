@@ -542,3 +542,96 @@ body[data-theme='paper'].dv-dark .hljs-type {
 body[data-theme='paper'].dv-dark .hljs-string {
   color: #b5c98a;
 }
+
+/* ------------------------------------------------------------------ find */
+
+.md-find {
+  width: 170px;
+}
+
+.md-find-icon {
+  display: flex;
+}
+
+.md-find-count {
+  min-width: 34px;
+}
+
+::highlight(dv-find) {
+  background-color: rgba(255, 210, 0, 0.45);
+}
+
+::highlight(dv-find-current) {
+  background-color: rgba(255, 140, 0, 0.8);
+  color: #000;
+}
+
+/* ------------------------------------------------------------------ edit mode */
+
+.md-scroll:focus {
+  outline: none;
+}
+
+.md-editing .markdown-body > [data-line-end]:hover {
+  outline: 1px dashed color-mix(in srgb, var(--md-link) 55%, transparent);
+  outline-offset: 3px;
+  cursor: text;
+}
+
+.md-edit {
+  margin: 0 0 1em;
+  padding: 10px 12px;
+  border: 2px solid var(--vscode-focusBorder, #0078d4);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--md-link) 6%, var(--md-bg));
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: 12px;
+}
+
+.md-edit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--md-muted);
+}
+
+.md-edit-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.md-edit-actions .dv-btn {
+  height: 24px;
+  border-color: var(--md-border);
+  background: var(--md-bg);
+  color: var(--md-fg);
+}
+
+.md-edit-actions .md-edit-save {
+  border-color: transparent;
+  background: var(--dv-accent);
+  color: var(--dv-accent-fg);
+}
+
+.md-edit-text {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px;
+  resize: vertical;
+  font-family: var(--vscode-editor-font-family, Menlo, Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--md-fg);
+  background: var(--md-bg);
+  border: 1px solid var(--md-border);
+  border-radius: 4px;
+}
+
+.md-edit-text:focus {
+  outline: 1px solid var(--vscode-focusBorder, #0078d4);
+  outline-offset: -1px;
+}

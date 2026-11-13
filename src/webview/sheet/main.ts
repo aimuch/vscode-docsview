@@ -3,18 +3,26 @@ import type { Cell, CellChange, SheetModel, StructureOp, WorkbookInfo } from '..
 import { cellRaw, cellText, columnName, Grid, type GridSource, type Selection } from '../grid/grid';
 import '../shared/base.css';
 import { app, button, el, onMessage, post, showStatus, t } from '../shared/api';
+import { getAppearance, highlightToggle, lockToggle, onAppearanceChange } from '../shared/appearance';
+import { getFileState } from '../shared/fileState';
 import { icons } from '../shared/icons';
-import { highlightToggle } from '../shared/appearance';
 import { readState, writeState } from '../shared/sidebar';
-import { divider, iconButton, segmented, toolbar } from '../shared/ui';
+import { divider, iconButton, moreMenu, segmented, toolbar, type MenuItem } from '../shared/ui';
 import './sheet.css';
+import { emptyView, isActive, viewRows, type SheetView } from './view';
 
 let info: WorkbookInfo | undefined;
 let active = 0;
 const models = new Map<number, SheetModel>();
 /** Column widths survive data refreshes (the model is replaced on every reload). */
 const widths = new Map<number, number[]>();
+/** Sort and filter per sheet. */
+const views = new Map<number, SheetView>();
+/** Source row of each displayed row while a sort or filter is active. */
+let rowMap: number[] | undefined;
 let grid: Grid | undefined;
+
+const toSource = (r: number) => (rowMap ? (rowMap[r] ?? -1) : r);
 
 const address = el('span', { class: 'sheet-address' });
 const formula = el('span', { class: 'sheet-formula' });
@@ -22,13 +30,31 @@ const summary = el('span', { class: 'dv-label' });
 const notice = el('div', { class: 'dv-notice' });
 notice.hidden = true;
 const gridHost = el('div', { class: 'sheet-grid' });
-const tabs = el('div', { class: 'sheet-tabs' });
-tabs.hidden = true;
+// Bottom bar: sheet tabs on the left, size summary on the right (like a spreadsheet status bar).
+const tabs = el('div', { class: 'sheet-tab-list' });
+const statusBar = el('div', { class: 'sheet-tabs' }, [tabs, el('div', { class: 'dv-spacer' }), summary]);
 const structureButtons: HTMLButtonElement[] = [];
+
+function viewOf(index: number): SheetView {
+  let view = views.get(index);
+  if (!view) {
+    views.set(index, (view = emptyView()));
+  }
+  return view;
+}
 
 function structure(op: StructureOp) {
   const sel = grid?.selection;
   if (!sel) {
+    return;
+  }
+  if (rowMap) {
+    // Row positions on screen are not file positions while sorted or filtered.
+    flash(t('structureBlocked'));
+    return;
+  }
+  if (getAppearance().lockEdits) {
+    flash(t('locked'));
     return;
   }
   const rows = op === 'insertRow' || op === 'deleteRows';
@@ -44,11 +70,12 @@ function textButton(label: string, title: string, onClick: () => void): HTMLButt
   return b;
 }
 
+// Short labels keep the toolbar on one line; the full action is in the tooltip.
 structureButtons.push(
-  textButton(`+ ${t('addRow')}`, t('addRow'), () => structure('insertRow')),
-  textButton(`+ ${t('addCol')}`, t('addCol'), () => structure('insertCol')),
-  textButton(`− ${t('delRow')}`, t('delRow'), () => structure('deleteRows')),
-  textButton(`− ${t('delCol')}`, t('delCol'), () => structure('deleteCols')),
+  textButton(t('addRowShort'), t('addRow'), () => structure('insertRow')),
+  textButton(t('addColShort'), t('addCol'), () => structure('insertCol')),
+  textButton(t('delRowShort'), t('delRow'), () => structure('deleteRows')),
+  textButton(t('delColShort'), t('delCol'), () => structure('deleteCols')),
 );
 const structureGroup = el('div', { class: 'sheet-structure' }, [divider(), ...structureButtons]);
 structureGroup.hidden = true;
@@ -105,7 +132,7 @@ const findToggle = iconButton('search', t('findInSheet'), () => {
   }
 });
 
-/** Selects the next (or previous) cell whose text contains the query, wrapping around. */
+/** Selects the next (or previous) displayed cell whose text contains the query, wrapping around. */
 function findNext(backwards = false) {
   const model = models.get(active);
   const query = findInput.value.trim().toLowerCase();
@@ -113,8 +140,13 @@ function findNext(backwards = false) {
     findStatus.textContent = '';
     return;
   }
-  const { rowCount, colCount } = model;
+  const rowCount = rowMap ? rowMap.length : model.rowCount;
+  const { colCount } = model;
   const total = rowCount * colCount;
+  if (!total) {
+    findStatus.textContent = t('noMatch');
+    return;
+  }
   const sel = grid.selection;
   const start = sel.r * colCount + sel.c;
   let matches = 0;
@@ -123,7 +155,7 @@ function findNext(backwards = false) {
     const pos = (start + (backwards ? -i : i) + total * 2) % total;
     const r = Math.floor(pos / colCount);
     const c = pos % colCount;
-    if (cellText(model.rows[r]?.[c]).toLowerCase().includes(query)) {
+    if (cellText(model.rows[toSource(r)]?.[c]).toLowerCase().includes(query)) {
       matches++;
       if (found < 0) {
         found = pos;
@@ -159,6 +191,192 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+// ---------------------------------------------------------------- sort & filter status
+
+const filterChipText = el('span');
+const filterChipIcon = el('span', { class: 'sheet-chip-icon' });
+filterChipIcon.innerHTML = icons.filter;
+const filterClear = el('button', { class: 'sheet-chip-clear', text: t('clear') });
+filterClear.type = 'button';
+filterClear.addEventListener('click', () => {
+  views.set(active, { ...emptyView(), headerRow: viewOf(active).headerRow });
+  show(active, true);
+});
+const filterChip = el('span', { class: 'sheet-chip' }, [filterChipIcon, filterChipText, filterClear]);
+filterChip.hidden = true;
+
+function updateFilterChip(model: SheetModel) {
+  const view = viewOf(active);
+  filterChip.hidden = !rowMap;
+  if (!rowMap) {
+    return;
+  }
+  const fixed = fixedRows(model, view);
+  const parts: string[] = [];
+  if (Object.values(view.filters).some((q) => q.trim())) {
+    parts.push(t('filtered', rowMap.length - Math.min(fixed, model.rows.length), Math.max(0, model.rows.length - fixed)));
+  }
+  if (view.sortCol !== undefined) {
+    parts.push(t('sortedBy', columnName(view.sortCol), t(view.sortDir === -1 ? 'desc' : 'asc')));
+  }
+  filterChipText.textContent = parts.join(' · ');
+}
+
+// ---------------------------------------------------------------- column menu
+
+const columnMenu = el('div', { class: 'dv-menu sheet-col-menu' });
+columnMenu.setAttribute('role', 'menu');
+columnMenu.hidden = true;
+document.body.append(columnMenu);
+document.addEventListener('mousedown', (e) => {
+  if (!columnMenu.hidden && !columnMenu.contains(e.target as Node)) {
+    columnMenu.hidden = true;
+  }
+});
+columnMenu.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    columnMenu.hidden = true;
+    grid?.focus();
+  }
+});
+
+function menuRow(icon: keyof typeof icons | '', label: string, onClick: () => void): HTMLButtonElement {
+  const row = el('button', { class: 'dv-menu-item' });
+  row.type = 'button';
+  row.setAttribute('role', 'menuitem');
+  const mark = el('span', { class: 'dv-menu-check' });
+  if (icon) {
+    mark.innerHTML = icons[icon];
+  }
+  row.append(mark, el('span', { class: 'dv-menu-label', text: label }));
+  row.addEventListener('click', onClick);
+  return row;
+}
+
+function openColumnMenu(col: number, anchor: DOMRect) {
+  const model = models.get(active);
+  if (!model) {
+    return;
+  }
+  const view = viewOf(active);
+  const apply = (close = true) => {
+    if (close) {
+      columnMenu.hidden = true;
+    }
+    show(active, true);
+  };
+  const sort = (dir: 1 | -1) => {
+    view.sortCol = col;
+    view.sortDir = dir;
+    apply();
+  };
+  const items: HTMLElement[] = [
+    menuRow('sortUp', t('sortAsc'), () => sort(1)),
+    menuRow('sortDown', t('sortDesc'), () => sort(-1)),
+  ];
+  if (view.sortCol === col) {
+    items.push(
+      menuRow('', t('clearSort'), () => {
+        view.sortCol = undefined;
+        view.sortDir = undefined;
+        apply();
+      }),
+    );
+  }
+  const filter = el('input', { class: 'dv-input sheet-col-filter' });
+  filter.type = 'text';
+  filter.value = view.filters[col] ?? '';
+  filter.setAttribute('aria-label', `${columnName(col)} ${t('filterContains')}`);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  filter.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      view.filters[col] = filter.value;
+      apply(false);
+    }, 200);
+  });
+  filter.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      view.filters[col] = filter.value;
+      apply();
+    }
+  });
+  items.push(
+    el('div', { class: 'dv-menu-sep' }),
+    el('div', { class: 'dv-menu-title sheet-col-menu-title', text: t('filterContains') }),
+    filter,
+  );
+  if (!model.frozenRows) {
+    const header = el('input');
+    header.type = 'checkbox';
+    header.checked = view.headerRow;
+    header.addEventListener('change', () => {
+      view.headerRow = header.checked;
+      apply(false);
+    });
+    items.push(el('label', { class: 'dv-check sheet-col-check' }, [header, el('span', { text: t('headerRow') })]));
+  }
+  if (view.filters[col]) {
+    items.push(
+      el('div', { class: 'dv-menu-sep' }),
+      menuRow('', t('clearColumnFilter'), () => {
+        delete view.filters[col];
+        apply();
+      }),
+    );
+  }
+  columnMenu.replaceChildren(...items);
+  columnMenu.setAttribute('aria-label', t('columnMenu', columnName(col)));
+  columnMenu.hidden = false;
+  const left = Math.min(anchor.left, window.innerWidth - columnMenu.offsetWidth - 8);
+  columnMenu.style.left = `${Math.max(8, left)}px`;
+  columnMenu.style.top = `${anchor.bottom + 4}px`;
+  columnMenu.style.right = 'auto';
+  filter.focus();
+}
+
+// ---------------------------------------------------------------- more menu & right-to-left
+
+let rtl = readState().rtl === true;
+
+function convertItems(): MenuItem[] {
+  const formats: ('csv' | 'tsv' | 'xlsx')[] = ['csv', 'tsv', 'xlsx'];
+  return formats.map((format) => ({
+    label: t('convertTo', format.toUpperCase()),
+    // Not to its own format; a workbook converts its current sheet to CSV/TSV.
+    visible: () => {
+      const ext = getFileState().ext;
+      return ext !== format && !(format === 'xlsx' && ext === 'xlsm');
+    },
+    onClick: () => post({ type: 'convert', index: active, format }),
+  }));
+}
+
+const more = moreMenu(t('more'), [
+  {
+    label: () => t('setDefault', getFileState().ext || 'csv'),
+    visible: () => getFileState().isDefault !== undefined,
+    checked: () => getFileState().isDefault === true,
+    onClick: () => post({ type: 'setDefault', on: getFileState().isDefault !== true }),
+  },
+  '-',
+  ...convertItems(),
+  '-',
+  { label: t('history'), visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
+  {
+    label: t('rtl'),
+    checked: () => rtl,
+    onClick: () => {
+      rtl = !rtl;
+      writeState({ rtl });
+      grid?.setRtl(rtl);
+    },
+  },
+]);
+
+const lock = lockToggle();
+lock.hidden = true;
+
 app.append(
   toolbar(
     csvView.node,
@@ -169,14 +387,17 @@ app.append(
     findToggle,
     findBox,
     findStatus,
+    filterChip,
+    '|',
+    lock,
     highlightToggle(),
     structureGroup,
     'spacer',
-    summary,
+    more,
   ),
   notice,
   gridHost,
-  tabs,
+  statusBar,
 );
 showStatus(gridHost, t('loading'));
 
@@ -214,6 +435,11 @@ function autoWidths(model: SheetModel): number[] {
   return result;
 }
 
+/** Rows that stay on top and out of sorting: frozen rows, else an optional header row. */
+function fixedRows(model: SheetModel, view: SheetView): number {
+  return model.frozenRows || (view.headerRow ? 1 : 0);
+}
+
 function sourceFor(index: number, model: SheetModel): GridSource {
   let colWidths = widths.get(index);
   // Columns were inserted or removed: old widths no longer line up, so measure again.
@@ -221,17 +447,35 @@ function sourceFor(index: number, model: SheetModel): GridSource {
     colWidths = autoWidths(model);
     widths.set(index, colWidths);
   }
+  const view = viewOf(index);
+  rowMap = isActive(view) ? viewRows(model.rows, model.rows.length, fixedRows(model, view), view) : undefined;
+  const map = rowMap;
+  let rowHeights = model.rowHeights;
+  let merges = model.merges;
+  if (map) {
+    // Heights follow their rows; merges only survive inside the fixed header rows.
+    const fixed = fixedRows(model, view);
+    rowHeights = model.rowHeights
+      ? Object.fromEntries(map.map((r, i) => [i, model.rowHeights![r]]).filter(([, h]) => h !== undefined))
+      : undefined;
+    merges = model.merges?.filter((m) => m.r + m.rs <= fixed);
+  }
   return {
-    rowCount: model.rowCount,
+    rowCount: map ? map.length : model.rowCount,
     colCount: model.colCount,
-    cell: (r, c) => model.rows[r]?.[c],
+    cell: map ? (r, c) => model.rows[map[r]]?.[c] : (r, c) => model.rows[r]?.[c],
     styles: plain ? undefined : model.styles,
     colWidths,
-    rowHeights: model.rowHeights,
-    merges: model.merges,
+    rowHeights,
+    merges,
     frozenRows: model.frozenRows,
     frozenCols: model.frozenCols,
     palette: !plain && model.styles?.some((s) => s.color || s.bg) ? 'light' : 'theme',
+    rowLabel: map ? (r) => String(map[r] + 1) : undefined,
+    colBadge: (c) => {
+      const badges = view.sortCol === c ? (view.sortDir === -1 ? ' ↓' : ' ↑') : '';
+      return badges + (view.filters[c]?.trim() ? ' ⧩' : '');
+    },
   };
 }
 
@@ -243,10 +487,11 @@ function updateSummary() {
 function onSelection(sel: Selection) {
   const model = models.get(active);
   const single = sel.r0 === sel.r1 && sel.c0 === sel.c1;
+  const row = (r: number) => toSource(r) + 1;
   address.textContent = single
-    ? `${columnName(sel.c)}${sel.r + 1}`
-    : `${columnName(sel.c0)}${sel.r0 + 1}:${columnName(sel.c1)}${sel.r1 + 1}`;
-  formula.textContent = cellRaw(model?.rows[sel.r]?.[sel.c]);
+    ? `${columnName(sel.c)}${row(sel.r)}`
+    : `${columnName(sel.c0)}${row(sel.r0)}:${columnName(sel.c1)}${row(sel.r1)}`;
+  formula.textContent = cellRaw(model?.rows[toSource(sel.r)]?.[sel.c]);
   formula.title = formula.textContent;
 }
 
@@ -265,30 +510,56 @@ function flash(message: string) {
   }, 3500);
 }
 
+function canEdit(): boolean {
+  return (info?.editable ?? false) && !getAppearance().lockEdits;
+}
+
+function applyLock() {
+  grid?.setEditable(canEdit());
+  const locked = getAppearance().lockEdits;
+  structureButtons.forEach((b) => (b.disabled = locked));
+}
+
+onAppearanceChange(applyLock);
+
 function ensureGrid(): Grid {
   if (!grid) {
     gridHost.replaceChildren();
     grid = new Grid(gridHost, {
-      editable: info?.editable ?? false,
+      editable: canEdit(),
       canGrowRows: info?.canStructure ?? false,
       onEdit: (changes) => edit(changes),
       onSelection,
       onReadonlyCell: () => flash(t('cellReadonly')),
+      onBlockedEdit: () => {
+        if (info?.editable) {
+          flash(t('locked'));
+        }
+      },
+      onColumnMenu: (col, anchor) => openColumnMenu(col, anchor),
     });
+    grid.setRtl(rtl);
   }
   return grid;
 }
 
 function edit(changes: CellChange[]) {
+  // Displayed rows → file rows. Rows past the end only exist in an unsorted, unfiltered view.
+  const mapped = changes
+    .map((change) => ({ ...change, r: toSource(change.r) }))
+    .filter((change) => change.r >= 0);
+  if (!mapped.length) {
+    return;
+  }
   // Show the new text immediately; the host answers with the authoritative cells.
   const model = models.get(active);
   if (model) {
-    for (const { r, c, text } of changes) {
+    for (const { r, c, text } of mapped) {
       setCell(model, r, c, text);
     }
     grid?.invalidate();
   }
-  post({ type: 'edit', index: active, changes });
+  post({ type: 'edit', index: active, changes: mapped });
 }
 
 function setCell(model: SheetModel, r: number, c: number, cell: Cell) {
@@ -315,12 +586,17 @@ function show(index: number, keepView: boolean) {
   }
   ensureGrid().setData(sourceFor(index, model), keepView);
   updateSummary();
+  updateFilterChip(model);
   post({ type: 'status', ok: true, detail: `${model.name}: ${model.rowCount}x${model.colCount}` });
 }
 
 function renderTabs() {
   const sheets = info?.sheets ?? [];
   tabs.hidden = sheets.length <= 1;
+  if (tabs.hidden) {
+    tabs.replaceChildren();
+    return;
+  }
   tabs.replaceChildren(
     ...sheets.map((sheet, i) => {
       const tab = button(sheet.name, sheet.name, () => {
@@ -350,8 +626,10 @@ onMessage((message) => {
       csvView.node.hidden = !info.canStructure;
       excelView.node.hidden = info.canStructure;
       structureGroup.hidden = !info.canStructure;
+      lock.hidden = !info.editable;
       renderTabs();
       show(active, false);
+      applyLock();
       break;
     }
     case 'sheet': {
@@ -394,6 +672,7 @@ onMessage((message) => {
       model.rowCount = message.rowCount;
       model.colCount = message.colCount;
       if (message.index === active && grid) {
+        // Rows stay where the current sort put them until it is applied again.
         grid.invalidate();
         onSelection(grid.selection);
       }

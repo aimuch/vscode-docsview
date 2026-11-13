@@ -105,6 +105,8 @@ export interface Appearance {
   invertPages: boolean;
   /** Highlight the row and column of the selected cell (sheets) or hovered cell (Markdown tables). */
   highlight: boolean;
+  /** Sheets: cells cannot be edited until unlocked. */
+  lockEdits: boolean;
   language: LanguageSetting;
 }
 
@@ -113,6 +115,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   scheme: 'auto',
   invertPages: false,
   highlight: true,
+  lockEdits: false,
   language: 'auto',
 };
 
@@ -121,7 +124,8 @@ export const DEFAULT_APPEARANCE: Appearance = {
 export type HostMessage =
   | { type: 'load'; name: string; bytes: Uint8Array }
   | { type: 'text'; name: string; body: string }
-  | { type: 'render'; html: string; toc: TocEntry[] }
+  /** `source` is the full Markdown text, for editing a block in place. */
+  | { type: 'render'; html: string; toc: TocEntry[]; source: string }
   | { type: 'scrollTo'; line: number }
   | { type: 'workbook'; info: WorkbookInfo; active: number }
   | { type: 'sheet'; index: number; model: SheetModel }
@@ -130,6 +134,8 @@ export type HostMessage =
   | { type: 'appearance'; appearance: Appearance }
   /** Whether the document is also open in a text editor (drives the preview/split switch). */
   | { type: 'viewState'; split: boolean }
+  /** File-level state for the "More" menu. `isDefault` is undefined when it does not apply. */
+  | { type: 'fileState'; isDefault?: boolean; ext: string; history: boolean }
   | { type: 'error'; message: string };
 
 export type WebviewMessage =
@@ -144,6 +150,14 @@ export type WebviewMessage =
   | { type: 'showSource'; beside: boolean }
   /** Close text editors of this document that are open beside the preview. */
   | { type: 'closeSource' }
+  | { type: 'setDefault'; on: boolean }
+  | { type: 'history' }
+  /** Markdown: save the rendered article as HTML, or open it for printing to PDF. */
+  | { type: 'export'; format: 'html' | 'pdf'; html: string; theme: ThemeId; dark: boolean; rtl: boolean }
+  /** Markdown: replace source lines [start, end) with `text`. */
+  | { type: 'editBlock'; start: number; end: number; text: string; expected: string }
+  /** Sheets: save a copy of sheet `index` in another format. */
+  | { type: 'convert'; index: number; format: 'csv' | 'tsv' | 'xlsx' }
   /** Sent once per load: the document is on screen, or could not be rendered. */
   | { type: 'status'; ok: boolean; detail?: string };
 

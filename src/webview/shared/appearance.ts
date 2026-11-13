@@ -238,6 +238,20 @@ export function highlightToggle(): HTMLButtonElement {
   return b;
 }
 
+/** Toolbar toggle that locks cell editing in sheets. */
+export function lockToggle(): HTMLButtonElement {
+  const b = el('button', { class: 'dv-btn dv-icon-btn', title: t('lockEdits') });
+  b.type = 'button';
+  b.innerHTML = icons.lock;
+  b.addEventListener('click', () => update({ lockEdits: !current.lockEdits }));
+  updaters.push(() => {
+    b.setAttribute('aria-pressed', String(current.lockEdits));
+    b.classList.toggle('dv-active', current.lockEdits);
+  });
+  updateControls();
+  return b;
+}
+
 /** Theme menu button, light/dark switch and language switch for the right end of a toolbar. */
 export function appearanceControls(): HTMLElement[] {
   const button = el('button', { class: 'dv-btn dv-theme-btn' });

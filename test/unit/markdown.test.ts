@@ -6,11 +6,13 @@ const renderer = new MarkdownRenderer();
 describe('MarkdownRenderer', () => {
   it('annotates blocks with their source line', () => {
     const { html } = renderer.render('# Title\n\nFirst paragraph.\n\n- item one\n- item two\n\n```js\nlet a = 1;\n```\n');
-    expect(html).toContain('<h1 data-line="0"');
-    expect(html).toContain('<p data-line="2">First paragraph.</p>');
-    expect(html).toContain('<li data-line="4">');
-    expect(html).toContain('<li data-line="5">');
-    expect(html).toContain('<pre data-line="7"><code class="language-js">');
+    expect(html).toContain('<h1 data-line="0" data-line-end="1"');
+    expect(html).toContain('<p data-line="2" data-line-end="3">First paragraph.</p>');
+    // A list's range includes the blank line after it; block edits keep that line.
+    expect(html).toContain('<ul data-line="4" data-line-end="7">');
+    expect(html).toContain('<li data-line="4" data-line-end="5">');
+    expect(html).toContain('<li data-line="5" data-line-end="7">');
+    expect(html).toContain('<pre data-line="7" data-line-end="10"><code class="language-js">');
   });
 
   it('keeps line numbers correct after front matter', () => {
@@ -38,7 +40,9 @@ describe('MarkdownRenderer', () => {
 
   it('emits a placeholder for mermaid diagrams', () => {
     const { html } = renderer.render('```mermaid\ngraph LR\n  A["x"] --> B\n```\n');
-    expect(html).toContain('<div class="mermaid" data-line="0" data-src="graph LR\n  A[&quot;x&quot;] --&gt; B\n">');
+    expect(html).toContain(
+      '<div class="mermaid" data-line="0" data-line-end="4" data-src="graph LR\n  A[&quot;x&quot;] --&gt; B\n">',
+    );
     expect(html).not.toContain('hljs');
   });
 

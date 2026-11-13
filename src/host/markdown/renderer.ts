@@ -53,7 +53,7 @@ export class MarkdownRenderer {
     md.renderer.rules.fence = (tokens, idx) => {
       const token = tokens[idx];
       const lang = token.info.trim().split(/\s+/)[0] ?? '';
-      const line = token.map ? ` data-line="${token.map[0]}"` : '';
+      const line = token.map ? ` data-line="${token.map[0]}" data-line-end="${token.map[1]}"` : '';
       if (lang.toLowerCase() === 'mermaid') {
         const src = escapeHtml(token.content);
         return `<div class="mermaid"${line} data-src="${src}"><pre>${src}</pre></div>\n`;
@@ -80,6 +80,8 @@ export class MarkdownRenderer {
         // Source line markers drive editor <-> preview scroll sync.
         if (token.map && token.nesting >= 0 && token.type !== 'inline') {
           token.attrSet('data-line', String(token.map[0]));
+          // End line (exclusive) lets the preview edit a whole block's source in place.
+          token.attrSet('data-line-end', String(token.map[1]));
         }
 
         if (token.type === 'heading_open') {

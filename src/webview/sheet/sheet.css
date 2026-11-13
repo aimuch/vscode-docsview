@@ -80,3 +80,77 @@
 .sheet-address {
   min-width: 48px;
 }
+
+/* Sort / filter status chip. */
+.sheet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 3px 0 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--vscode-textLink-foreground, var(--dv-accent));
+  background: color-mix(in srgb, var(--dv-accent) 14%, transparent);
+}
+
+.sheet-chip-icon {
+  display: flex;
+}
+
+.sheet-chip-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sheet-chip-clear {
+  height: 20px;
+  padding: 0 8px;
+  font: inherit;
+  color: inherit;
+  background: var(--vscode-editor-background);
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+/* Column sort / filter menu. */
+.sheet-col-menu {
+  width: 250px;
+  gap: 2px;
+  padding: 6px;
+}
+
+.sheet-col-menu-title {
+  padding: 2px 8px;
+}
+
+.sheet-col-filter {
+  margin: 0 4px 4px;
+}
+
+.sheet-col-check {
+  padding: 4px 8px;
+}
+
+.sheet-tab-list {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.sheet-tabs {
+  align-items: center;
+  min-height: 24px;
+}
+
+.sheet-tabs > .dv-label {
+  flex: none;
+  font-size: 12px;
+}
+
+.sheet-tabs .dv-spacer {
+  flex: 1;
+}

@@ -18,7 +18,14 @@ let appearance: AppearanceModule;
 let zoom: ZoomModule;
 let grid: GridModule;
 
-const initial: Appearance = { theme: 'editor', scheme: 'auto', invertPages: false, highlight: true, language: 'auto' };
+const initial: Appearance = {
+  theme: 'editor',
+  scheme: 'auto',
+  invertPages: false,
+  highlight: true,
+  lockEdits: false,
+  language: 'auto',
+};
 
 beforeAll(async () => {
   // What the HTML shell and VS Code provide before any webview module runs.
@@ -399,5 +406,102 @@ describe("row and column highlight", () => {
     expect(posted).toContainEqual({ type: "setAppearance", patch: { highlight: false } });
     expect(document.body.classList.contains("dv-highlight")).toBe(false);
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+// ---------------------------------------------------------------- find, more menu, lock
+
+describe("preview find", () => {
+  it("counts matches across text nodes, skips UI text and steps with wrap-around", async () => {
+    const { PreviewFind } = await import("../../src/webview/markdown/find");
+    const scroller = document.createElement("div");
+    const root = document.createElement("article");
+    root.innerHTML =
+      "<p>DocsView shows <b>docsview</b> files.</p><pre><code>docsView()</code><button class=\"md-copy\">DocsView</button></pre><p hidden>DocsView</p>";
+    scroller.append(root);
+    document.body.append(scroller);
+    const find = new PreviewFind(root, scroller);
+    find.search("docsview");
+    expect(find.total).toBe(3);
+    expect(find.current).toBe(1);
+    find.next();
+    find.next();
+    expect(find.current).toBe(3);
+    find.next();
+    expect(find.current).toBe(1);
+    find.next(true);
+    expect(find.current).toBe(3);
+    // After a re-render the search runs again and keeps its place when it can.
+    root.innerHTML = "<p>docsview docsview</p>";
+    find.refresh();
+    expect([find.current, find.total]).toEqual([2, 2]);
+    find.clear();
+    expect(find.total).toBe(0);
+    scroller.remove();
+  });
+});
+
+describe("more menu", () => {
+  it("shows visible items, check marks, and runs the action", () => {
+    const clicked: string[] = [];
+    let on = false;
+    const button = ui.moreMenu("更多", [
+      { label: () => `default ${on}`, checked: () => on, onClick: () => (on = !on) },
+      "-",
+      { label: "hidden", visible: () => false, onClick: () => clicked.push("hidden") },
+      "-",
+      { label: "export", hint: "html", onClick: () => clicked.push("export") },
+    ]);
+    document.body.append(button);
+    button.click();
+    const menu = [...document.querySelectorAll<HTMLElement>(".dv-more-menu")].pop()!;
+    expect(menu.hidden).toBe(false);
+    const labels = [...menu.querySelectorAll(".dv-menu-label")].map((n) => n.textContent);
+    expect(labels).toEqual(["default false", "export"]);
+    // Hidden items do not leave doubled separators behind.
+    expect(menu.querySelectorAll(".dv-menu-sep")).toHaveLength(1);
+    expect(menu.querySelector("[role=menuitemcheckbox]")?.getAttribute("aria-checked")).toBe("false");
+    (menu.querySelectorAll<HTMLButtonElement>(".dv-menu-item")[1]).click();
+    expect(clicked).toEqual(["export"]);
+    expect(menu.hidden).toBe(true);
+    button.click();
+    (menu.querySelectorAll<HTMLButtonElement>(".dv-menu-item")[0]).click();
+    button.click();
+    expect(menu.querySelector(".dv-menu-label")?.textContent).toBe("default true");
+    expect(menu.querySelector("[role=menuitemcheckbox]")?.getAttribute("aria-checked")).toBe("true");
+  });
+});
+
+describe("grid lock and column menu", () => {
+  it("blocks edits while locked and reports the attempt", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const blocked: number[] = [];
+    const edits: unknown[] = [];
+    const menus: number[] = [];
+    const g = new grid.Grid(parent, {
+      editable: true,
+      onEdit: (c) => edits.push(c),
+      onBlockedEdit: () => blocked.push(1),
+      onColumnMenu: (col) => menus.push(col),
+    });
+    g.setData({ rowCount: 3, colCount: 3, cell: (r, c) => `${r},${c}`, colWidths: [80, 80, 80], rowLabel: (r) => `#${r + 7}`, colBadge: (c) => (c === 1 ? " ↑" : "") });
+    g.goTo(1, 1);
+    await new Promise((r) => setTimeout(r, 200));
+    g.setEditable(false);
+    expect(g.editable).toBe(false);
+    const viewport = parent.querySelector<HTMLElement>(".grid-viewport")!;
+    viewport.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+    viewport.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    expect(blocked).toEqual([1]);
+    expect(edits).toEqual([]);
+    expect(parent.querySelector("textarea")).toBeNull();
+    // Original row numbers and the sort badge are shown in the headers.
+    expect([...parent.querySelectorAll(".grid-row-header")].map((n) => n.textContent)).toContain("#8");
+    const header = [...parent.querySelectorAll<HTMLElement>(".grid-col-header")].find((n) => n.textContent?.startsWith("B"))!;
+    expect(header.textContent).toBe("B ↑");
+    header.querySelector<HTMLButtonElement>(".grid-col-menu")!.click();
+    expect(menus).toEqual([1]);
+    parent.remove();
   });
 });

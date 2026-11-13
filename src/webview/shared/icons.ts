@@ -21,6 +21,12 @@ export const icons = {
   close: svg('<path d="M4 4l8 8M12 4l-8 8"/>'),
   chevronDown: svg('<path d="M4 6l4 4 4-4"/>'),
   chevronRight: svg('<path d="M6 4l4 4-4 4"/>'),
+  more: svg('<circle cx="3.5" cy="8" r=".7"/><circle cx="8" cy="8" r=".7"/><circle cx="12.5" cy="8" r=".7"/>'),
+  pencil: svg('<path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/>'),
+  lock: svg('<rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>'),
+  sortUp: svg('<path d="M5 12V4M2.5 6.5L5 4l2.5 2.5M9 5h4.5M9 8h3.5M9 11h2"/>'),
+  sortDown: svg('<path d="M5 4v8M2.5 9.5L5 12l2.5-2.5M9 5h2M9 8h3.5M9 11h4.5"/>'),
+  filter: svg('<path d="M2.5 3.5h11l-4.2 5v4l-2.6 1.5v-5.5z"/>'),
   crosshair: svg('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M2.5 6.5h11M2.5 9.5h11M6.5 2.5v11M9.5 2.5v11"/>'),
 };
 

@@ -159,3 +159,40 @@
 .dv-dark .grid:not(.grid-light) {
   --grid-cross: color-mix(in srgb, var(--vscode-focusBorder, #0078d4) 20%, transparent);
 }
+
+/* Sort / filter menu button in column headers: shown on hover, or while the column is sorted or filtered. */
+.grid-col-menu {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.grid-col-header:hover .grid-col-menu,
+.grid-col-menu:focus-visible,
+.grid-col-menu.grid-col-menu-on {
+  opacity: 1;
+}
+
+.grid-col-menu:hover,
+.grid-col-menu.grid-col-menu-on {
+  color: var(--dv-accent-fg, #fff);
+  background: var(--grid-accent);
+}
+
+/* Right-to-left cell text. */
+.grid-rtl .grid-cell,
+.grid-rtl .grid-editor {
+  direction: rtl;
+}

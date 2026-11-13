@@ -16,5 +16,7 @@
   "config.appearance.colorScheme": "Light or dark appearance of DocsView editors. \"auto\" follows the VS Code theme.",
   "config.appearance.invertPages": "In a dark appearance, show PDF and Word pages with inverted colours.",
   "config.language": "Language of the DocsView interface. \"auto\" follows the VS Code display language.",
-  "config.highlightRowColumn": "Highlight the row and column of the selected cell in CSV and Excel views, and of the hovered cell in Markdown tables."
+  "config.highlightRowColumn": "Highlight the row and column of the selected cell in CSV and Excel views, and of the hovered cell in Markdown tables.",
+  "config.table.lockEditing": "Lock cell editing in CSV and Excel views until it is unlocked from the toolbar.",
+  "command.showHistory": "DocsView: Show Version History"
 }

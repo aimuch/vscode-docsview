@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
+import { workbookToDelimited, workbookToXlsx } from '../convert';
+import { saveConverted } from '../fileActions';
+import { snapshot } from '../history';
 import { configureWebview, debounce, handleCommonMessage, parentUri, t, onWebviewMessage } from '../webviewHtml';
 import { ExcelSession } from './excelSession';
 
@@ -83,6 +86,24 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
           case 'ready':
             sendWorkbook();
             break;
+          case 'convert': {
+            if (!session) {
+              break;
+            }
+            const format = message.format;
+            const run = async () => {
+              const bytes = session.export();
+              const out =
+                format === 'xlsx'
+                  ? workbookToXlsx(bytes)
+                  : new TextEncoder().encode(workbookToDelimited(bytes, message.index, format));
+              await saveConverted(document.uri, format, out);
+            };
+            void run().catch((err: unknown) =>
+              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+            );
+            break;
+          }
           case 'getSheet': {
             const model = session?.sheet(message.index);
             if (model) {
@@ -139,6 +160,8 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
       return;
     }
     const bytes = session.export();
+    // Keep the previous file as a version before it is overwritten.
+    await snapshot(document.uri);
     document.ignoreWatcherUntil = Date.now() + 2000;
     await vscode.workspace.fs.writeFile(document.uri, bytes);
     session.markSaved(bytes);

@@ -17,7 +17,10 @@ export interface ViewerStatus {
 
 export interface Api {
   onViewerStatus: vscode.Event<ViewerStatus>;
-  testing: { dispatch(uri: vscode.Uri, message: WebviewMessage, kind?: ViewerKind): number };
+  testing: {
+    dispatch(uri: vscode.Uri, message: WebviewMessage, kind?: ViewerKind): number;
+    listVersions(uri: vscode.Uri): Promise<{ uri: vscode.Uri; time: number; size: number }[]>;
+  };
 }
 
 export interface Result {
@@ -88,6 +91,61 @@ async function check(results: Result[], name: string, viewType: string, body: ()
 
 export async function runEditingChecks(api: Api, samples: string, work: string, results: Result[]): Promise<void> {
   await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+
+  // ------------------------------------------------------------ "More" menu: default editor
+
+  await check(results, 'markdown: set as default editor', 'docsview.markdown', async () => {
+    const uri = vscode.Uri.file(join(samples, 'demo.md'));
+    const assoc = () =>
+      vscode.workspace.getConfiguration('workbench').get<Record<string, string>>('editorAssociations') ?? {};
+    try {
+      await open(api, uri, 'docsview.markdown');
+      send(api, uri, { type: 'setDefault', on: true }, 'markdown');
+      await waitFor('*.md associated with DocsView', () => assoc()['*.md'] === 'docsview.markdown');
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      await vscode.commands.executeCommand('vscode.open', uri);
+      await waitFor('plain open uses DocsView', () => {
+        const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+        return input instanceof vscode.TabInputCustom && input.viewType === 'docsview.markdown';
+      });
+      send(api, uri, { type: 'setDefault', on: false }, 'markdown');
+      await waitFor('association removed', () => assoc()['*.md'] === undefined);
+      return 'on: .md opens in DocsView; off: association removed';
+    } finally {
+      const rest = { ...assoc() };
+      delete rest['*.md'];
+      await vscode.workspace.getConfiguration('workbench').update('editorAssociations', rest, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  // ------------------------------------------------------------ Markdown: edit a block in place
+
+  await check(results, 'markdown: edit a block in the preview', 'docsview.markdown', async () => {
+    const path = join(work, 'edit.md');
+    copyFileSync(join(samples, 'demo.md'), path);
+    const uri = vscode.Uri.file(path);
+    await open(api, uri, 'docsview.markdown');
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const lines = doc.getText().split('\n');
+    const at = lines.indexOf('## 任务列表');
+    if (at < 0) {
+      throw new Error('sample heading not found');
+    }
+    // A stale edit (the text no longer matches) must be refused.
+    send(api, uri, { type: 'editBlock', start: at, end: at + 1, text: '## X', expected: '## something else' }, 'markdown');
+    await sleep(800);
+    if (doc.isDirty) {
+      throw new Error('a stale edit was applied');
+    }
+    send(api, uri, { type: 'editBlock', start: at, end: at + 1, text: '## 待办清单', expected: '## 任务列表' }, 'markdown');
+    await waitFor('heading rewritten', () => doc.getText().split('\n')[at] === '## 待办清单');
+    const after = doc.getText().split('\n');
+    if (after.length !== lines.length || after[at + 1] !== lines[at + 1] || after[at - 1] !== lines[at - 1]) {
+      throw new Error('surrounding lines changed');
+    }
+    await vscode.commands.executeCommand('workbench.action.files.save');
+    return 'stale edit refused; heading rewritten, neighbours untouched';
+  });
 
   // ------------------------------------------------------------ preview / split / source
 
@@ -173,13 +231,18 @@ export async function runEditingChecks(api: Api, samples: string, work: string, 
     if (onDisk !== doc.getText()) {
       throw new Error('file on disk differs from the document');
     }
+    // The previous content was kept as a version before the save overwrote it.
+    const versions = await api.testing.listVersions(uri);
+    if (versions.length !== 1 || readFileSync(versions[0].uri.fsPath, 'utf8') !== original) {
+      throw new Error(`expected one version holding the original text, got ${versions.length}`);
+    }
 
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
     const reopened = await open(api, uri, 'docsview.csv');
     if (!reopened.ok || !/: 8x6$/.test(reopened.detail ?? '')) {
       throw new Error(`reopened sheet: ${reopened.detail}`);
     }
-    return `saved ${onDisk.split('\n').length - 1} lines; reopened as ${reopened.detail}`;
+    return `saved ${onDisk.split('\n').length - 1} lines; previous version kept; reopened as ${reopened.detail}`;
   });
 
   // ------------------------------------------------------------ xlsx edit / undo / save / reopen
@@ -215,6 +278,10 @@ export async function runEditingChecks(api: Api, samples: string, work: string, 
     await waitFor('saved', () => !dirty());
 
     const saved = readFileSync(path);
+    const versions = await api.testing.listVersions(uri);
+    if (versions.length !== 1 || !readFileSync(versions[0].uri.fsPath).equals(readFileSync(join(samples, 'report.xlsx')))) {
+      throw new Error(`expected one version holding the original workbook, got ${versions.length}`);
+    }
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(saved.buffer.slice(saved.byteOffset, saved.byteOffset + saved.byteLength) as ArrayBuffer);
     const ws = wb.getWorksheet('销售报表')!;
@@ -244,6 +311,6 @@ export async function runEditingChecks(api: Api, samples: string, work: string, 
     if (!reopened.ok) {
       throw new Error(`reopen: ${reopened.detail}`);
     }
-    return `values, formats, formula, merge and untouched parts verified; reopened as ${reopened.detail}`;
+    return `values, formats, formula, merge and untouched parts verified; previous version kept; reopened as ${reopened.detail}`;
   });
 }

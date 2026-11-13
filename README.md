@@ -48,6 +48,23 @@ Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一
 
 Markdown / CSV 的文本编辑器右上角有两个 DocsView 图标：**打开预览**（在当前位置切到预览，预览已打开时直接切过去）和**在侧边打开预览**（分栏）。在预览里点“源码”后，用“打开预览”即可切回。
 
+## 常用操作
+
+**Markdown 预览**
+- **查找**：工具栏的查找框（`Ctrl/Cmd+F`），`Enter` / `Shift+Enter` 在匹配处之间跳转。
+- **编辑模式**（铅笔图标）：双击任意段落、标题、列表、表格或代码块，就地修改它的 Markdown 原文，`Ctrl/Cmd+Enter` 保存、`Esc` 取消。改动写回文件，可以用 VS Code 的撤销还原；如果编辑期间文件被别处改动，这次修改不会写入。
+- **导出**（更多 → 导出 HTML / 导出 PDF）：导出的 HTML 是单个文件，自带样式、公式字体、图表和本地图片。“导出 PDF”会在浏览器中打开并弹出打印对话框，选“存储为 PDF”即可。
+
+**CSV / Excel 表格**
+- **排序与筛选**：鼠标移到列标题上，点右侧的小箭头，可升序/降序排列，或筛选“包含”某段文字的行（多列条件同时生效）。数字按数值排序，空单元格始终排在最后。首行（或 Excel 冻结的表头行）不参与排序。排序和筛选只改变显示，不改动文件；行号仍显示原始行号，此时编辑的单元格会写回正确的原始行。排序或筛选期间不能增删行列，点工具栏提示里的“清除”即可恢复。
+- **锁定编辑**（锁形图标）：打开后单元格不能修改，防止误改；设置项为 `docsview.table.lockEditing`。
+- **格式转换**（更多 → 转换为 …）：CSV、TSV、XLSX 之间互转；Excel 转 CSV/TSV 时转换当前工作表，使用显示出来的值；.xls / .ods 可另存为 .xlsx。
+
+**所有可编辑的格式**
+- **设为默认打开方式**（更多菜单）：让 .md / .csv / .tsv 文件双击就用 DocsView 打开，再点一次取消。
+- **版本历史**（更多 → 版本历史，或命令“DocsView：查看版本历史”）：Markdown、CSV、xlsx 每次保存前都会自动保留一份旧版本（每个文件最多 30 份），可以与当前文件对比、打开查看或恢复。恢复前会先把当前内容也存为一个版本。
+- **从右到左（RTL）**（更多菜单）：Markdown 整页按从右到左排版；表格中单元格文字从右到左显示，列顺序不变。
+
 ## 表格操作
 
 - 方向键 / Tab / Enter 移动，Shift 扩选，`Ctrl/Cmd+A` 全选
@@ -75,6 +92,7 @@ Markdown / CSV 的文本编辑器右上角有两个 DocsView 图标：**打开�
 | `docsview.appearance.invertPages` | `false` | 暗色下把 PDF、Word、PPT 页面反色显示 |
 | `docsview.language` | `auto` | 界面语言：`auto` / `zh-cn` / `en` |
 | `docsview.highlightRowColumn` | `true` | 高亮选中（表格）或悬停（Markdown 表格）单元格所在的行和列 |
+| `docsview.table.lockEditing` | `false` | 锁定 CSV / Excel 单元格编辑 |
 
 ## 已知限制
 
@@ -119,6 +137,8 @@ npm run package     # 生成 .vsix
 Markdown and CSV keep opening as text; use the preview icon in the editor title or **DocsView: Open Preview to the Side**. Use **Reopen Editor With…** to switch any file between DocsView and the text editor.
 
 **Toolbar and appearance:** every viewer shares one toolbar. On the left: a navigation sidebar (Markdown and Word headings with filter and collapse, PDF bookmarks or page thumbnails, PPT slide list) and a view switch (Markdown preview / split / source, CSV table / text, Excel styled / plain, Word pages / continuous, PDF continuous / single page, PPT list / single slide). On the right: preview theme (Editor, GitHub, Paper, Academic, each with light and dark palettes), light / dark / follow editor, optional inverted pages in dark mode, and the interface language (follow VS Code, 简体中文, English). A crosshair button highlights the row and column of the selected cell (CSV, Excel) or the hovered cell (Markdown tables). Markdown and CSV text editors get two DocsView title-bar buttons: open the preview in place, or to the side. Settings: `docsview.appearance.theme`, `docsview.appearance.colorScheme`, `docsview.appearance.invertPages`, `docsview.highlightRowColumn`, `docsview.language`.
+
+**More features:** find in the Markdown preview (Ctrl/Cmd+F); an edit mode where double-clicking a block edits its Markdown source in place; export to a self-contained HTML file, or to PDF through the browser's print dialog; column sort and "contains" filters in CSV/Excel views (display only, the file is never reordered; edits still land on the right rows); a lock that prevents accidental cell edits; conversion between CSV, TSV and XLSX; one-click "open .md/.csv with DocsView by default"; version history (a copy is kept before every save, up to 30 per file, with compare/open/restore); right-to-left text.
 
 **Editing xlsx:** saving rewrites only the worksheet XML of edited cells; every other part of the file (styles, charts, pivot tables, macros, images) is preserved byte-for-byte. In exchange, only cell values can be changed (no row/column insertion), formulas are not recalculated here (the workbook is flagged to recalculate when opened in Excel), and master cells of shared/array formulas are read-only.
 

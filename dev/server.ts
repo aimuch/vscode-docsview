@@ -79,6 +79,8 @@ interface Session {
 const sessions = new Map<string, Session>();
 /** Stand-in for the docsview.* settings, shared by every open view like in VS Code. */
 let appearance: Appearance = { ...DEFAULT_APPEARANCE };
+/** Stand-in for workbench.editorAssociations: extensions DocsView opens by default. */
+const defaults = new Set<string>();
 
 function resolveLang(param: string | null): Lang {
   if (param === 'en' || param === 'zh') {
@@ -96,10 +98,23 @@ function createSession(file: string): Session {
 
   if (engine === 'markdown') {
     const renderer = new MarkdownRenderer();
+    // Edits stay in memory: the sample file on disk is never changed by the harness.
+    let source = readFileSync(full, 'utf8');
     return {
+      text: () => source,
       async handle(message) {
         if (message.type === 'ready') {
-          return [{ type: 'render', ...renderer.render(readFileSync(full, 'utf8')) }];
+          return [{ type: 'render', ...renderer.render(source), source }];
+        }
+        if (message.type === 'editBlock') {
+          const lines = source.split('\n');
+          if (lines.slice(message.start, message.end).join('\n') !== message.expected) {
+            console.log('[dev] editBlock: outdated');
+            return [];
+          }
+          lines.splice(message.start, message.end - message.start, ...message.text.split('\n'));
+          source = lines.join('\n');
+          return [{ type: 'render', ...renderer.render(source), source }];
         }
         return [];
       },
@@ -298,12 +313,40 @@ const server = http.createServer(async (req, res) => {
         }
         return send(200, MIME['.json'], JSON.stringify(out));
       }
+      const ext = extname(file).slice(1).toLowerCase();
+      const fileState = (): HostMessage => ({
+        type: 'fileState',
+        isDefault: ['md', 'markdown', 'csv', 'tsv'].includes(ext) ? defaults.has(ext) : undefined,
+        ext,
+        history: ['md', 'markdown', 'csv', 'tsv', 'xlsx', 'xlsm'].includes(ext),
+      });
+      if (message.type === 'setDefault') {
+        if (message.on) {
+          defaults.add(ext);
+        } else {
+          defaults.delete(ext);
+        }
+        return send(200, MIME['.json'], JSON.stringify([fileState()]));
+      }
+      if (message.type === 'export') {
+        mkdirSync(join(root, 'out'), { recursive: true });
+        writeFileSync(join(root, 'out', `dev-export.${message.format}.html`), message.html);
+        console.log(`[dev] export ${message.format}: ${message.html.length} chars`);
+        return send(200, MIME['.json'], '[]');
+      }
+      if (message.type === 'history' || message.type === 'convert') {
+        console.log(`[dev] ${message.type}`, JSON.stringify(message));
+        return send(200, MIME['.json'], '[]');
+      }
       if (message.type === 'showSource' || message.type === 'closeSource') {
         console.log(`[dev] ${message.type}`, JSON.stringify(message));
         return send(200, MIME['.json'], '[]');
       }
       try {
         replies = await session.handle(message);
+        if (message.type === 'ready') {
+          replies.push(fileState());
+        }
       } catch (err) {
         replies = [{ type: 'error', message: err instanceof Error ? (err.stack ?? err.message) : String(err) }];
       }

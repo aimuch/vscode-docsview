@@ -22,6 +22,10 @@ export interface GridSource {
   frozenCols?: number;
   /** 'light' renders a white sheet regardless of theme (for workbooks with authored colours). */
   palette?: 'theme' | 'light';
+  /** Row header text; defaults to the 1-based row index (a sorted view shows the original numbers). */
+  rowLabel?(r: number): string;
+  /** Marker appended to a column header, e.g. a sort arrow. */
+  colBadge?(c: number): string;
 }
 
 export interface Selection {
@@ -42,7 +46,11 @@ export interface GridOptions {
   onEdit(changes: CellChange[]): void;
   onSelection?(selection: Selection): void;
   onReadonlyCell?(): void;
+  /** The user tried to edit while editing is switched off (see setEditable). */
+  onBlockedEdit?(): void;
   onColumnResize?(col: number, width: number): void;
+  /** Adds a menu button to column headers (sort / filter). */
+  onColumnMenu?(col: number, anchor: DOMRect): void;
 }
 
 const ROW_HEIGHT = 24;
@@ -203,6 +211,23 @@ export class Grid {
       c0: Math.min(this.active.c, this.anchor.c),
       c1: Math.max(this.active.c, this.anchor.c),
     };
+  }
+
+  /** Switches cell editing on or off (e.g. a "lock editing" toggle). */
+  setEditable(on: boolean): void {
+    if (!on) {
+      this.cancelEdit();
+    }
+    this.opts.editable = on;
+  }
+
+  get editable(): boolean {
+    return this.opts.editable;
+  }
+
+  /** Right-to-left cell text. */
+  setRtl(on: boolean): void {
+    this.root.classList.toggle('grid-rtl', on);
   }
 
   /** Selects a cell and scrolls it into view. */
@@ -449,13 +474,36 @@ export class Grid {
     node.className = `grid-header grid-${kind}-header`;
     const s = node.style;
     if (kind === 'col') {
-      node.textContent = columnName(index);
+      node.textContent = columnName(index) + (this.source.colBadge?.(index) ?? '');
+      const onMenu = this.opts.onColumnMenu;
+      if (onMenu) {
+        const menu = document.createElement('button');
+        menu.type = 'button';
+        menu.className = 'grid-col-menu';
+        menu.title = columnName(index);
+        menu.setAttribute('aria-haspopup', 'menu');
+        menu.innerHTML =
+          '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>';
+        if (this.source.colBadge?.(index)) {
+          menu.classList.add('grid-col-menu-on');
+        }
+        // Keep the header's own mousedown (column selection) from firing.
+        menu.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        });
+        menu.addEventListener('click', (e) => {
+          e.stopPropagation();
+          onMenu(index, node.getBoundingClientRect());
+        });
+        node.append(menu);
+      }
       s.left = `${this.headerW + this.colX[index]}px`;
       s.top = '0px';
       s.width = `${this.colX[index + 1] - this.colX[index]}px`;
       s.height = `${HEADER_HEIGHT}px`;
     } else {
-      node.textContent = String(index + 1);
+      node.textContent = this.source.rowLabel?.(index) ?? String(index + 1);
       s.left = '0px';
       s.top = `${HEADER_HEIGHT + this.rowY[index]}px`;
       s.width = `${this.headerW}px`;
@@ -711,6 +759,8 @@ export class Grid {
           this.paintSelection();
           this.emitSelection();
           handled = true;
+        } else if (!mod && !e.altKey && !this.opts.editable && e.key.length === 1) {
+          this.opts.onBlockedEdit?.();
         } else if (!mod && !e.altKey && this.opts.editable && (e.key.length === 1 || e.key === 'Process')) {
           // Typing replaces the cell content. Focus moves to the editor during keydown,
           // so the keystroke itself lands in the input.
@@ -815,7 +865,13 @@ export class Grid {
   // ------------------------------------------------------------------ editing
 
   private onDoubleClick(e: MouseEvent): void {
-    if (!this.opts.editable || e.target === this.editor) {
+    if (e.target === this.editor) {
+      return;
+    }
+    if (!this.opts.editable) {
+      if (this.hitTest(e.clientX, e.clientY).area === 'cell') {
+        this.opts.onBlockedEdit?.();
+      }
       return;
     }
     const hit = this.hitTest(e.clientX, e.clientY);

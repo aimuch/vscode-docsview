@@ -5,10 +5,13 @@ import '../shared/base.css';
 import './markdown.css';
 import { app, el, errorText, isDark, onMessage, onThemeChange, post, t } from '../shared/api';
 import { getAppearance, highlightToggle, onAppearanceChange } from '../shared/appearance';
-import { Outline, Sidebar } from '../shared/sidebar';
-import { attachTableHighlight } from './tableHighlight';
-import { segmented, toolbar } from '../shared/ui';
+import { getFileState } from '../shared/fileState';
+import { icons } from '../shared/icons';
+import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
+import { iconButton, moreMenu, segmented, toggleButton, toolbar } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
+import { PreviewFind } from './find';
+import { attachTableHighlight } from './tableHighlight';
 
 const scroller = el('div', { class: 'md-scroll' });
 const article = el('article', { class: 'markdown-body' });
@@ -48,18 +51,242 @@ onAppearanceChange((a) => {
   }
 });
 
+// ---------------------------------------------------------------- find
+
+const find = new PreviewFind(article, scroller);
+const findInput = el('input');
+findInput.type = 'search';
+findInput.placeholder = t('find');
+findInput.setAttribute('aria-label', t('findInPreview'));
+const findIcon = el('span', { class: 'md-find-icon' });
+findIcon.innerHTML = icons.search;
+const findBox = el('label', { class: 'dv-search md-find' }, [findIcon, findInput]);
+const findCount = el('span', { class: 'dv-label md-find-count' });
+
+function showFindCount() {
+  findCount.textContent = findInput.value ? (find.total ? `${find.current}/${find.total}` : t('noMatch')) : '';
+}
+
+findInput.addEventListener('input', () => {
+  find.search(findInput.value);
+  showFindCount();
+});
+findInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    find.next(e.shiftKey);
+    showFindCount();
+  } else if (e.key === 'Escape') {
+    findInput.value = '';
+    find.clear();
+    showFindCount();
+    scroller.focus();
+  }
+});
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    findInput.focus();
+    findInput.select();
+  }
+});
+const findPrev = iconButton('up', t('findPrev'), () => {
+  find.next(true);
+  showFindCount();
+});
+const findNext = iconButton('down', t('findNext'), () => {
+  find.next();
+  showFindCount();
+});
+
+// ---------------------------------------------------------------- edit mode
+
+/** Full Markdown source of the last render, for editing blocks in place. */
+let sourceLines: string[] = [];
+let editing: { block: HTMLElement; box: HTMLElement } | undefined;
+/** A render that arrived while a block was being edited; applied once editing ends. */
+let deferredRender: { html: string; toc: TocEntry[] } | undefined;
+
+const editToggle = toggleButton('pencil', t('editMode'), (on) => setEditMode(on));
+
+function setEditMode(on: boolean) {
+  scroller.classList.toggle('md-editing', on);
+  editToggle.set(on);
+  writeState({ mdEdit: on });
+  if (!on) {
+    closeEditor();
+  }
+}
+
+/** The top-level block (a direct child of the article) that carries source line numbers. */
+function blockAt(target: Element | null): HTMLElement | undefined {
+  let node = target;
+  while (node && node.parentElement !== article) {
+    node = node.parentElement;
+  }
+  return node instanceof HTMLElement && node.dataset.lineEnd !== undefined ? node : undefined;
+}
+
+function closeEditor() {
+  if (!editing) {
+    return;
+  }
+  editing.box.remove();
+  editing.block.hidden = false;
+  editing = undefined;
+  if (deferredRender) {
+    const { html, toc } = deferredRender;
+    deferredRender = undefined;
+    render(html, toc);
+  }
+}
+
+function openEditor(block: HTMLElement) {
+  closeEditor();
+  const start = Number(block.dataset.line);
+  const end = Math.min(Number(block.dataset.lineEnd), sourceLines.length);
+  if (!Number.isFinite(start) || end <= start) {
+    return;
+  }
+  const original = sourceLines.slice(start, end).join('\n');
+  // Blocks end with blank separator lines; edit the text, keep the separation.
+  const text = original.replace(/\n+$/, '');
+  const lastLine = start + text.split('\n').length;
+  const label = lastLine === start + 1 ? t('editLine', start + 1) : t('editLines', start + 1, lastLine);
+  const textarea = el('textarea', { class: 'md-edit-text' });
+  textarea.value = text;
+  textarea.spellcheck = false;
+  textarea.setAttribute('aria-label', label);
+  const save = el('button', { class: 'dv-btn md-edit-save', text: `${t('save')} ⌘↵` });
+  save.type = 'button';
+  const cancel = el('button', { class: 'dv-btn', text: `${t('cancel')} Esc` });
+  cancel.type = 'button';
+  const box = el('div', { class: 'md-edit' }, [
+    el('div', { class: 'md-edit-head' }, [
+      el('span', { text: label }),
+      el('span', { class: 'md-edit-actions' }, [cancel, save]),
+    ]),
+    textarea,
+  ]);
+  const commit = () => {
+    const value = textarea.value;
+    if (value !== text) {
+      const trailing = original.slice(text.length);
+      post({ type: 'editBlock', start, end: start + original.split('\n').length, text: value + trailing, expected: original });
+    }
+    closeEditor();
+  };
+  save.addEventListener('click', commit);
+  cancel.addEventListener('click', closeEditor);
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeEditor();
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      commit();
+    }
+    e.stopPropagation();
+  });
+  const fit = () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight + 2, 480)}px`;
+  };
+  textarea.addEventListener('input', fit);
+  block.after(box);
+  block.hidden = true;
+  editing = { block, box };
+  fit();
+  textarea.focus();
+}
+
+article.addEventListener('dblclick', (event) => {
+  if (!scroller.classList.contains('md-editing')) {
+    return;
+  }
+  const block = blockAt(event.target as Element);
+  if (block && !block.closest('.md-edit')) {
+    event.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    openEditor(block);
+  }
+});
+
+// ---------------------------------------------------------------- right-to-left
+
+let rtl = readState().rtl === true;
+
+function setRtl(on: boolean) {
+  rtl = on;
+  writeState({ rtl });
+  article.dir = on ? 'rtl' : '';
+}
+
+// ---------------------------------------------------------------- export
+
+function exportAs(format: 'html' | 'pdf') {
+  const copy = article.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll('.md-copy, .md-edit').forEach((n) => n.remove());
+  copy.querySelectorAll<HTMLElement>('[hidden]').forEach((n) => (n.hidden = false));
+  copy.querySelectorAll('.md-hl-row, .md-hl-col, .md-hl-cell').forEach((n) =>
+    n.classList.remove('md-hl-row', 'md-hl-col', 'md-hl-cell'),
+  );
+  post({ type: 'export', format, html: copy.innerHTML, theme: getAppearance().theme, dark: isDark(), rtl });
+}
+
+const more = moreMenu(t('more'), [
+  {
+    label: () => t('setDefault', getFileState().ext || 'md'),
+    visible: () => getFileState().isDefault !== undefined,
+    checked: () => getFileState().isDefault === true,
+    onClick: () => post({ type: 'setDefault', on: getFileState().isDefault !== true }),
+  },
+  '-',
+  { label: t('exportHtml'), onClick: () => exportAs('html') },
+  { label: t('exportPdf'), hint: t('exportPdfHint'), onClick: () => exportAs('pdf') },
+  '-',
+  { label: t('history'), visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
+  { label: t('rtl'), checked: () => rtl, onClick: () => setRtl(!rtl) },
+]);
+
+scroller.tabIndex = -1;
 app.append(
-  toolbar(sidebar.toggle, view.node, '|', ...zoom.nodes, '|', highlightToggle()),
+  toolbar(
+    sidebar.toggle,
+    view.node,
+    '|',
+    ...zoom.nodes,
+    '|',
+    findBox,
+    findCount,
+    findPrev,
+    findNext,
+    '|',
+    editToggle.node,
+    highlightToggle(),
+    'spacer',
+    more,
+  ),
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [scroller])]),
 );
+setEditMode(readState().mdEdit === true);
+setRtl(rtl);
 
 // ---------------------------------------------------------------- rendering
 
 function render(html: string, toc: TocEntry[]) {
+  // Never morph the document under an open block editor; catch up when it closes.
+  if (editing) {
+    deferredRender = { html, toc };
+    return;
+  }
   // The new HTML replaces the marked cells; start from a clean slate.
   tableHighlight.clear();
   const next = document.createElement('article');
   next.className = 'markdown-body';
+  // morphdom also syncs the root's attributes: carry over zoom and text direction.
+  next.style.cssText = article.style.cssText;
+  next.dir = article.dir;
   next.innerHTML = html;
   morphdom(article, next, {
     onBeforeElUpdated(from, to) {
@@ -81,6 +308,8 @@ function render(html: string, toc: TocEntry[]) {
   });
   renderToc(toc);
   addCopyButtons();
+  find.refresh();
+  showFindCount();
   invalidateLineIndex();
   void Promise.all([renderMermaid(), imagesSettled()]).then(
     () => {
@@ -322,6 +551,7 @@ document.addEventListener('click', (event) => {
 
 onMessage((message) => {
   if (message.type === 'render') {
+    sourceLines = message.source.split(/\r?\n/);
     render(message.html, message.toc);
   } else if (message.type === 'scrollTo') {
     scrollToLine(message.line);

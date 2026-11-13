@@ -3,6 +3,7 @@ import { BinaryPreviewProvider } from './host/binaryPreviewProvider';
 import { CsvEditorProvider } from './host/csv/provider';
 import { ExcelEditorProvider } from './host/excel/provider';
 import { MarkdownPreviewProvider } from './host/markdown/provider';
+import { initHistory, listVersions, showHistory, watchTextSaves } from './host/history';
 import { onViewerStatus } from './host/status';
 import { dispatchToView, watchViews } from './host/webviewHtml';
 
@@ -29,15 +30,17 @@ function activeResource(): vscode.Uri | undefined {
 
 export function activate(context: vscode.ExtensionContext): {
   onViewerStatus: typeof onViewerStatus;
-  testing: { dispatch: typeof dispatchToView };
+  testing: { dispatch: typeof dispatchToView; listVersions: typeof listVersions };
 } {
   // Keep the webview alive while its tab is in the background: re-parsing a large
   // workbook or PDF on every tab switch would be far more expensive.
   const webviewOptions = { retainContextWhenHidden: true };
 
+  initHistory(context.globalStorageUri);
   const binary = new BinaryPreviewProvider(context);
   context.subscriptions.push(
     ...watchViews(),
+    watchTextSaves(),
     ...BinaryPreviewProvider.viewTypes.map((viewType) =>
       vscode.window.registerCustomEditorProvider(viewType, binary, {
         webviewOptions,
@@ -67,6 +70,12 @@ export function activate(context: vscode.ExtensionContext): {
   context.subscriptions.push(
     vscode.commands.registerCommand('docsview.showPreview', open(vscode.ViewColumn.Active)),
     vscode.commands.registerCommand('docsview.showPreviewToSide', open(vscode.ViewColumn.Beside)),
+    vscode.commands.registerCommand('docsview.showHistory', async (uri?: vscode.Uri) => {
+      const target = uri ?? activeResource();
+      if (target) {
+        await showHistory(target);
+      }
+    }),
     vscode.commands.registerCommand('docsview.showSource', async (uri?: vscode.Uri) => {
       const target = uri ?? activeResource();
       if (target) {
@@ -76,7 +85,7 @@ export function activate(context: vscode.ExtensionContext): {
   );
 
   // Lets tests (and other tooling) observe when a document has actually rendered.
-  return { onViewerStatus, testing: { dispatch: dispatchToView } };
+  return { onViewerStatus, testing: { dispatch: dispatchToView, listVersions } };
 }
 
 export function deactivate(): void {
