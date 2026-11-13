@@ -15,5 +15,6 @@
   "config.appearance.theme": "Markdown 与表格视图的预览主题。\"editor\" 表示使用 VS Code 当前配色。",
   "config.appearance.colorScheme": "DocsView 预览的明暗外观。\"auto\" 表示跟随 VS Code 主题。",
   "config.appearance.invertPages": "暗色外观下，将 PDF 与 Word 页面反色显示。",
-  "config.language": "DocsView 界面语言。\"auto\" 表示跟随 VS Code 的显示语言。"
+  "config.language": "DocsView 界面语言。\"auto\" 表示跟随 VS Code 的显示语言。",
+  "config.highlightRowColumn": "在 CSV 与 Excel 视图中高亮选中单元格所在的行和列，在 Markdown 表格中高亮鼠标所在的行和列。"
 }

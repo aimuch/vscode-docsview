@@ -113,7 +113,19 @@ export async function runEditingChecks(api: Api, samples: string, work: string, 
       const active = vscode.window.tabGroups.activeTabGroup.activeTab;
       return text.length === 1 && custom.length === 1 && text[0].group === custom[0].group && active === text[0];
     });
-    return 'split opens beside, preview closes it, source opens in place';
+
+    // From the text editor, the title-bar buttons bring the preview back.
+    const previewActive = () => {
+      const active = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+      return active instanceof vscode.TabInputCustom && active.uri.toString() === uri.toString();
+    };
+    await vscode.commands.executeCommand('docsview.showPreview');
+    await waitFor('"open preview" switches back to the preview', previewActive);
+
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+    await vscode.commands.executeCommand('docsview.showPreviewToSide');
+    await waitFor('"open preview to the side" shows the preview', previewActive);
+    return 'split opens beside, preview closes it, source opens in place, title-bar buttons switch back';
   });
 
   await check(results, 'csv: text button', 'docsview.csv', async () => {

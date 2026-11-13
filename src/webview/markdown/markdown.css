@@ -345,6 +345,24 @@ body[data-theme='paper'] .markdown-body h2 {
   background: color-mix(in srgb, var(--md-th-bg) 50%, transparent);
 }
 
+/* Row/column highlight on hover (toolbar switch). */
+body {
+  --md-hl: color-mix(in srgb, var(--md-link) 11%, var(--md-bg));
+  --md-hl-strong: color-mix(in srgb, var(--md-link) 24%, var(--md-bg));
+}
+
+.dv-highlight .markdown-body tr.md-hl-row > td,
+.dv-highlight .markdown-body tr.md-hl-row > th,
+.dv-highlight .markdown-body td.md-hl-col,
+.dv-highlight .markdown-body th.md-hl-col {
+  background-color: var(--md-hl);
+}
+
+.dv-highlight .markdown-body tr.md-hl-row > td.md-hl-cell,
+.dv-highlight .markdown-body tr.md-hl-row > th.md-hl-cell {
+  background-color: var(--md-hl-strong);
+}
+
 .markdown-body kbd {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.85em;

@@ -111,12 +111,18 @@
       {
         "command": "docsview.showPreview",
         "title": "%command.showPreview%",
-        "icon": "$(preview)"
+        "icon": {
+          "light": "media/icons/preview-light.svg",
+          "dark": "media/icons/preview-dark.svg"
+        }
       },
       {
         "command": "docsview.showPreviewToSide",
         "title": "%command.showPreviewToSide%",
-        "icon": "$(preview)"
+        "icon": {
+          "light": "media/icons/preview-side-light.svg",
+          "dark": "media/icons/preview-side-dark.svg"
+        }
       },
       {
         "command": "docsview.showSource",
@@ -127,14 +133,19 @@
     "menus": {
       "editor/title": [
         {
+          "command": "docsview.showPreview",
+          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i",
+          "group": "navigation@1"
+        },
+        {
           "command": "docsview.showPreviewToSide",
           "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i",
-          "group": "navigation"
+          "group": "navigation@2"
         },
         {
           "command": "docsview.showSource",
           "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv'",
-          "group": "navigation"
+          "group": "navigation@1"
         }
       ],
       "explorer/context": [
@@ -232,6 +243,11 @@
           ],
           "default": "auto",
           "description": "%config.language%"
+        },
+        "docsview.highlightRowColumn": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.highlightRowColumn%"
         }
       }
     }

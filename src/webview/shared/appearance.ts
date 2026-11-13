@@ -46,6 +46,7 @@ function apply(): void {
   // and an unconditional write would feed back into it in engines that report no-op writes.
   setClass('dv-dark', dark);
   setClass('dv-invert-pages', dark && current.invertPages);
+  setClass('dv-highlight', current.highlight);
   body.style.colorScheme = dark ? 'dark' : 'light';
   updateControls();
 }
@@ -222,6 +223,20 @@ document.addEventListener('mousedown', (e) => {
     closeMenu();
   }
 });
+
+/** Toolbar toggle for row/column highlighting, shared by the sheet and Markdown views. */
+export function highlightToggle(): HTMLButtonElement {
+  const b = el('button', { class: 'dv-btn dv-icon-btn', title: t('highlightRowCol') });
+  b.type = 'button';
+  b.innerHTML = icons.crosshair;
+  b.addEventListener('click', () => update({ highlight: !current.highlight }));
+  updaters.push(() => {
+    b.setAttribute('aria-pressed', String(current.highlight));
+    b.classList.toggle('dv-active', current.highlight);
+  });
+  updateControls();
+  return b;
+}
 
 /** Theme menu button, light/dark switch and language switch for the right end of a toolbar. */
 export function appearanceControls(): HTMLElement[] {

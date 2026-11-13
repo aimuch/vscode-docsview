@@ -15,5 +15,6 @@
   "config.appearance.theme": "Preview theme for Markdown and table views. \"editor\" uses the colours of the current VS Code theme.",
   "config.appearance.colorScheme": "Light or dark appearance of DocsView editors. \"auto\" follows the VS Code theme.",
   "config.appearance.invertPages": "In a dark appearance, show PDF and Word pages with inverted colours.",
-  "config.language": "Language of the DocsView interface. \"auto\" follows the VS Code display language."
+  "config.language": "Language of the DocsView interface. \"auto\" follows the VS Code display language.",
+  "config.highlightRowColumn": "Highlight the row and column of the selected cell in CSV and Excel views, and of the hovered cell in Markdown tables."
 }

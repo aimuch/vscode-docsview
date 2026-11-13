@@ -4,6 +4,7 @@ import { cellRaw, cellText, columnName, Grid, type GridSource, type Selection } 
 import '../shared/base.css';
 import { app, button, el, onMessage, post, showStatus, t } from '../shared/api';
 import { icons } from '../shared/icons';
+import { highlightToggle } from '../shared/appearance';
 import { readState, writeState } from '../shared/sidebar';
 import { divider, iconButton, segmented, toolbar } from '../shared/ui';
 import './sheet.css';
@@ -168,6 +169,7 @@ app.append(
     findToggle,
     findBox,
     findStatus,
+    highlightToggle(),
     structureGroup,
     'spacer',
     summary,

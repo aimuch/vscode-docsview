@@ -42,7 +42,11 @@ Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一
 - **明暗**：跟随编辑器 / 亮色 / 暗色。Word、PDF、PPT 的页面默认保持原稿白底，可在外观菜单里开启“暗色下页面反色”。
 - **界面语言**：跟随 VS Code / 简体中文 / English。
 
+- **高亮行列**（工具栏上的十字格图标）：CSV / Excel 中选中单元格时，整行和整列加浅色底（选中区域时覆盖其所有行列）；Markdown 表格中鼠标悬停时高亮所在行列。
+
 这些选项保存在 VS Code 设置里，改动后所有已打开的 DocsView 预览立即同步。
+
+Markdown / CSV 的文本编辑器右上角有两个 DocsView 图标：**打开预览**（在当前位置切到预览，预览已打开时直接切过去）和**在侧边打开预览**（分栏）。在预览里点“源码”后，用“打开预览”即可切回。
 
 ## 表格操作
 
@@ -70,6 +74,7 @@ Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一
 | `docsview.appearance.colorScheme` | `auto` | 明暗：`auto`（跟随编辑器）/ `light` / `dark` |
 | `docsview.appearance.invertPages` | `false` | 暗色下把 PDF、Word、PPT 页面反色显示 |
 | `docsview.language` | `auto` | 界面语言：`auto` / `zh-cn` / `en` |
+| `docsview.highlightRowColumn` | `true` | 高亮选中（表格）或悬停（Markdown 表格）单元格所在的行和列 |
 
 ## 已知限制
 
@@ -113,7 +118,7 @@ npm run package     # 生成 .vsix
 
 Markdown and CSV keep opening as text; use the preview icon in the editor title or **DocsView: Open Preview to the Side**. Use **Reopen Editor With…** to switch any file between DocsView and the text editor.
 
-**Toolbar and appearance:** every viewer shares one toolbar. On the left: a navigation sidebar (Markdown and Word headings with filter and collapse, PDF bookmarks or page thumbnails, PPT slide list) and a view switch (Markdown preview / split / source, CSV table / text, Excel styled / plain, Word pages / continuous, PDF continuous / single page, PPT list / single slide). On the right: preview theme (Editor, GitHub, Paper, Academic, each with light and dark palettes), light / dark / follow editor, optional inverted pages in dark mode, and the interface language (follow VS Code, 简体中文, English). Settings: `docsview.appearance.theme`, `docsview.appearance.colorScheme`, `docsview.appearance.invertPages`, `docsview.language`.
+**Toolbar and appearance:** every viewer shares one toolbar. On the left: a navigation sidebar (Markdown and Word headings with filter and collapse, PDF bookmarks or page thumbnails, PPT slide list) and a view switch (Markdown preview / split / source, CSV table / text, Excel styled / plain, Word pages / continuous, PDF continuous / single page, PPT list / single slide). On the right: preview theme (Editor, GitHub, Paper, Academic, each with light and dark palettes), light / dark / follow editor, optional inverted pages in dark mode, and the interface language (follow VS Code, 简体中文, English). A crosshair button highlights the row and column of the selected cell (CSV, Excel) or the hovered cell (Markdown tables). Markdown and CSV text editors get two DocsView title-bar buttons: open the preview in place, or to the side. Settings: `docsview.appearance.theme`, `docsview.appearance.colorScheme`, `docsview.appearance.invertPages`, `docsview.highlightRowColumn`, `docsview.language`.
 
 **Editing xlsx:** saving rewrites only the worksheet XML of edited cells; every other part of the file (styles, charts, pivot tables, macros, images) is preserved byte-for-byte. In exchange, only cell values can be changed (no row/column insertion), formulas are not recalculated here (the workbook is flagged to recalculate when opened in Excel), and master cells of shared/array formulas are read-only.
 

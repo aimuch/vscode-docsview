@@ -103,10 +103,18 @@ export interface Appearance {
   scheme: SchemeSetting;
   /** In a dark scheme, show paged documents (PDF/Word) with inverted colours. */
   invertPages: boolean;
+  /** Highlight the row and column of the selected cell (sheets) or hovered cell (Markdown tables). */
+  highlight: boolean;
   language: LanguageSetting;
 }
 
-export const DEFAULT_APPEARANCE: Appearance = { theme: 'editor', scheme: 'auto', invertPages: false, language: 'auto' };
+export const DEFAULT_APPEARANCE: Appearance = {
+  theme: 'editor',
+  scheme: 'auto',
+  invertPages: false,
+  highlight: true,
+  language: 'auto',
+};
 
 // ---------------------------------------------------------------- messages
 

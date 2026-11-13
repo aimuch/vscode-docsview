@@ -21,6 +21,7 @@ export const icons = {
   close: svg('<path d="M4 4l8 8M12 4l-8 8"/>'),
   chevronDown: svg('<path d="M4 6l4 4 4-4"/>'),
   chevronRight: svg('<path d="M6 4l4 4-4 4"/>'),
+  crosshair: svg('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M2.5 6.5h11M2.5 9.5h11M6.5 2.5v11M9.5 2.5v11"/>'),
 };
 
 export type IconName = keyof typeof icons;

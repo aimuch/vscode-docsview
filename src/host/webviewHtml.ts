@@ -23,6 +23,7 @@ const SETTING_KEYS: Record<keyof Appearance, string> = {
   theme: 'appearance.theme',
   scheme: 'appearance.colorScheme',
   invertPages: 'appearance.invertPages',
+  highlight: 'highlightRowColumn',
   language: 'language',
 };
 
@@ -36,6 +37,7 @@ export function readAppearance(): Appearance {
     theme: pick(SETTING_KEYS.theme, THEMES),
     scheme: pick(SETTING_KEYS.scheme, SCHEMES),
     invertPages: config.get<boolean>(SETTING_KEYS.invertPages, false),
+    highlight: config.get<boolean>(SETTING_KEYS.highlight, true),
     language: pick(SETTING_KEYS.language, LANGUAGES),
   };
 }
@@ -134,7 +136,11 @@ export function configureWebview(
 export function watchViews(): vscode.Disposable[] {
   return [
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('docsview.appearance') && !e.affectsConfiguration('docsview.language')) {
+      if (
+        !e.affectsConfiguration('docsview.appearance') &&
+        !e.affectsConfiguration('docsview.language') &&
+        !e.affectsConfiguration('docsview.highlightRowColumn')
+      ) {
         return;
       }
       const message: HostMessage = { type: 'appearance', appearance: readAppearance() };

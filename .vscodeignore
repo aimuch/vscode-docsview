@@ -1,6 +1,7 @@
 **
 !dist/**
 !media/icon.png
+!media/icons/**
 !package.json
 !package.nls.json
 !package.nls.zh-cn.json

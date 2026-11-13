@@ -56,6 +56,9 @@ type LayerName = 'body' | 'top' | 'left' | 'corner';
 interface CellEl extends HTMLDivElement {
   _r: number;
   _c: number;
+  /** Rows / columns covered (merged cells span more than one). */
+  _rs?: number;
+  _cs?: number;
   _kind: 'cell' | 'col' | 'row';
 }
 
@@ -353,6 +356,8 @@ export class Grid {
     const node = document.createElement('div') as CellEl;
     node._r = r;
     node._c = c;
+    node._rs = merge?.rs ?? 1;
+    node._cs = merge?.cs ?? 1;
     node._kind = 'cell';
     node.className = 'grid-cell';
     const rs = merge?.rs ?? 1;
@@ -468,6 +473,12 @@ export class Grid {
         const inside = node._r >= sel.r0 && node._r <= sel.r1 && node._c >= sel.c0 && node._c <= sel.c1;
         node.classList.toggle('grid-sel', inside && !single);
         node.classList.toggle('grid-active', node._r === sel.r && node._c === sel.c);
+        // Row/column highlight ("reading mode"): shown only while the body has dv-highlight.
+        const lastRow = node._r + (node._rs ?? 1) - 1;
+        const lastCol = node._c + (node._cs ?? 1) - 1;
+        const inRows = node._r <= sel.r1 && lastRow >= sel.r0;
+        const inCols = node._c <= sel.c1 && lastCol >= sel.c0;
+        node.classList.toggle('grid-cross', inRows || inCols);
       } else if (node._kind === 'col') {
         node.classList.toggle('grid-hl', node._c >= sel.c0 && node._c <= sel.c1);
       } else {

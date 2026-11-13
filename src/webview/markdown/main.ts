@@ -4,7 +4,9 @@ import type { TocEntry } from '../../common/protocol';
 import '../shared/base.css';
 import './markdown.css';
 import { app, el, errorText, isDark, onMessage, onThemeChange, post, t } from '../shared/api';
+import { getAppearance, highlightToggle, onAppearanceChange } from '../shared/appearance';
 import { Outline, Sidebar } from '../shared/sidebar';
+import { attachTableHighlight } from './tableHighlight';
 import { segmented, toolbar } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 
@@ -39,14 +41,23 @@ const view = segmented<'preview' | 'split' | 'source'>(
 
 const zoom = createZoom((value) => article.style.setProperty('zoom', String(value)), scroller);
 
+const tableHighlight = attachTableHighlight(article, () => getAppearance().highlight);
+onAppearanceChange((a) => {
+  if (!a.highlight) {
+    tableHighlight.clear();
+  }
+});
+
 app.append(
-  toolbar(sidebar.toggle, view.node, '|', ...zoom.nodes),
+  toolbar(sidebar.toggle, view.node, '|', ...zoom.nodes, '|', highlightToggle()),
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [scroller])]),
 );
 
 // ---------------------------------------------------------------- rendering
 
 function render(html: string, toc: TocEntry[]) {
+  // The new HTML replaces the marked cells; start from a clean slate.
+  tableHighlight.clear();
   const next = document.createElement('article');
   next.className = 'markdown-body';
   next.innerHTML = html;

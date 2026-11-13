@@ -18,7 +18,7 @@ let appearance: AppearanceModule;
 let zoom: ZoomModule;
 let grid: GridModule;
 
-const initial: Appearance = { theme: 'editor', scheme: 'auto', invertPages: false, language: 'auto' };
+const initial: Appearance = { theme: 'editor', scheme: 'auto', invertPages: false, highlight: true, language: 'auto' };
 
 beforeAll(async () => {
   // What the HTML shell and VS Code provide before any webview module runs.
@@ -252,7 +252,7 @@ describe('appearance', () => {
   });
 
   it('applies settings pushed by the host', () => {
-    hostSends({ type: 'appearance', appearance: { theme: 'paper', scheme: 'dark', invertPages: true, language: 'auto' } });
+    hostSends({ type: 'appearance', appearance: { ...initial, theme: 'paper', scheme: 'dark', invertPages: true } });
     expect(body.dataset.theme).toBe('paper');
     expect(body.dataset.scheme).toBe('dark');
     expect(body.classList.contains('dv-dark')).toBe(true);
@@ -311,5 +311,93 @@ describe('grid helpers', () => {
     ]);
     expect(grid.parseClipboard('"x\ty"\t"line1\nline2"\t"say ""hi"""')).toEqual([['x\ty', 'line1\nline2', 'say "hi"']]);
     expect(grid.parseClipboard('single')).toEqual([['single']]);
+  });
+});
+
+// ---------------------------------------------------------------- row / column highlight
+
+describe("row and column highlight", () => {
+  it("marks the hovered cell, its row and its column, counting colspans", async () => {
+    const { TableHighlighter } = await import("../../src/webview/markdown/tableHighlight");
+    const host = document.createElement("div");
+    host.innerHTML = `<table>
+      <tr><th>A</th><th>B</th><th>C</th></tr>
+      <tr><td colspan="2">wide</td><td>c1</td></tr>
+      <tr><td>a2</td><td>b2</td><td>c2</td></tr>
+    </table>`;
+    document.body.append(host);
+    const cells = [...host.querySelectorAll<HTMLTableCellElement>("th, td")];
+    const byText = (t: string) => cells.find((c) => c.textContent === t)!;
+    const marked = (cls: string) => cells.filter((c) => c.classList.contains(cls)).map((c) => c.textContent);
+
+    const h = new TableHighlighter();
+    h.highlight(byText("b2"));
+    expect(marked("md-hl-col")).toEqual(["B", "wide", "b2"]);
+    expect(byText("b2").parentElement!.classList.contains("md-hl-row")).toBe(true);
+    expect(marked("md-hl-cell")).toEqual(["b2"]);
+
+    h.highlight(byText("wide"));
+    expect(marked("md-hl-col")).toEqual(["A", "B", "wide", "a2", "b2"]);
+    expect(byText("b2").parentElement!.classList.contains("md-hl-row")).toBe(false);
+
+    h.clear();
+    expect(host.querySelectorAll(".md-hl-row, .md-hl-col, .md-hl-cell")).toHaveLength(0);
+    host.remove();
+  });
+
+  it("follows the mouse only while the switch is on", async () => {
+    const { attachTableHighlight } = await import("../../src/webview/markdown/tableHighlight");
+    const host = document.createElement("div");
+    host.innerHTML = "<table><tr><td>x</td><td>y</td></tr></table>";
+    document.body.append(host);
+    let on = true;
+    attachTableHighlight(host, () => on);
+    const y = host.querySelectorAll("td")[1];
+    y.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    expect(y.classList.contains("md-hl-cell")).toBe(true);
+    host.dispatchEvent(new MouseEvent("mouseleave"));
+    expect(y.classList.contains("md-hl-cell")).toBe(false);
+    on = false;
+    y.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    expect(y.classList.contains("md-hl-cell")).toBe(false);
+    host.remove();
+  });
+
+  it("marks every grid cell in the selected rows and columns, merged cells included", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const g = new grid.Grid(parent, { editable: false, onEdit: () => undefined });
+    g.setData({
+      rowCount: 4,
+      colCount: 4,
+      cell: (r, c) => `${r},${c}`,
+      colWidths: [80, 80, 80, 80],
+      merges: [{ r: 3, c: 0, rs: 1, cs: 3 }],
+    });
+    g.goTo(1, 1);
+    await new Promise((r) => setTimeout(r, 200));
+    // The grid only creates cells near the viewport (zero-sized here), so check every cell it did create:
+    // crossed exactly when it is in row 1, in column 1, or is the merged cell spanning column 1.
+    const rendered = [...parent.querySelectorAll<HTMLElement>(".grid-cell")];
+    expect(rendered.length).toBeGreaterThan(8);
+    for (const node of rendered) {
+      const [r, c] = node.textContent!.split(",").map(Number);
+      const expected = r === 1 || c === 1 || (r === 3 && c === 0);
+      expect([node.textContent, node.classList.contains("grid-cross")]).toEqual([node.textContent, expected]);
+    }
+    expect(rendered.find((n) => n.textContent === "3,0")?.classList.contains("grid-cross")).toBe(true);
+    expect(parent.querySelector(".grid-active")?.textContent).toBe("1,1");
+    parent.remove();
+  });
+
+  it("toolbar switch toggles the setting and the body class", () => {
+    hostSends({ type: "appearance", appearance: initial });
+    expect(document.body.classList.contains("dv-highlight")).toBe(true);
+    const toggle = appearance.highlightToggle();
+    expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    toggle.click();
+    expect(posted).toContainEqual({ type: "setAppearance", patch: { highlight: false } });
+    expect(document.body.classList.contains("dv-highlight")).toBe(false);
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
   });
 });

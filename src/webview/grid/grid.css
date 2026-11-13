@@ -4,6 +4,7 @@
   --grid-fg: var(--vscode-editor-foreground, var(--vscode-foreground));
   --grid-header-bg: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background, #f3f3f3));
   --grid-sel: color-mix(in srgb, var(--vscode-focusBorder, #0078d4) 22%, transparent);
+  --grid-cross: color-mix(in srgb, var(--vscode-focusBorder, #0078d4) 11%, transparent);
   --grid-accent: var(--vscode-focusBorder, #0078d4);
   position: relative;
   flex: 1;
@@ -84,7 +85,17 @@
   z-index: 1;
 }
 
-.grid-cell.grid-sel {
+/* Row/column highlight: a light band over the selected rows and columns. */
+.dv-highlight .grid-cell.grid-cross {
+  background-image: linear-gradient(var(--grid-cross), var(--grid-cross));
+}
+
+.dv-highlight .grid-cell.grid-cross.grid-active {
+  background-image: none;
+}
+
+.grid-cell.grid-sel,
+.dv-highlight .grid-cell.grid-sel {
   background-image: linear-gradient(var(--grid-sel), var(--grid-sel));
 }
 
@@ -142,4 +153,9 @@
 .grid-light .grid-editor {
   color: #111;
   background: #fff;
+}
+
+/* Dark sheets need a stronger band to stay visible. */
+.dv-dark .grid:not(.grid-light) {
+  --grid-cross: color-mix(in srgb, var(--vscode-focusBorder, #0078d4) 20%, transparent);
 }
