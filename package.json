@@ -1,0 +1,278 @@
+{
+  "name": "docsview",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "publisher": "docsview",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "markdown",
+    "excel",
+    "xlsx",
+    "csv",
+    "word",
+    "docx",
+    "pdf",
+    "pptx",
+    "preview"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "docsview.markdown",
+        "displayName": "%editor.markdown%",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          },
+          {
+            "filenamePattern": "*.markdown"
+          }
+        ],
+        "priority": "option"
+      },
+      {
+        "viewType": "docsview.csv",
+        "displayName": "%editor.csv%",
+        "selector": [
+          {
+            "filenamePattern": "*.csv"
+          },
+          {
+            "filenamePattern": "*.tsv"
+          }
+        ],
+        "priority": "option"
+      },
+      {
+        "viewType": "docsview.excel",
+        "displayName": "%editor.excel%",
+        "selector": [
+          {
+            "filenamePattern": "*.xlsx"
+          },
+          {
+            "filenamePattern": "*.xlsm"
+          },
+          {
+            "filenamePattern": "*.xls"
+          },
+          {
+            "filenamePattern": "*.ods"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "docsview.word",
+        "displayName": "%editor.word%",
+        "selector": [
+          {
+            "filenamePattern": "*.docx"
+          },
+          {
+            "filenamePattern": "*.doc"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "docsview.pdf",
+        "displayName": "%editor.pdf%",
+        "selector": [
+          {
+            "filenamePattern": "*.pdf"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "docsview.pptx",
+        "displayName": "%editor.pptx%",
+        "selector": [
+          {
+            "filenamePattern": "*.pptx"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "docsview.showPreview",
+        "title": "%command.showPreview%",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "docsview.showPreviewToSide",
+        "title": "%command.showPreviewToSide%",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "docsview.showSource",
+        "title": "%command.showSource%",
+        "icon": "$(go-to-file)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "docsview.showPreviewToSide",
+          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i",
+          "group": "navigation"
+        },
+        {
+          "command": "docsview.showSource",
+          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv'",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "docsview.showPreview",
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i",
+          "group": "navigation@90"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "docsview.showPreview",
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i"
+        },
+        {
+          "command": "docsview.showPreviewToSide",
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i"
+        },
+        {
+          "command": "docsview.showSource",
+          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv'"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DocsView",
+      "properties": {
+        "docsview.markdown.scrollSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.markdown.scrollSync%"
+        },
+        "docsview.csv.delimiter": {
+          "type": "string",
+          "enum": [
+            "auto",
+            ",",
+            ";",
+            "\t",
+            "|"
+          ],
+          "enumItemLabels": [
+            "Auto",
+            "Comma",
+            "Semicolon",
+            "Tab",
+            "Pipe"
+          ],
+          "default": "auto",
+          "description": "%config.csv.delimiter%"
+        },
+        "docsview.appearance.theme": {
+          "type": "string",
+          "enum": [
+            "editor",
+            "github",
+            "paper",
+            "academic"
+          ],
+          "enumItemLabels": [
+            "Editor",
+            "GitHub",
+            "Paper",
+            "Academic"
+          ],
+          "default": "editor",
+          "description": "%config.appearance.theme%"
+        },
+        "docsview.appearance.colorScheme": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "light",
+            "dark"
+          ],
+          "default": "auto",
+          "description": "%config.appearance.colorScheme%"
+        },
+        "docsview.appearance.invertPages": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.appearance.invertPages%"
+        },
+        "docsview.language": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "zh-cn",
+            "en"
+          ],
+          "enumItemLabels": [
+            "Auto",
+            "简体中文",
+            "English"
+          ],
+          "default": "auto",
+          "description": "%config.language%"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "build:prod": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "dev": "node esbuild.mjs --dev && node out/dev-server.cjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "smoke": "node esbuild.mjs --dev && node scripts/smoke.mjs",
+    "samples": "node scripts/gen-samples.mjs",
+    "vscode:prepublish": "npm run build:prod",
+    "package": "vsce package --no-dependencies --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/markdown-it-katex": "^1.1.2",
+    "@xmldom/xmldom": "^0.9.12",
+    "docx": "^9.15.3",
+    "docx-preview": "^0.4.1",
+    "esbuild": "^0.28.2",
+    "exceljs": "^4.4.0",
+    "fflate": "^0.8.3",
+    "highlight.js": "^11.12.0",
+    "jszip": "^3.10.1",
+    "katex": "^0.19.1",
+    "markdown-it": "^15.0.3",
+    "markdown-it-footnote": "^4.0.0",
+    "mermaid": "^12.3.0",
+    "morphdom": "^2.7.8",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.5.438",
+    "pptx-preview": "^1.0.7",
+    "pptxgenjs": "^4.0.1",
+    "typescript": "^5.6.0",
+    "vitest": "^5.1.0",
+    "word-extractor": "^1.0.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "icon": "media/icon.png"
+}

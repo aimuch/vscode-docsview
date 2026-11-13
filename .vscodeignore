@@ -1,0 +1,10 @@
+**
+!dist/**
+!media/icon.png
+!package.json
+!package.nls.json
+!package.nls.zh-cn.json
+!README.md
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+dist/**/*.map

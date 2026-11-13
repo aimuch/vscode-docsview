@@ -1,0 +1,526 @@
+/* Markdown document styles. Every colour and font goes through the --md-* variables,
+   which each preview theme sets for light and dark. */
+
+/* ------------------------------------------------------------------ themes */
+
+body {
+  /* "editor": the colours of the current VS Code theme. */
+  --md-bg: var(--vscode-editor-background);
+  --md-fg: var(--vscode-editor-foreground, var(--vscode-foreground));
+  --md-muted: var(--vscode-descriptionForeground, #6b6b6b);
+  --md-link: var(--vscode-textLink-foreground, #0969da);
+  --md-border: var(--vscode-panel-border, rgba(128, 128, 128, 0.35));
+  --md-code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.12));
+  --md-inline-code-bg: var(--vscode-textBlockQuote-background, rgba(128, 128, 128, 0.14));
+  --md-quote-border: var(--vscode-textBlockQuote-border, rgba(128, 128, 128, 0.5));
+  --md-th-bg: var(--vscode-textBlockQuote-background, rgba(128, 128, 128, 0.12));
+  --md-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --md-heading-font: var(--md-font);
+  --md-size: 15px;
+  --md-leading: 1.65;
+  --md-width: 900px;
+  --md-align: left;
+}
+
+body[data-theme='github'] {
+  --md-bg: #ffffff;
+  --md-fg: #1f2328;
+  --md-muted: #59636e;
+  --md-link: #0969da;
+  --md-border: #d1d9e0;
+  --md-code-bg: #f6f8fa;
+  --md-inline-code-bg: rgba(129, 139, 152, 0.12);
+  --md-quote-border: #d1d9e0;
+  --md-th-bg: #f6f8fa;
+  --md-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --md-size: 16px;
+  --md-leading: 1.5;
+  --md-width: 980px;
+}
+
+body[data-theme='github'].dv-dark {
+  --md-bg: #0d1117;
+  --md-fg: #f0f6fc;
+  --md-muted: #9198a1;
+  --md-link: #4493f8;
+  --md-border: #3d444d;
+  --md-code-bg: #151b23;
+  --md-inline-code-bg: rgba(101, 108, 118, 0.2);
+  --md-quote-border: #3d444d;
+  --md-th-bg: #151b23;
+}
+
+body[data-theme='paper'] {
+  --md-bg: #f8f4ec;
+  --md-fg: #2b2622;
+  --md-muted: #6e6455;
+  --md-link: #9a5b13;
+  --md-border: #e2d8c4;
+  --md-code-bg: #efe8da;
+  --md-inline-code-bg: #ece3d1;
+  --md-quote-border: #d6c7a9;
+  --md-th-bg: #efe8da;
+  --md-font: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Songti SC', 'Noto Serif CJK SC', SimSun, Georgia, serif;
+  --md-heading-font: var(--md-font);
+  --md-size: 17px;
+  --md-leading: 1.8;
+  --md-width: 760px;
+}
+
+body[data-theme='paper'].dv-dark {
+  --md-bg: #24201a;
+  --md-fg: #e2d8c4;
+  --md-muted: #a89c86;
+  --md-link: #d9a15a;
+  --md-border: #40382c;
+  --md-code-bg: #2d2820;
+  --md-inline-code-bg: #332d24;
+  --md-quote-border: #5a4f3d;
+  --md-th-bg: #2d2820;
+}
+
+body[data-theme='academic'] {
+  --md-bg: #ffffff;
+  --md-fg: #1a1a1a;
+  --md-muted: #5b6270;
+  --md-link: #3b5bdb;
+  --md-border: #d6d9df;
+  --md-code-bg: #f4f5f7;
+  --md-inline-code-bg: #eef0f3;
+  --md-quote-border: #b9bfca;
+  --md-th-bg: #f4f5f7;
+  --md-font: 'Times New Roman', 'Songti SC', 'Noto Serif CJK SC', SimSun, Times, serif;
+  --md-heading-font: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif;
+  --md-size: 16px;
+  --md-leading: 1.7;
+  --md-width: 720px;
+  --md-align: justify;
+}
+
+body[data-theme='academic'].dv-dark {
+  --md-bg: #16181d;
+  --md-fg: #e8eaf0;
+  --md-muted: #9ba2b0;
+  --md-link: #91a7ff;
+  --md-border: #343a46;
+  --md-code-bg: #1d2027;
+  --md-inline-code-bg: #242832;
+  --md-quote-border: #4a5160;
+  --md-th-bg: #1d2027;
+}
+
+/* ------------------------------------------------------------------ layout */
+
+.md-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scroll-padding-top: 8px;
+  background: var(--md-bg);
+}
+
+/* ------------------------------------------------------------------ document */
+
+.markdown-body {
+  box-sizing: border-box;
+  max-width: var(--md-width);
+  margin: 0 auto;
+  padding: 28px 40px 80px;
+  color: var(--md-fg);
+  font-family: var(--md-font);
+  font-size: var(--md-size);
+  line-height: var(--md-leading);
+  overflow-wrap: break-word;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body p,
+.markdown-body li {
+  text-align: var(--md-align);
+  hyphens: auto;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 1.5em 0 0.6em;
+  font-family: var(--md-heading-font);
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.markdown-body h1 {
+  font-size: 2em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--md-border);
+}
+
+.markdown-body h2 {
+  font-size: 1.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--md-border);
+}
+
+.markdown-body h3 {
+  font-size: 1.25em;
+}
+
+.markdown-body h4 {
+  font-size: 1em;
+}
+
+.markdown-body h5 {
+  font-size: 0.875em;
+}
+
+.markdown-body h6 {
+  font-size: 0.85em;
+  color: var(--md-muted);
+}
+
+/* Academic: centred title, no rules under headings. */
+body[data-theme='academic'] .markdown-body h1 {
+  text-align: center;
+  border-bottom: 0;
+  font-size: 1.9em;
+}
+
+body[data-theme='academic'] .markdown-body h2 {
+  border-bottom: 0;
+  font-size: 1.35em;
+}
+
+/* Paper: lighter, airier headings. */
+body[data-theme='paper'] .markdown-body h1,
+body[data-theme='paper'] .markdown-body h2 {
+  font-weight: 500;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre,
+.markdown-body table,
+.markdown-body dl,
+.markdown-body .mermaid {
+  margin: 0 0 1em;
+}
+
+.markdown-body a {
+  color: var(--md-link);
+  text-decoration: none;
+}
+
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 2em;
+}
+
+.markdown-body li + li {
+  margin-top: 0.25em;
+}
+
+.markdown-body li > p {
+  margin-bottom: 0.5em;
+}
+
+.markdown-body li.task-list-item {
+  list-style: none;
+}
+
+.markdown-body li.task-list-item > input,
+.markdown-body li.task-list-item > p > input {
+  margin: 0 0.4em 0.2em -1.5em;
+  vertical-align: middle;
+}
+
+.markdown-body blockquote {
+  padding: 0 1em;
+  color: var(--md-muted);
+  border-left: 0.25em solid var(--md-quote-border);
+}
+
+.markdown-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body hr {
+  height: 0;
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 2px solid var(--md-border);
+}
+
+.markdown-body img {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-body code {
+  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 0.86em;
+  padding: 0.2em 0.4em;
+  border-radius: 5px;
+  background: var(--md-inline-code-bg);
+}
+
+.markdown-body pre {
+  position: relative;
+  padding: 14px 16px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--md-code-bg);
+  line-height: 1.5;
+  text-align: left;
+}
+
+.markdown-body pre > code {
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.markdown-body pre.md-frontmatter {
+  border: 1px dashed var(--md-border);
+  background: transparent;
+  color: var(--md-muted);
+}
+
+.md-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  font: 12px var(--vscode-font-family, sans-serif);
+  color: var(--md-muted);
+  background: var(--md-bg);
+  border: 1px solid var(--md-border);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.markdown-body pre:hover .md-copy,
+.md-copy:focus-visible {
+  opacity: 1;
+}
+
+.markdown-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 6px 13px;
+  border: 1px solid var(--md-border);
+  text-align: left;
+}
+
+.markdown-body th {
+  font-weight: 600;
+  background: var(--md-th-bg);
+}
+
+.markdown-body tr:nth-child(2n) td {
+  background: color-mix(in srgb, var(--md-th-bg) 50%, transparent);
+}
+
+.markdown-body kbd {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+  padding: 2px 5px;
+  border: 1px solid var(--md-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+}
+
+.markdown-body .footnotes {
+  font-size: 0.875em;
+  color: var(--md-muted);
+}
+
+.markdown-body .footnotes-sep {
+  border-top-width: 1px;
+}
+
+.markdown-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+.markdown-body .mermaid {
+  text-align: center;
+  overflow-x: auto;
+}
+
+.markdown-body .mermaid > pre {
+  text-align: left;
+}
+
+.markdown-body .mermaid.mermaid-error {
+  text-align: left;
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #d33);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.markdown-body .mermaid-error-title {
+  color: var(--vscode-errorForeground, #d33);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.markdown-body .mermaid.mermaid-error pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* ------------------------------------------------------------------ syntax colours */
+
+.hljs-comment,
+.hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-type {
+  color: #cf222e;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string,
+.hljs-addition {
+  color: #0a3069;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-operator,
+.hljs-meta {
+  color: #0550ae;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-section {
+  color: #8250df;
+}
+.hljs-built_in,
+.hljs-symbol,
+.hljs-bullet {
+  color: #953800;
+}
+.hljs-name,
+.hljs-selector-pseudo,
+.hljs-tag {
+  color: #116329;
+}
+.hljs-deletion {
+  color: #82071e;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+
+.dv-dark .hljs-comment,
+.dv-dark .hljs-quote {
+  color: #8b949e;
+}
+.dv-dark .hljs-keyword,
+.dv-dark .hljs-selector-tag,
+.dv-dark .hljs-doctag,
+.dv-dark .hljs-meta .hljs-keyword,
+.dv-dark .hljs-template-tag,
+.dv-dark .hljs-type {
+  color: #ff7b72;
+}
+.dv-dark .hljs-string,
+.dv-dark .hljs-regexp,
+.dv-dark .hljs-meta .hljs-string,
+.dv-dark .hljs-addition {
+  color: #a5d6ff;
+}
+.dv-dark .hljs-number,
+.dv-dark .hljs-literal,
+.dv-dark .hljs-attr,
+.dv-dark .hljs-attribute,
+.dv-dark .hljs-variable,
+.dv-dark .hljs-template-variable,
+.dv-dark .hljs-selector-attr,
+.dv-dark .hljs-selector-class,
+.dv-dark .hljs-selector-id,
+.dv-dark .hljs-operator,
+.dv-dark .hljs-meta {
+  color: #79c0ff;
+}
+.dv-dark .hljs-title,
+.dv-dark .hljs-title.class_,
+.dv-dark .hljs-title.function_,
+.dv-dark .hljs-section {
+  color: #d2a8ff;
+}
+.dv-dark .hljs-built_in,
+.dv-dark .hljs-symbol,
+.dv-dark .hljs-bullet {
+  color: #ffa657;
+}
+.dv-dark .hljs-name,
+.dv-dark .hljs-selector-pseudo,
+.dv-dark .hljs-tag {
+  color: #7ee787;
+}
+.dv-dark .hljs-deletion {
+  color: #ffa198;
+}
+
+/* Paper keeps code warm and low-contrast. */
+body[data-theme='paper'] .hljs-keyword,
+body[data-theme='paper'] .hljs-selector-tag,
+body[data-theme='paper'] .hljs-type {
+  color: #a0461f;
+}
+body[data-theme='paper'] .hljs-string {
+  color: #4f6b2a;
+}
+body[data-theme='paper'].dv-dark .hljs-keyword,
+body[data-theme='paper'].dv-dark .hljs-selector-tag,
+body[data-theme='paper'].dv-dark .hljs-type {
+  color: #e39a6a;
+}
+body[data-theme='paper'].dv-dark .hljs-string {
+  color: #b5c98a;
+}

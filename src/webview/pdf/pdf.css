@@ -1,0 +1,101 @@
+.pdf-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, #808080);
+}
+
+.pdf-container {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+.pdf-stage > .dv-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pdf-find {
+  width: 170px;
+}
+
+.pdf-find-icon {
+  display: flex;
+}
+
+.pdfViewer .page {
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+
+/* ------------------------------------------------------------------ thumbnails */
+
+.pdf-thumbs {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 0;
+}
+
+.pdf-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  font: inherit;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.pdf-thumb-page {
+  display: block;
+  min-width: 120px;
+  min-height: 160px;
+  background: #ffffff;
+  border: 1px solid var(--dv-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.pdf-thumb-page canvas {
+  display: block;
+}
+
+.pdf-thumb-num {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdf-thumb:hover .pdf-thumb-page {
+  border-color: var(--vscode-focusBorder);
+}
+
+.pdf-thumb-active .pdf-thumb-page {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.pdf-thumb-active .pdf-thumb-num {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.pdf-thumb:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.dv-side:has(.pdf-thumbs) {
+  width: 200px;
+}

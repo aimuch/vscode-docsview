@@ -1,0 +1,19 @@
+{
+  "displayName": "DocsView 文档预览",
+  "description": "在 VS Code 中预览 Markdown、Excel、Word、CSV、PDF、PPT 文件，CSV 与 xlsx 单元格可直接编辑。不依赖任何其他插件。",
+  "editor.markdown": "DocsView Markdown 预览",
+  "editor.csv": "DocsView 表格（CSV/TSV）",
+  "editor.excel": "DocsView 电子表格",
+  "editor.word": "DocsView Word 预览",
+  "editor.pdf": "DocsView PDF 预览",
+  "editor.pptx": "DocsView 幻灯片预览",
+  "command.showPreview": "DocsView：打开预览",
+  "command.showPreviewToSide": "DocsView：在侧边打开预览",
+  "command.showSource": "DocsView：显示源文件",
+  "config.markdown.scrollSync": "在 Markdown 编辑器与预览之间同步滚动。",
+  "config.csv.delimiter": "CSV 文件使用的分隔符。\"auto\" 表示根据文件内容自动识别。",
+  "config.appearance.theme": "Markdown 与表格视图的预览主题。\"editor\" 表示使用 VS Code 当前配色。",
+  "config.appearance.colorScheme": "DocsView 预览的明暗外观。\"auto\" 表示跟随 VS Code 主题。",
+  "config.appearance.invertPages": "暗色外观下，将 PDF 与 Word 页面反色显示。",
+  "config.language": "DocsView 界面语言。\"auto\" 表示跟随 VS Code 的显示语言。"
+}

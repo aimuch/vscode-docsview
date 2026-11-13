@@ -1,0 +1,19 @@
+{
+  "displayName": "DocsView",
+  "description": "Preview Markdown, Excel, Word, CSV, PDF and PowerPoint files inside VS Code. Edit CSV and xlsx cells in place. No other extensions required.",
+  "editor.markdown": "DocsView Markdown Preview",
+  "editor.csv": "DocsView Table (CSV/TSV)",
+  "editor.excel": "DocsView Spreadsheet",
+  "editor.word": "DocsView Word Preview",
+  "editor.pdf": "DocsView PDF Preview",
+  "editor.pptx": "DocsView Slides Preview",
+  "command.showPreview": "DocsView: Open Preview",
+  "command.showPreviewToSide": "DocsView: Open Preview to the Side",
+  "command.showSource": "DocsView: Show Source",
+  "config.markdown.scrollSync": "Synchronize scrolling between the Markdown editor and its preview.",
+  "config.csv.delimiter": "Delimiter used for CSV files. \"auto\" detects it from the file content.",
+  "config.appearance.theme": "Preview theme for Markdown and table views. \"editor\" uses the colours of the current VS Code theme.",
+  "config.appearance.colorScheme": "Light or dark appearance of DocsView editors. \"auto\" follows the VS Code theme.",
+  "config.appearance.invertPages": "In a dark appearance, show PDF and Word pages with inverted colours.",
+  "config.language": "Language of the DocsView interface. \"auto\" follows the VS Code display language."
+}
