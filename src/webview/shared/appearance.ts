@@ -27,6 +27,12 @@ export function effectiveDark(): boolean {
   return current.scheme === 'auto' ? editorIsDark() : current.scheme === 'dark';
 }
 
+function setClass(name: string, on: boolean): void {
+  if (document.body.classList.contains(name) !== on) {
+    document.body.classList.toggle(name, on);
+  }
+}
+
 function apply(): void {
   const body = document.body;
   if (current.scheme === 'auto') {
@@ -36,9 +42,10 @@ function apply(): void {
   }
   body.dataset.theme = current.theme;
   const dark = effectiveDark();
-  // Toggling to the same value does not mutate the attribute, so this cannot loop with the observer below.
-  body.classList.toggle('dv-dark', dark);
-  body.classList.toggle('dv-invert-pages', dark && current.invertPages);
+  // Touch the class attribute only when something changes: the observer below watches it,
+  // and an unconditional write would feed back into it in engines that report no-op writes.
+  setClass('dv-dark', dark);
+  setClass('dv-invert-pages', dark && current.invertPages);
   body.style.colorScheme = dark ? 'dark' : 'light';
   updateControls();
 }

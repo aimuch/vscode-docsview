@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
-import { configureWebview, debounce, handleCommonMessage, parentUri, t } from '../webviewHtml';
+import { configureWebview, debounce, handleCommonMessage, parentUri, t, onWebviewMessage } from '../webviewHtml';
 import { ExcelSession } from './excelSession';
 
 function baseName(uri: vscode.Uri): string {
@@ -76,7 +76,7 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
     };
 
     const disposables: vscode.Disposable[] = [
-      panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+      onWebviewMessage(panel.webview, (message: WebviewMessage) => {
         const session = document.session;
         handleCommonMessage(panel.webview, document.uri, 'sheet', message);
         switch (message.type) {

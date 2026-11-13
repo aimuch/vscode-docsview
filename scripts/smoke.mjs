@@ -2,7 +2,7 @@
 // extension from source and runs test/smoke inside it.  Usage: npm run smoke
 // Set VSCODE_BIN to the Electron binary if VS Code is not in the default location.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +50,13 @@ if (existsSync(result)) {
   }
 } else {
   console.error('No result file was written: the extension host did not run the tests.');
+}
+// Keep the xlsx saved by the editing check, for opening in a spreadsheet app.
+const savedXlsx = join(profile, 'work', 'report.xlsx');
+if (existsSync(savedXlsx)) {
+  mkdirSync(join(root, 'out'), { recursive: true });
+  copyFileSync(savedXlsx, join(root, 'out', 'smoke-saved-report.xlsx'));
+  console.log('Saved workbook copied to out/smoke-saved-report.xlsx');
 }
 rmSync(profile, { recursive: true, force: true });
 process.exit(run.status ?? 1);

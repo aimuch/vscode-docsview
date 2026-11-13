@@ -4,7 +4,7 @@ import { CsvEditorProvider } from './host/csv/provider';
 import { ExcelEditorProvider } from './host/excel/provider';
 import { MarkdownPreviewProvider } from './host/markdown/provider';
 import { onViewerStatus } from './host/status';
-import { watchViews } from './host/webviewHtml';
+import { dispatchToView, watchViews } from './host/webviewHtml';
 
 /** Text formats: opened as text by default, with our preview available on demand. */
 function previewViewType(uri: vscode.Uri): string | undefined {
@@ -27,7 +27,10 @@ function activeResource(): vscode.Uri | undefined {
   return vscode.window.activeTextEditor?.document.uri;
 }
 
-export function activate(context: vscode.ExtensionContext): { onViewerStatus: typeof onViewerStatus } {
+export function activate(context: vscode.ExtensionContext): {
+  onViewerStatus: typeof onViewerStatus;
+  testing: { dispatch: typeof dispatchToView };
+} {
   // Keep the webview alive while its tab is in the background: re-parsing a large
   // workbook or PDF on every tab switch would be far more expensive.
   const webviewOptions = { retainContextWhenHidden: true };
@@ -73,7 +76,7 @@ export function activate(context: vscode.ExtensionContext): { onViewerStatus: ty
   );
 
   // Lets tests (and other tooling) observe when a document has actually rendered.
-  return { onViewerStatus };
+  return { onViewerStatus, testing: { dispatch: dispatchToView } };
 }
 
 export function deactivate(): void {

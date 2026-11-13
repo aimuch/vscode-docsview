@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
-import { configureWebview, debounce, handleCommonMessage, parentUri } from '../webviewHtml';
+import { configureWebview, debounce, handleCommonMessage, parentUri, onWebviewMessage } from '../webviewHtml';
 import { MarkdownRenderer } from './renderer';
 
 export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider {
@@ -39,7 +39,7 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
           post({ type: 'scrollTo', line: first.start.line });
         }
       }),
-      panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+      onWebviewMessage(panel.webview, (message: WebviewMessage) => {
         handleCommonMessage(panel.webview, document.uri, 'markdown', message);
         switch (message.type) {
           case 'ready':

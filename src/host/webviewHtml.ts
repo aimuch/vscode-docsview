@@ -53,6 +53,7 @@ export function t(key: StringKey, ...args: (string | number)[]): string {
 // ---------------------------------------------------------------- open views
 
 interface View {
+  kind: ViewerKind;
   webview: vscode.Webview;
   uri: vscode.Uri | undefined;
   /** The document can also be shown in a text editor (Markdown, CSV). */
@@ -105,6 +106,7 @@ export function configureWebview(
   webview.options = { enableScripts: true, localResourceRoots: roots };
 
   const view: View = {
+    kind,
     webview,
     uri: opts.documentUri,
     tracksSource: opts.tracksSource ?? false,
@@ -148,6 +150,45 @@ export function watchViews(): vscode.Disposable[] {
     }),
     vscode.window.tabGroups.onDidChangeTabs(() => views.forEach(postViewState)),
   ];
+}
+
+const handlers = new WeakMap<vscode.Webview, Set<(message: WebviewMessage) => void>>();
+
+/**
+ * Subscribes to a webview's messages. Providers use this instead of
+ * webview.onDidReceiveMessage so tests can deliver the same messages (see dispatchToView).
+ */
+export function onWebviewMessage(
+  webview: vscode.Webview,
+  handler: (message: WebviewMessage) => void,
+): vscode.Disposable {
+  let set = handlers.get(webview);
+  if (!set) {
+    handlers.set(webview, (set = new Set()));
+  }
+  set.add(handler);
+  const subscription = webview.onDidReceiveMessage(handler);
+  return {
+    dispose() {
+      subscription.dispose();
+      set.delete(handler);
+    },
+  };
+}
+
+/**
+ * Test hook: delivers a message as if the open view of `uri` had posted it (a toolbar
+ * click, a cell edit…). Returns the number of views that received it.
+ */
+export function dispatchToView(uri: vscode.Uri, message: WebviewMessage, kind?: ViewerKind): number {
+  let count = 0;
+  for (const view of views) {
+    if (view.uri?.toString() === uri.toString() && (!kind || view.kind === kind)) {
+      handlers.get(view.webview)?.forEach((handler) => handler(message));
+      count++;
+    }
+  }
+  return count;
 }
 
 /**

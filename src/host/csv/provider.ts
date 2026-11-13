@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
-import { configureWebview, debounce, handleCommonMessage, t } from '../webviewHtml';
+import { configureWebview, debounce, handleCommonMessage, t, onWebviewMessage } from '../webviewHtml';
 import type { TextEdit } from './csvParser';
 import { CsvSession } from './csvSession';
 
@@ -62,7 +62,7 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
           scheduleSync();
         }
       }),
-      panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+      onWebviewMessage(panel.webview, (message: WebviewMessage) => {
         handleCommonMessage(panel.webview, document.uri, 'sheet', message);
         switch (message.type) {
           case 'ready': {

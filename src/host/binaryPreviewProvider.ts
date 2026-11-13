@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { HostMessage, ViewerKind, WebviewMessage } from '../common/protocol';
 import { extractDocText } from './doc/docExtractor';
-import { configureWebview, debounce, handleCommonMessage, parentUri, t } from './webviewHtml';
+import { configureWebview, debounce, handleCommonMessage, parentUri, t, onWebviewMessage } from './webviewHtml';
 
 function baseName(uri: vscode.Uri): string {
   return uri.path.slice(uri.path.lastIndexOf('/') + 1);
@@ -58,7 +58,7 @@ export class BinaryPreviewProvider implements vscode.CustomReadonlyEditorProvide
 
     const disposables: vscode.Disposable[] = [];
     disposables.push(
-      panel.webview.onDidReceiveMessage((message: WebviewMessage) => {
+      onWebviewMessage(panel.webview, (message: WebviewMessage) => {
         handleCommonMessage(panel.webview, uri, kind, message);
         if (message.type === 'ready') {
           void send();

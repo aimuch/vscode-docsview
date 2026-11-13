@@ -1,20 +1,10 @@
 // Runs inside a real VS Code extension host (see scripts/smoke.mjs). Opens every sample
 // with its DocsView editor and waits for the webview to report that it rendered, which
 // exercises what unit tests cannot: contribution points, CSP, asset URLs and workers.
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import * as vscode from 'vscode';
-
-interface ViewerStatus {
-  uri: vscode.Uri;
-  kind: string;
-  ok: boolean;
-  detail?: string;
-}
-
-interface Api {
-  onViewerStatus: vscode.Event<ViewerStatus>;
-}
+import { runEditingChecks, type Api, type ViewerStatus } from './editing';
 
 const CASES: [file: string, viewType: string][] = [
   ['demo.md', 'docsview.markdown'],
@@ -78,6 +68,11 @@ export async function run(): Promise<void> {
         results.push({ file, viewType, ok: false, detail: err instanceof Error ? err.message : String(err) });
       }
     }
+
+    // Toolbar actions and editing round trips, on copies of the samples.
+    const work = join(dirname(resultFile), 'work');
+    mkdirSync(work, { recursive: true });
+    await runEditingChecks(api, samples, work, results);
 
     // Changing the UI language setting must reload open previews (they re-report a render).
     {
