@@ -1,26 +1,42 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
 import { configureWebview, debounce, handleCommonMessage, parentUri, onWebviewMessage, t } from '../webviewHtml';
-import { exportMarkdown } from './export';
-import { MarkdownRenderer } from './renderer';
+import type { MarkdownRenderer } from './renderer';
+
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
 
 export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider {
   static readonly viewType = 'docsview.markdown';
 
-  private renderer: MarkdownRenderer | undefined;
+  private rendererPromise: Promise<MarkdownRenderer> | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
+  private getRenderer(): Promise<MarkdownRenderer> {
+    this.rendererPromise ??= import('./renderer').then((m) => new m.MarkdownRenderer());
+    return this.rendererPromise;
+  }
+
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): void {
-    const renderer = (this.renderer ??= new MarkdownRenderer());
     const post = (message: HostMessage) => void panel.webview.postMessage(message);
     const key = document.uri.toString();
+    let disposed = false;
 
-    const update = () => {
+    const update = async () => {
+      const renderer = await this.getRenderer();
+      if (disposed) {
+        return;
+      }
       const source = document.getText();
       post({ type: 'render', ...renderer.render(source), source });
     };
-    const scheduleUpdate = debounce(update, 120);
+    const scheduleUpdate = debounce(() => void update(), 120);
 
     // Each side ignores scroll events for a moment after it was scrolled programmatically,
     // otherwise the two views chase each other.
@@ -47,15 +63,15 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
         handleCommonMessage(panel.webview, document.uri, 'markdown', message);
         switch (message.type) {
           case 'ready':
-            update();
+            void update();
             break;
           case 'openLink':
             void this.openLink(document, message.href);
             break;
           case 'export':
-            void exportMarkdown(this.context.extensionUri, document.uri, message).catch((err: unknown) =>
-              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
-            );
+            void import('./export')
+              .then((m) => m.exportMarkdown(this.context.extensionUri, document.uri, message))
+              .catch((err: unknown) => vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)));
             break;
           case 'editBlock':
             void this.editBlock(document, message.start, message.end, message.text, message.expected);
@@ -76,7 +92,10 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
         }
       }),
     ];
-    panel.onDidDispose(() => disposables.forEach((d) => d.dispose()));
+    panel.onDidDispose(() => {
+      disposed = true;
+      disposables.forEach((d) => d.dispose());
+    });
 
     configureWebview(panel, this.context.extensionUri, 'markdown', {
       documentUri: document.uri,
@@ -106,12 +125,23 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
       void vscode.window.showWarningMessage(t('editOutdated'));
       return;
     }
-    // Replace the lines' text only (not the line break after the last one). `text` carries the
-    // block's own trailing blank lines, so the separation from the next block is kept.
-    const range = new vscode.Range(start, 0, lastLine, document.lineAt(lastLine).text.length);
-    const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
     const edit = new vscode.WorkspaceEdit();
-    edit.replace(document.uri, range, text.replace(/\r?\n/g, eol));
+    if (text === '') {
+      // Deleting the entire block: remove its line break as well so no blank gap remains.
+      const deleteRange =
+        lastLine + 1 < lineCount
+          ? new vscode.Range(start, 0, lastLine + 1, 0)
+          : start > 0
+            ? new vscode.Range(start - 1, document.lineAt(start - 1).text.length, lastLine, document.lineAt(lastLine).text.length)
+            : new vscode.Range(0, 0, lastLine, document.lineAt(lastLine).text.length);
+      edit.delete(document.uri, deleteRange);
+    } else {
+      // Replace the lines' text only (not the line break after the last one). `text` carries the
+      // block's own trailing blank lines, so the separation from the next block is kept.
+      const range = new vscode.Range(start, 0, lastLine, document.lineAt(lastLine).text.length);
+      const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
+      edit.replace(document.uri, range, text.replace(/\r?\n/g, eol));
+    }
     await vscode.workspace.applyEdit(edit);
   }
 
@@ -122,23 +152,42 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
       }
       return;
     }
-    const pathPart = href.split('#')[0].split('?')[0];
+    const hashAt = href.indexOf('#');
+    const rawFragment = hashAt >= 0 ? href.slice(hashAt + 1) : '';
+    const pathPart = (hashAt >= 0 ? href.slice(0, hashAt) : href).split('?')[0];
     if (!pathPart) {
       return;
     }
-    let decoded = pathPart;
-    try {
-      decoded = decodeURIComponent(pathPart);
-    } catch {
-      // Keep the raw path when it is not valid percent-encoding.
-    }
+    const decoded = safeDecode(pathPart);
+    const fragment = rawFragment ? safeDecode(rawFragment) : '';
     const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri ?? parentUri(document.uri);
     const target = decoded.startsWith('/')
       ? vscode.Uri.joinPath(root, decoded)
       : vscode.Uri.joinPath(parentUri(document.uri), decoded);
     try {
       await vscode.workspace.fs.stat(target);
-      await vscode.commands.executeCommand('vscode.open', target);
+      const lineMatch = /^L(\d+)(?:-L?(\d+))?$/i.exec(fragment);
+      if (lineMatch) {
+        const startLine = Math.max(0, Number(lineMatch[1]) - 1);
+        const endLine = lineMatch[2] ? Math.max(startLine, Number(lineMatch[2]) - 1) : startLine;
+        await vscode.commands.executeCommand('vscode.open', target, {
+          selection: new vscode.Range(startLine, 0, endLine, 0),
+        });
+        return;
+      }
+      if (fragment && /\.(md|markdown)$/i.test(target.path)) {
+        const renderer = await this.getRenderer();
+        const targetDoc = await vscode.workspace.openTextDocument(target);
+        const { toc } = renderer.render(targetDoc.getText());
+        const hit = toc.find((entry) => entry.id === fragment || entry.id === fragment.toLowerCase());
+        if (hit) {
+          await vscode.commands.executeCommand('vscode.open', target.with({ fragment }), {
+            selection: new vscode.Range(hit.line, 0, hit.line, 0),
+          });
+          return;
+        }
+      }
+      await vscode.commands.executeCommand('vscode.open', fragment ? target.with({ fragment }) : target);
     } catch {
       void vscode.window.showWarningMessage(`DocsView: ${decoded}`);
     }

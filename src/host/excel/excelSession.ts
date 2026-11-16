@@ -58,7 +58,7 @@ export class ExcelSession {
 
   get info(): WorkbookInfo {
     return {
-      sheets: this.workbook.sheets.map((s) => ({ name: s.model.name })),
+      sheets: this.workbook.sheets.map((s) => ({ name: s.name })),
       editable: this.workbook.editable,
       canStructure: false,
       noticeKey: this.workbook.editable ? 'xlsxNotice' : 'xlsReadonly',
@@ -77,11 +77,12 @@ export class ExcelSession {
     const style = typeof previous === 'object' && previous ? previous.s : undefined;
     const input = parseCellInput(text);
     const out: CellObject = { v: '' };
+    const loaded = this.workbook.sheets[index];
     switch (input.kind) {
       case 'empty':
         break;
       case 'number': {
-        out.v = formatNumber(input.value, this.workbook.sheets[index].numFmts.get(`${r},${c}`));
+        out.v = formatNumber(input.value, loaded.numFmts.get(`${r},${c}`), loaded.date1904);
         out.n = true;
         if (out.v !== text) {
           out.raw = text;
@@ -189,7 +190,7 @@ export class ExcelSession {
         const [r, c] = key.split(',').map(Number);
         list.push({ r, c, text });
       }
-      edits.set(this.workbook.sheets[index].model.name, list);
+      edits.set(this.workbook.sheets[index].name, list);
     });
     return patchXlsx(this.baseBytes, edits);
   }

@@ -48,6 +48,8 @@ export interface GridOptions {
   onReadonlyCell?(): void;
   /** The user tried to edit while editing is switched off (see setEditable). */
   onBlockedEdit?(): void;
+  /** Paste had to truncate rows because growing rows is temporarily blocked (e.g. sorted/filtered view). */
+  onPasteTruncated?(): void;
   onColumnResize?(col: number, width: number): void;
   /** Adds a menu button to column headers (sort / filter). */
   onColumnMenu?(col: number, anchor: DOMRect): void;
@@ -116,6 +118,10 @@ export class Grid {
   private headerW = 44;
   private frozenRows = 0;
   private frozenCols = 0;
+  /** Merge lookup by anchor "r,c" and sorted by top row for fast viewport/hit queries. */
+  private mergeAnchors = new Map<string, MergeRange>();
+  private sortedMerges: MergeRange[] = [];
+  private maxMergeRows = 1;
 
   private pool = new Map<string, CellEl>();
   private frame = 0;
@@ -158,11 +164,18 @@ export class Grid {
     new ResizeObserver(() => this.schedule()).observe(this.viewport);
     this.viewport.addEventListener('mousedown', (e) => this.onMouseDown(e));
     this.viewport.addEventListener('mousemove', (e) => {
-      const overEdge =
-        this.source.colCount > 0 &&
-        this.hitTest(e.clientX, e.clientY).area === 'col' &&
-        this.resizeTarget(e.clientX) !== undefined;
-      this.root.classList.toggle('grid-edge', overEdge);
+      let overEdge = false;
+      if (this.source.colCount > 0) {
+        const rect = this.viewport.getBoundingClientRect();
+        const vx = e.clientX - rect.left;
+        const vy = e.clientY - rect.top;
+        if (vy >= 0 && vy < HEADER_HEIGHT && vx >= this.headerW && vx < this.viewport.clientWidth) {
+          overEdge = this.resizeTargetFromVx(vx) !== undefined;
+        }
+      }
+      if (this.root.classList.contains('grid-edge') !== overEdge) {
+        this.root.classList.toggle('grid-edge', overEdge);
+      }
     });
     this.viewport.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     this.viewport.addEventListener('keydown', (e) => this.onKeyDown(e));
@@ -179,6 +192,7 @@ export class Grid {
     this.frozenRows = clamp(source.frozenRows ?? 0, 0, Math.max(0, source.rowCount - 1));
     this.frozenCols = clamp(source.frozenCols ?? 0, 0, Math.max(0, source.colCount - 1));
     this.root.classList.toggle('grid-light', source.palette === 'light');
+    this.buildMergeIndex(source.merges);
     this.measure();
     if (!keepView) {
       this.active = { r: 0, c: 0 };
@@ -223,6 +237,44 @@ export class Grid {
 
   get editable(): boolean {
     return this.opts.editable;
+  }
+
+  /** Enables or disables growing rows on paste (disabled while a sort/filter view is active). */
+  setCanGrowRows(on: boolean): void {
+    this.opts.canGrowRows = on;
+  }
+
+  private buildMergeIndex(merges: MergeRange[] | undefined): void {
+    this.mergeAnchors.clear();
+    if (!merges?.length) {
+      this.sortedMerges = [];
+      this.maxMergeRows = 1;
+      return;
+    }
+    let maxRs = 1;
+    for (const m of merges) {
+      this.mergeAnchors.set(`${m.r},${m.c}`, m);
+      if (m.rs > maxRs) {
+        maxRs = m.rs;
+      }
+    }
+    this.sortedMerges = [...merges].sort((a, b) => a.r - b.r || a.c - b.c);
+    this.maxMergeRows = maxRs;
+  }
+
+  /** First index in `sortedMerges` whose top row `m.r >= minRow`. */
+  private lowerBoundMerge(minRow: number): number {
+    let lo = 0;
+    let hi = this.sortedMerges.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.sortedMerges[mid].r < minRow) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
   }
 
   /** Right-to-left cell text. */
@@ -350,18 +402,25 @@ export class Grid {
     // Cells hidden under a merge, and the merge anchors that must be drawn for this region.
     const covered = new Set<number>();
     const colCount = this.source.colCount;
-    for (const m of this.source.merges ?? []) {
-      const mr1 = m.r + m.rs - 1;
-      const mc1 = m.c + m.cs - 1;
-      if (mr1 < r0 || m.r > r1 || mc1 < c0 || m.c > c1) {
-        continue;
-      }
-      for (let r = Math.max(m.r, r0); r <= Math.min(mr1, r1); r++) {
-        for (let c = Math.max(m.c, c0); c <= Math.min(mc1, c1); c++) {
-          covered.add(r * colCount + c);
+    const merges = this.sortedMerges;
+    if (merges.length) {
+      for (let idx = this.lowerBoundMerge(r0 - this.maxMergeRows + 1); idx < merges.length; idx++) {
+        const m = merges[idx];
+        if (m.r > r1) {
+          break;
         }
+        const mr1 = m.r + m.rs - 1;
+        const mc1 = m.c + m.cs - 1;
+        if (mr1 < r0 || mc1 < c0 || m.c > c1) {
+          continue;
+        }
+        for (let r = Math.max(m.r, r0); r <= Math.min(mr1, r1); r++) {
+          for (let c = Math.max(m.c, c0); c <= Math.min(mc1, c1); c++) {
+            covered.add(r * colCount + c);
+          }
+        }
+        this.cell(layer, m.r, m.c, m, used);
       }
-      this.cell(layer, m.r, m.c, m, used);
     }
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
@@ -543,9 +602,16 @@ export class Grid {
 
   /** If the cell lies under a merge, returns the merge's anchor cell. */
   private anchorOf(r: number, c: number): { r: number; c: number } {
-    for (const m of this.source.merges ?? []) {
-      if (r >= m.r && r < m.r + m.rs && c >= m.c && c < m.c + m.cs) {
-        return { r: m.r, c: m.c };
+    const merges = this.sortedMerges;
+    if (merges.length) {
+      for (let idx = this.lowerBoundMerge(r - this.maxMergeRows + 1); idx < merges.length; idx++) {
+        const m = merges[idx];
+        if (m.r > r) {
+          break;
+        }
+        if (r < m.r + m.rs && c >= m.c && c < m.c + m.cs) {
+          return { r: m.r, c: m.c };
+        }
       }
     }
     return { r, c };
@@ -664,10 +730,8 @@ export class Grid {
 
   // ------------------------------------------------------------------ column resize
 
-  /** Column whose right edge is under the pointer, if any. */
-  private resizeTarget(clientX: number): number | undefined {
-    const rect = this.viewport.getBoundingClientRect();
-    const x = clientX - rect.left - this.headerW;
+  private resizeTargetFromVx(vx: number): number | undefined {
+    const x = vx - this.headerW;
     const frozenW = this.colX[this.frozenCols];
     const cx = x < frozenW ? x : x + this.viewport.scrollLeft;
     const c = locate(this.colX, this.source.colCount, Math.max(0, cx));
@@ -680,15 +744,58 @@ export class Grid {
     return undefined;
   }
 
+  /** Column whose right edge is under the pointer, if any. */
+  private resizeTarget(clientX: number): number | undefined {
+    const rect = this.viewport.getBoundingClientRect();
+    return this.resizeTargetFromVx(clientX - rect.left);
+  }
+
+  /** Updates horizontal positions/widths of already mounted cells without destroying DOM nodes. */
+  private repositionPool(): void {
+    const colCount = this.source.colCount;
+    for (const node of this.pool.values()) {
+      if (node._kind === 'cell') {
+        const cs = node._cs ?? 1;
+        node.style.left = `${this.headerW + this.colX[node._c]}px`;
+        node.style.width = `${this.colX[Math.min(colCount, node._c + cs)] - this.colX[node._c]}px`;
+      } else if (node._kind === 'col') {
+        node.style.left = `${this.headerW + this.colX[node._c]}px`;
+        node.style.width = `${this.colX[node._c + 1] - this.colX[node._c]}px`;
+      }
+    }
+    if (this.editor && this.editing) {
+      const { r, c } = this.editing;
+      const merge = this.mergeAnchors.get(`${r},${c}`);
+      this.editor.style.left = `${this.headerW + this.colX[c]}px`;
+      this.editor.style.width = `${Math.max(60, this.colX[Math.min(colCount, c + (merge?.cs ?? 1))] - this.colX[c])}px`;
+    }
+  }
+
   private startResize(col: number, startX: number): void {
     const startWidth = this.source.colWidths[col] ?? 80;
+    let resizeFrame = 0;
     this.root.classList.add('grid-resizing');
-    const move = (ev: MouseEvent) => {
-      this.source.colWidths[col] = Math.max(MIN_COL_WIDTH, startWidth + ev.clientX - startX);
+    const flush = () => {
+      resizeFrame = 0;
       this.measure();
-      this.invalidate();
+      this.repositionPool();
+      this.render();
+    };
+    const move = (ev: MouseEvent) => {
+      const nextWidth = Math.max(MIN_COL_WIDTH, startWidth + ev.clientX - startX);
+      if (this.source.colWidths[col] === nextWidth) {
+        return;
+      }
+      this.source.colWidths[col] = nextWidth;
+      if (!resizeFrame) {
+        resizeFrame = requestAnimationFrame(flush);
+      }
     };
     const up = () => {
+      if (resizeFrame) {
+        cancelAnimationFrame(resizeFrame);
+        flush();
+      }
       this.root.classList.remove('grid-resizing');
       window.removeEventListener('mousemove', move);
       window.removeEventListener('mouseup', up);
@@ -775,13 +882,11 @@ export class Grid {
 
   /** Next row below, skipping the rest of a merged cell. */
   private below(r: number, c: number): number {
-    const m = (this.source.merges ?? []).find((x) => x.r === r && x.c === c);
-    return r + (m?.rs ?? 1);
+    return r + (this.mergeAnchors.get(`${r},${c}`)?.rs ?? 1);
   }
 
   private rightOf(r: number, c: number): number {
-    const m = (this.source.merges ?? []).find((x) => x.r === r && x.c === c);
-    return c + (m?.cs ?? 1);
+    return c + (this.mergeAnchors.get(`${r},${c}`)?.cs ?? 1);
   }
 
   private clearSelection(): void {
@@ -838,9 +943,11 @@ export class Grid {
     const rows = parseClipboard(text);
     const sel = this.selection;
     const changes: CellChange[] = [];
+    let truncatedRows = false;
     rows.forEach((cells, i) => {
       const r = sel.r0 + i;
       if (r >= this.source.rowCount && !this.opts.canGrowRows) {
+        truncatedRows = true;
         return;
       }
       cells.forEach((value, j) => {
@@ -859,6 +966,9 @@ export class Grid {
     });
     if (changes.length) {
       this.opts.onEdit(changes);
+    }
+    if (truncatedRows) {
+      this.opts.onPasteTruncated?.();
     }
   }
 
@@ -894,7 +1004,7 @@ export class Grid {
       return;
     }
     this.reveal(r, c);
-    const merge = (this.source.merges ?? []).find((m) => m.r === r && m.c === c);
+    const merge = this.mergeAnchors.get(`${r},${c}`);
     // A textarea (not <input>) so multi-line values survive being edited.
     const input = document.createElement('textarea');
     input.className = 'grid-editor';

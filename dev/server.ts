@@ -6,7 +6,16 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { basename, dirname, extname, join, normalize, relative, resolve } from 'node:path';
-import { DEFAULT_APPEARANCE, type Appearance, type HostMessage, type ViewerKind, type WebviewMessage } from '../src/common/protocol';
+import {
+  DEFAULT_APPEARANCE,
+  DEFAULT_TOOLBAR,
+  normalizeToolbarConfig,
+  type Appearance,
+  type HostMessage,
+  type ToolbarConfig,
+  type ViewerKind,
+  type WebviewMessage,
+} from '../src/common/protocol';
 import { renderShell } from '../src/common/shell';
 import type { Lang } from '../src/common/strings';
 import { applyEdits } from '../src/host/csv/csvParser';
@@ -79,6 +88,7 @@ interface Session {
 const sessions = new Map<string, Session>();
 /** Stand-in for the docsview.* settings, shared by every open view like in VS Code. */
 let appearance: Appearance = { ...DEFAULT_APPEARANCE };
+let toolbar: ToolbarConfig = { left: [...DEFAULT_TOOLBAR.left], right: [...DEFAULT_TOOLBAR.right] };
 /** Stand-in for workbench.editorAssociations: extensions DocsView opens by default. */
 const defaults = new Set<string>();
 
@@ -287,7 +297,8 @@ const server = http.createServer(async (req, res) => {
         200,
         MIME['.html'],
         renderShell({
-          config: { kind: kind.kind, assets: '/dist/webview', lang, appearance },
+          config: { kind: kind.kind, assets: '/dist/webview', lang, appearance, toolbar },
+          cspSource: "'self'",
           baseHref: kind.kind === 'markdown' ? `/files/${dir}/` : undefined,
           bodyClass: dark ? 'vscode-dark' : 'vscode-light',
           extraHead: `<link rel="stylesheet" href="/dev/vscode-vars.css"><script src="/dev/mock.js"></script>`,
@@ -332,6 +343,14 @@ const server = http.createServer(async (req, res) => {
         mkdirSync(join(root, 'out'), { recursive: true });
         writeFileSync(join(root, 'out', `dev-export.${message.format}.html`), message.html);
         console.log(`[dev] export ${message.format}: ${message.html.length} chars`);
+        return send(200, MIME['.json'], '[]');
+      }
+      if (message.type === 'setToolbar') {
+        toolbar = normalizeToolbarConfig(message.toolbar);
+        return send(200, MIME['.json'], JSON.stringify([{ type: 'toolbar', toolbar }]));
+      }
+      if (message.type === 'openSettings') {
+        console.log('[dev] openSettings');
         return send(200, MIME['.json'], '[]');
       }
       if (message.type === 'history' || message.type === 'convert') {

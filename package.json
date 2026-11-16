@@ -33,7 +33,9 @@
     "preview"
   ],
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "customEditors": [
       {
@@ -269,6 +271,24 @@
           "type": "boolean",
           "default": false,
           "description": "%config.table.lockEditing%"
+        },
+        "docsview.toolbar": {
+          "type": "object",
+          "default": {
+            "left": [
+              "nav",
+              "view",
+              "pager",
+              "zoom",
+              "cellBar",
+              "find",
+              "edit",
+              "highlight",
+              "structure"
+            ],
+            "right": []
+          },
+          "description": "%config.toolbar%"
         }
       }
     }
@@ -299,7 +319,6 @@
     "fflate": "^0.8.3",
     "happy-dom": "^21.0.4",
     "highlight.js": "^11.12.0",
-    "jszip": "^3.10.1",
     "katex": "^0.19.1",
     "markdown-it": "^15.0.3",
     "markdown-it-footnote": "^4.0.0",

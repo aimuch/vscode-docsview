@@ -1,10 +1,10 @@
-import JSZip from 'jszip';
+import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import { init } from 'pptx-preview';
 import '../shared/base.css';
 import './pptx.css';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
-import { segmented, toolbar } from '../shared/ui';
+import { customToolbar, segmented } from '../shared/ui';
 import { createPager, createZoom } from '../shared/zoom';
 
 const notice = el('div', { class: 'dv-notice', text: t('pptxNotice') });
@@ -40,7 +40,15 @@ const pager = createPager((n) => goTo(n - 1), t('slideN', ''));
 const zoom = createZoom((value) => host.style.setProperty('zoom', String(value)), stage);
 
 app.append(
-  toolbar(sidebar.toggle, view.node, '|', pager.node, '|', ...zoom.nodes),
+  customToolbar({
+    subtitle: 'PPTX',
+    slots: [
+      { id: 'nav', nodes: [sidebar.toggle] },
+      { id: 'view', nodes: [view.node] },
+      { id: 'pager', nodes: [pager.node] },
+      { id: 'zoom', nodes: zoom.nodes },
+    ],
+  }).node,
   notice,
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [stage])]),
 );
@@ -51,21 +59,36 @@ showStatus(host, t('loading'));
  * in the package. PowerPoint ignores those entries, but the preview library aborts on
  * the first missing part and then reports zero slides, so drop them up front.
  */
-async function dropDanglingParts(buffer: ArrayBuffer): Promise<ArrayBuffer> {
-  const zip = await JSZip.loadAsync(buffer);
-  const types = zip.file('[Content_Types].xml');
+function dropDanglingParts(buffer: ArrayBuffer): ArrayBuffer {
+  const bytes = new Uint8Array(buffer);
+  const names = new Set<string>();
+  const extracted = unzipSync(bytes, {
+    filter(file) {
+      names.add(file.name);
+      return file.name === '[Content_Types].xml';
+    },
+  });
+  const types = extracted['[Content_Types].xml'];
   if (!types) {
     return buffer;
   }
-  const xml = await types.async('text');
+  const xml = strFromU8(types);
   const fixed = xml.replace(/<Override\b[^>]*\bPartName="([^"]+)"[^>]*\/>/g, (entry, part: string) =>
-    zip.file(part.replace(/^\//, '')) ? entry : '',
+    names.has(part.replace(/^\/+/, '')) ? entry : '',
   );
   if (fixed === xml) {
     return buffer;
   }
-  zip.file('[Content_Types].xml', fixed);
-  return zip.generateAsync({ type: 'arraybuffer' });
+  const all = unzipSync(bytes);
+  all['[Content_Types].xml'] = strToU8(fixed);
+  const archive: Zippable = {};
+  for (const [name, data] of Object.entries(all)) {
+    archive[name] = /\.(?:png|jpe?g|gif|webp|mp4|m4v|mov|mp3|wav|ogg)$/i.test(name)
+      ? [data, { level: 0 }]
+      : [data, { level: 1 }];
+  }
+  const zipped = zipSync(archive);
+  return zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer;
 }
 
 let previewer: ReturnType<typeof init> | undefined;
@@ -152,7 +175,7 @@ async function load(bytes: Uint8Array) {
     // Slides are laid out at a fixed pixel width; pick one that fits the pane, zoom does the rest.
     const width = Math.max(480, Math.min(1280, stage.clientWidth - 48));
     previewer = init(host, { width, height: Math.round((width * 9) / 16), mode: 'list' });
-    await previewer.preview(await dropDanglingParts(toArrayBuffer(bytes)));
+    await previewer.preview(dropDanglingParts(toArrayBuffer(bytes)));
     if (run !== generation) {
       return;
     }

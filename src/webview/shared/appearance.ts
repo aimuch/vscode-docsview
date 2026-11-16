@@ -1,6 +1,5 @@
-// Theme / light-dark / language preferences: applies them to the page and renders the
-// toolbar controls and the appearance menu. Preferences live in VS Code settings; this
-// module asks the host to change them and re-applies whatever the host sends back.
+// Theme / light-dark / language preferences: applies them to the page and provides
+// both the Settings Drawer sections and the compact pin-to-toolbar widgets.
 import type { Appearance, SchemeSetting, ThemeId } from '../../common/protocol';
 import type { StringKey } from '../../common/strings';
 import { config, el, onMessage, post, t } from './api';
@@ -33,6 +32,12 @@ function setClass(name: string, on: boolean): void {
   }
 }
 
+const updaters = new Set<() => void>();
+
+function updateControls(): void {
+  updaters.forEach((u) => u());
+}
+
 function apply(): void {
   const body = document.body;
   if (current.scheme === 'auto') {
@@ -42,8 +47,6 @@ function apply(): void {
   }
   body.dataset.theme = current.theme;
   const dark = effectiveDark();
-  // Touch the class attribute only when something changes: the observer below watches it,
-  // and an unconditional write would feed back into it in engines that report no-op writes.
   setClass('dv-dark', dark);
   setClass('dv-invert-pages', dark && current.invertPages);
   setClass('dv-highlight', current.highlight);
@@ -51,7 +54,7 @@ function apply(): void {
   updateControls();
 }
 
-function update(patch: Partial<Appearance>): void {
+export function updateAppearance(patch: Partial<Appearance>): void {
   current = { ...current, ...patch };
   apply();
   listeners.forEach((l) => l(current));
@@ -73,9 +76,9 @@ onMessage((message) => {
   }
 });
 
-// ---------------------------------------------------------------- controls
+// ---------------------------------------------------------------- metadata
 
-const THEMES: { id: ThemeId; name: StringKey; desc: StringKey; swatch: [string, string, string] }[] = [
+export const THEMES: { id: ThemeId; name: StringKey; desc: StringKey; swatch: [string, string, string] }[] = [
   { id: 'editor', name: 'themeEditor', desc: 'themeEditorDesc', swatch: ['', '', ''] },
   { id: 'github', name: 'themeGithub', desc: 'themeGithubDesc', swatch: ['#ffffff', '#1f2328', '#0969da'] },
   { id: 'paper', name: 'themePaper', desc: 'themePaperDesc', swatch: ['#f8f4ec', '#2b2622', '#9a5b13'] },
@@ -88,12 +91,6 @@ const SCHEMES: { id: SchemeSetting; icon: keyof typeof icons; label: StringKey }
   { id: 'dark', icon: 'moon', label: 'schemeDark' },
 ];
 
-const updaters: (() => void)[] = [];
-
-function updateControls(): void {
-  updaters.forEach((u) => u());
-}
-
 function segButton(label: string, pressed: () => boolean, onClick: () => void, iconSvg?: string): HTMLButtonElement {
   const b = el('button', { class: iconSvg ? 'dv-seg-btn dv-seg-icon' : 'dv-seg-btn' });
   b.type = 'button';
@@ -105,7 +102,9 @@ function segButton(label: string, pressed: () => boolean, onClick: () => void, i
     b.textContent = label;
   }
   b.addEventListener('click', onClick);
-  updaters.push(() => b.setAttribute('aria-pressed', String(pressed())));
+  const sync = () => b.setAttribute('aria-pressed', String(pressed()));
+  updaters.add(sync);
+  sync();
   return b;
 }
 
@@ -114,21 +113,6 @@ function group(label: string, buttons: HTMLButtonElement[], wide = false): HTMLE
   node.setAttribute('role', 'group');
   node.setAttribute('aria-label', label);
   return node;
-}
-
-function schemeGroup(withText: boolean): HTMLElement {
-  return group(
-    t('scheme'),
-    SCHEMES.map((s) =>
-      segButton(
-        t(s.label),
-        () => current.scheme === s.id,
-        () => update({ scheme: s.id }),
-        withText ? undefined : icons[s.icon],
-      ),
-    ),
-    withText,
-  );
 }
 
 function themeSwatch(theme: (typeof THEMES)[number]): HTMLElement {
@@ -142,21 +126,176 @@ function themeSwatch(theme: (typeof THEMES)[number]): HTMLElement {
   return swatch;
 }
 
-let menu: HTMLElement | undefined;
-let menuButton: HTMLButtonElement | undefined;
+// ---------------------------------------------------------------- compact toolbar widgets (when pinned)
 
-function closeMenu(): void {
-  if (menu) {
-    menu.hidden = true;
-    menuButton?.setAttribute('aria-expanded', 'false');
-  }
+/** Toolbar toggle for row/column highlighting, shared by the sheet and Markdown views. */
+export function highlightToggle(): HTMLButtonElement {
+  const b = el('button', { class: 'dv-btn dv-icon-btn', title: t('highlightRowCol') });
+  b.type = 'button';
+  b.innerHTML = icons.crosshair;
+  b.addEventListener('click', () => updateAppearance({ highlight: !current.highlight }));
+  const sync = () => {
+    b.setAttribute('aria-pressed', String(current.highlight));
+    b.classList.toggle('dv-active', current.highlight);
+  };
+  updaters.add(sync);
+  sync();
+  return b;
 }
 
-function buildMenu(): HTMLElement {
+/** Toolbar toggle that locks cell editing in sheets. */
+export function lockToggle(): HTMLButtonElement {
+  const b = el('button', { class: 'dv-btn dv-icon-btn', title: t('lockEdits') });
+  b.type = 'button';
+  b.innerHTML = icons.lock;
+  b.addEventListener('click', () => updateAppearance({ lockEdits: !current.lockEdits }));
+  const sync = () => {
+    b.setAttribute('aria-pressed', String(current.lockEdits));
+    b.classList.toggle('dv-active', current.lockEdits);
+  };
+  updaters.add(sync);
+  sync();
+  return b;
+}
+
+/** Compact toolbar toggle for inverting paged documents in dark mode. */
+export function invertToggle(): HTMLButtonElement {
+  const b = el('button', { class: 'dv-btn dv-icon-btn', title: t('invertPages') });
+  b.type = 'button';
+  b.innerHTML = icons.invert;
+  b.addEventListener('click', () => updateAppearance({ invertPages: !current.invertPages }));
+  const sync = () => {
+    b.setAttribute('aria-pressed', String(current.invertPages));
+    b.classList.toggle('dv-active', current.invertPages);
+  };
+  updaters.add(sync);
+  sync();
+  return b;
+}
+
+/** Compact segmented light/dark switch for pinning on the top toolbar. */
+export function schemeToolbarGroup(): HTMLElement {
+  return group(
+    t('scheme'),
+    SCHEMES.map((s) =>
+      segButton(
+        t(s.label),
+        () => current.scheme === s.id,
+        () => updateAppearance({ scheme: s.id }),
+        icons[s.icon],
+      ),
+    ),
+  );
+}
+
+/** Compact segmented language switch for pinning on the top toolbar. */
+export function languageToolbarGroup(): HTMLElement {
+  const resolvedLang = () => (current.language === 'auto' ? config.lang : current.language === 'en' ? 'en' : 'zh');
+  const node = group(t('language'), [
+    segButton(
+      '中',
+      () => resolvedLang() === 'zh',
+      () => updateAppearance({ language: 'zh-cn' }),
+    ),
+    segButton(
+      'EN',
+      () => resolvedLang() === 'en',
+      () => updateAppearance({ language: 'en' }),
+    ),
+  ]);
+  node.title = t('language');
+  return node;
+}
+
+/** Compact theme picker dropdown button for pinning on the top toolbar. */
+export function themeToolbarButton(): HTMLElement {
+  const button = el('button', { class: 'dv-btn dv-theme-btn' });
+  button.type = 'button';
+  button.setAttribute('aria-haspopup', 'menu');
+  button.setAttribute('aria-expanded', 'false');
+  const label = el('span', { class: 'dv-theme-label' });
+  const chevron = el('span', { class: 'dv-chevron' });
+  chevron.innerHTML = icons.chevronDown;
+  const swatchHolder = el('span');
+  button.append(swatchHolder, label, chevron);
+
+  const popup = el('div', { class: 'dv-menu dv-more-menu' });
+  popup.setAttribute('role', 'menu');
+  popup.hidden = true;
+
+  const onOutside = (e: MouseEvent) => {
+    if (!popup.contains(e.target as Node) && !button.contains(e.target as Node)) {
+      close();
+    }
+  };
+  const close = () => {
+    if (!popup.hidden) {
+      popup.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('mousedown', onOutside);
+    }
+  };
+
+  for (const theme of THEMES) {
+    const item = el('button', { class: 'dv-menu-item' });
+    item.type = 'button';
+    item.setAttribute('role', 'menuitemradio');
+    const mark = el('span', { class: 'dv-menu-check' });
+    item.append(mark, themeSwatch(theme), el('span', { class: 'dv-menu-label', text: t(theme.name) }));
+    item.addEventListener('click', () => {
+      close();
+      updateAppearance({ theme: theme.id });
+    });
+    const syncItem = () => {
+      const active = current.theme === theme.id;
+      item.setAttribute('aria-checked', String(active));
+      mark.innerHTML = active ? icons.check : '';
+    };
+    updaters.add(syncItem);
+    syncItem();
+    popup.append(item);
+  }
+
+  const syncBtn = () => {
+    const theme = THEMES.find((x) => x.id === current.theme) ?? THEMES[0];
+    swatchHolder.replaceChildren(themeSwatch(theme));
+    label.textContent = t('themeLabel', t(theme.name));
+    button.title = t('slotTheme');
+  };
+  updaters.add(syncBtn);
+  syncBtn();
+
+  button.addEventListener('click', () => {
+    if (!popup.hidden) {
+      close();
+      return;
+    }
+    popup.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    document.addEventListener('mousedown', onOutside);
+    const rect = button.getBoundingClientRect();
+    popup.style.top = `${rect.bottom + 6}px`;
+    popup.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    popup.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
+  });
+  popup.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      close();
+      button.focus();
+    }
+  });
+  document.body.append(popup);
+  return button;
+}
+
+// ---------------------------------------------------------------- Settings Drawer sections
+
+/** Builds the Appearance and Language sections rendered inside the right-hand Settings Drawer. */
+export function buildAppearanceDrawerSections(): HTMLElement[] {
   const themeCards = THEMES.map((theme) => {
     const card = el('button', { class: 'dv-theme-card' });
     card.type = 'button';
-    card.setAttribute('role', 'menuitemradio');
+    card.setAttribute('role', 'radio');
     const preview = el('span', { class: `dv-theme-preview dv-theme-preview-${theme.id}` }, [
       el('span', { class: 'dv-tp-title' }),
       el('span', { class: 'dv-tp-line' }),
@@ -167,145 +306,79 @@ function buildMenu(): HTMLElement {
     check.innerHTML = icons.check;
     name.append(check);
     card.append(preview, name, el('span', { class: 'dv-theme-desc', text: t(theme.desc) }));
-    card.addEventListener('click', () => update({ theme: theme.id }));
-    updaters.push(() => card.setAttribute('aria-checked', String(current.theme === theme.id)));
+    card.addEventListener('click', () => updateAppearance({ theme: theme.id }));
+    const sync = () => card.setAttribute('aria-checked', String(current.theme === theme.id));
+    updaters.add(sync);
+    sync();
     return card;
   });
 
-  const invert = el('input');
-  invert.type = 'checkbox';
-  invert.addEventListener('change', () => update({ invertPages: invert.checked }));
-  updaters.push(() => {
-    invert.checked = current.invertPages;
-  });
-
-  const languageGroup = group(
-    t('language'),
-    (
-      [
-        ['auto', 'langAuto'],
-        ['zh-cn', 'langZh'],
-        ['en', 'langEn'],
-      ] as const
-    ).map(([id, label]) =>
-      segButton(
-        t(label),
-        () => current.language === id,
-        () => update({ language: id }),
+  const schemeRow = el('div', { class: 'dv-st-row' }, [
+    el('span', { class: 'dv-st-label', text: t('scheme') }),
+    group(
+      t('scheme'),
+      SCHEMES.map((s) =>
+        segButton(
+          t(s.label),
+          () => current.scheme === s.id,
+          () => updateAppearance({ scheme: s.id }),
+        ),
       ),
     ),
-    true,
-  );
-
-  const section = (title: StringKey, ...content: HTMLElement[]) =>
-    el('div', { class: 'dv-menu-section' }, [el('div', { class: 'dv-menu-title', text: t(title) }), ...content]);
-
-  const node = el('div', { class: 'dv-menu' }, [
-    section('theme', el('div', { class: 'dv-theme-grid' }, themeCards)),
-    section('scheme', schemeGroup(true), el('label', { class: 'dv-check' }, [invert, el('span', { text: t('invertPages') })])),
-    section('language', languageGroup),
-    el('div', { class: 'dv-menu-hint', text: t('appearanceHint') }),
   ]);
-  node.setAttribute('role', 'menu');
-  node.setAttribute('aria-label', t('appearance'));
-  node.hidden = true;
-  node.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      closeMenu();
-      menuButton?.focus();
-    }
-  });
-  return node;
-}
 
-document.addEventListener('mousedown', (e) => {
-  if (menu && !menu.hidden && !menu.contains(e.target as Node) && !menuButton?.contains(e.target as Node)) {
-    closeMenu();
-  }
-});
+  const invert = el('input');
+  invert.type = 'checkbox';
+  invert.addEventListener('change', () => updateAppearance({ invertPages: invert.checked }));
+  const syncInvert = () => {
+    invert.checked = current.invertPages;
+  };
+  updaters.add(syncInvert);
+  syncInvert();
 
-/** Toolbar toggle for row/column highlighting, shared by the sheet and Markdown views. */
-export function highlightToggle(): HTMLButtonElement {
-  const b = el('button', { class: 'dv-btn dv-icon-btn', title: t('highlightRowCol') });
-  b.type = 'button';
-  b.innerHTML = icons.crosshair;
-  b.addEventListener('click', () => update({ highlight: !current.highlight }));
-  updaters.push(() => {
-    b.setAttribute('aria-pressed', String(current.highlight));
-    b.classList.toggle('dv-active', current.highlight);
-  });
-  updateControls();
-  return b;
-}
+  const themeHeader = el('div', { class: 'dv-st-subhead' }, [
+    el('span', { class: 'dv-st-label', text: t('theme') }),
+    ...(config.kind !== 'markdown' ? [el('span', { class: 'dv-st-muted', text: t('themeMarkdownHint') })] : []),
+  ]);
 
-/** Toolbar toggle that locks cell editing in sheets. */
-export function lockToggle(): HTMLButtonElement {
-  const b = el('button', { class: 'dv-btn dv-icon-btn', title: t('lockEdits') });
-  b.type = 'button';
-  b.innerHTML = icons.lock;
-  b.addEventListener('click', () => update({ lockEdits: !current.lockEdits }));
-  updaters.push(() => {
-    b.setAttribute('aria-pressed', String(current.lockEdits));
-    b.classList.toggle('dv-active', current.lockEdits);
-  });
-  updateControls();
-  return b;
-}
+  const appearanceSection = el('section', { class: 'dv-st-section' }, [
+    el('h3', { class: 'dv-st-heading', text: t('appearanceAll') }),
+    themeHeader,
+    el('div', { class: 'dv-theme-grid' }, themeCards),
+    schemeRow,
+    el('label', { class: 'dv-check' }, [invert, el('span', { text: t('invertPages') })]),
+  ]);
 
-/** Theme menu button, light/dark switch and language switch for the right end of a toolbar. */
-export function appearanceControls(): HTMLElement[] {
-  const button = el('button', { class: 'dv-btn dv-theme-btn' });
-  button.type = 'button';
-  button.setAttribute('aria-haspopup', 'menu');
-  button.setAttribute('aria-expanded', 'false');
-  const label = el('span', { class: 'dv-theme-label' });
-  const chevron = el('span', { class: 'dv-chevron' });
-  chevron.innerHTML = icons.chevronDown;
-  const swatchHolder = el('span');
-  button.append(swatchHolder, label, chevron);
-  updaters.push(() => {
-    const theme = THEMES.find((x) => x.id === current.theme) ?? THEMES[0];
-    swatchHolder.replaceChildren(themeSwatch(theme));
-    label.textContent = t('themeLabel', t(theme.name));
-    button.title = t('appearance');
-  });
-  menuButton = button;
-  menu ??= buildMenu();
-  button.addEventListener('click', () => {
-    if (!menu) {
-      return;
-    }
-    const open = menu.hidden;
-    menu.hidden = !open;
-    button.setAttribute('aria-expanded', String(open));
-    if (open) {
-      const rect = button.getBoundingClientRect();
-      menu.style.top = `${rect.bottom + 6}px`;
-      menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
-      menu.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
-    }
-  });
-  if (!menu.isConnected) {
-    document.body.append(menu);
+  const langChoices = el('div', { class: 'dv-st-choices' });
+  langChoices.setAttribute('role', 'radiogroup');
+  langChoices.setAttribute('aria-label', t('language'));
+  for (const [id, labelKey] of [
+    ['auto', 'langAuto'],
+    ['zh-cn', 'langZh'],
+    ['en', 'langEn'],
+  ] as const) {
+    const choice = el('button', { class: 'dv-st-choice' });
+    choice.type = 'button';
+    choice.setAttribute('role', 'radio');
+    const dot = el('span', { class: 'dv-st-radio' });
+    choice.append(dot, el('span', { text: t(labelKey) }));
+    choice.addEventListener('click', () => updateAppearance({ language: id }));
+    const sync = () => {
+      const selected = current.language === id;
+      choice.classList.toggle('dv-selected', selected);
+      choice.setAttribute('aria-checked', String(selected));
+    };
+    updaters.add(sync);
+    sync();
+    langChoices.append(choice);
   }
 
-  const language = group(t('language'), [
-    segButton(
-      '中',
-      () => config.lang === 'zh',
-      () => update({ language: 'zh-cn' }),
-    ),
-    segButton(
-      'EN',
-      () => config.lang === 'en',
-      () => update({ language: 'en' }),
-    ),
+  const languageSection = el('section', { class: 'dv-st-section' }, [
+    el('h3', { class: 'dv-st-heading', text: t('languageAll') }),
+    langChoices,
   ]);
-  language.title = t('language');
 
-  const nodes = [button, schemeGroup(false), language];
-  apply();
-  return nodes;
+  return [appearanceSection, languageSection];
 }
 
 apply();

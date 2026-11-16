@@ -3,7 +3,7 @@
 // carried over byte-for-byte, which a load-modify-save through a workbook library
 // cannot guarantee. Pure module.
 import { DOMParser, XMLSerializer, type Document as XDocument, type Element as XElement } from '@xmldom/xmldom';
-import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import { parseCellInput } from './cellInput';
 
 export interface CellEdit {
@@ -14,6 +14,12 @@ export interface CellEdit {
 
 const XML = 'text/xml';
 const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const PRECOMPRESSED_MEDIA = /\.(?:png|jpe?g|gif|webp|avif|mp4|m4v|mov|mp3|wav|ogg|zip|gz)$/i;
+
+function serializeXml(doc: XDocument): string {
+  const out = new XMLSerializer().serializeToString(doc);
+  return out.startsWith('<?xml') ? out : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${out}`;
+}
 
 function colName(index: number): string {
   let name = '';
@@ -161,11 +167,14 @@ function patchSheetXml(xml: string, edits: CellEdit[]): string {
   for (const edit of edits) {
     const rowNumber = edit.r + 1;
     const cell = findCell(findRow(rowNumber), rowNumber, edit.c);
-    // Keep the style attribute ("s"); replace type and content.
+    // Keep the style attribute ("s"); drop stale value/formula metadata and replace content.
     while (cell.firstChild) {
       cell.removeChild(cell.firstChild);
     }
     cell.removeAttribute('t');
+    cell.removeAttribute('cm');
+    cell.removeAttribute('vm');
+    cell.removeAttribute('ph');
     const input = parseCellInput(edit.text);
     const child = (name: string, text: string) => {
       const el = create(name);
@@ -198,45 +207,74 @@ function patchSheetXml(xml: string, edits: CellEdit[]): string {
     }
   }
 
-  const out = new XMLSerializer().serializeToString(doc);
-  return out.startsWith('<?xml') ? out : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${out}`;
+  return serializeXml(doc);
 }
 
 /** Makes Excel recompute everything on open, since cached formula results may now be stale. */
 function forceRecalculation(files: Record<string, Uint8Array>): void {
-  if (files['xl/calcChain.xml']) {
-    delete files['xl/calcChain.xml'];
-    const types = files['[Content_Types].xml'];
-    if (types) {
-      files['[Content_Types].xml'] = strToU8(
-        strFromU8(types).replace(/<Override\b[^>]*PartName="\/xl\/calcChain\.xml"[^>]*\/>/, ''),
-      );
-    }
-    const rels = files['xl/_rels/workbook.xml.rels'];
-    if (rels) {
-      files['xl/_rels/workbook.xml.rels'] = strToU8(
-        strFromU8(rels).replace(/<Relationship\b[^>]*Target="\/?(?:xl\/)?calcChain\.xml"[^>]*\/>/, ''),
-      );
-    }
-  }
+  const parser = new DOMParser();
 
-  let workbook = strFromU8(files['xl/workbook.xml']);
-  const calcPr = /<calcPr\b([^>]*?)\/>/.exec(workbook);
-  if (calcPr) {
-    const attrs = calcPr[1].replace(/\s*fullCalcOnLoad="[^"]*"/, '');
-    workbook = workbook.replace(calcPr[0], `<calcPr${attrs} fullCalcOnLoad="1"/>`);
-  } else {
-    // Schema order: sheets, functionGroups, externalReferences, definedNames, calcPr.
-    for (const anchor of ['</definedNames>', '<definedNames/>', '</externalReferences>', '</functionGroups>', '</sheets>']) {
-      const at = workbook.indexOf(anchor);
-      if (at >= 0) {
-        const pos = at + anchor.length;
-        workbook = `${workbook.slice(0, pos)}<calcPr fullCalcOnLoad="1"/>${workbook.slice(pos)}`;
-        break;
+  // Remove calcChain.xml if present (or referenced), using DOM manipulation rather than regex.
+  const hasCalcChain = Object.keys(files).find((k) => k.toLowerCase() === 'xl/calcchain.xml');
+  if (hasCalcChain) {
+    delete files[hasCalcChain];
+  }
+  const types = files['[Content_Types].xml'];
+  if (types) {
+    const typesDoc = parser.parseFromString(strFromU8(types), XML);
+    const root = typesDoc.documentElement;
+    if (root) {
+      let removed = false;
+      for (const el of elements(root, 'Override')) {
+        if ((el.getAttribute('PartName') ?? '').replace(/^\/+/, '').toLowerCase() === 'xl/calcchain.xml') {
+          root.removeChild(el);
+          removed = true;
+        }
+      }
+      if (removed) {
+        files['[Content_Types].xml'] = strToU8(serializeXml(typesDoc));
       }
     }
   }
-  files['xl/workbook.xml'] = strToU8(workbook);
+  const rels = files['xl/_rels/workbook.xml.rels'];
+  if (rels) {
+    const relsDoc = parser.parseFromString(strFromU8(rels), XML);
+    const root = relsDoc.documentElement;
+    if (root) {
+      let removed = false;
+      for (const el of elements(root, 'Relationship')) {
+        if (resolveTarget(el.getAttribute('Target') ?? '').toLowerCase() === 'xl/calcchain.xml') {
+          root.removeChild(el);
+          removed = true;
+        }
+      }
+      if (removed) {
+        files['xl/_rels/workbook.xml.rels'] = strToU8(serializeXml(relsDoc));
+      }
+    }
+  }
+
+  const wbDoc = parser.parseFromString(strFromU8(files['xl/workbook.xml']), XML);
+  const wbRoot = wbDoc.documentElement;
+  if (wbRoot) {
+    let calcPr = elements(wbRoot, 'calcPr')[0];
+    if (!calcPr) {
+      const prefix = wbRoot.prefix ? `${wbRoot.prefix}:` : '';
+      calcPr = wbDoc.createElementNS(wbRoot.namespaceURI, `${prefix}calcPr`);
+      // Schema order: sheets, functionGroups, externalReferences, definedNames, calcPr.
+      let after: XElement | undefined;
+      for (const name of ['definedNames', 'externalReferences', 'functionGroups', 'sheets']) {
+        const list = elements(wbRoot, name);
+        if (list.length) {
+          after = list[list.length - 1];
+          break;
+        }
+      }
+      wbRoot.insertBefore(calcPr, after ? after.nextSibling : null);
+    }
+    calcPr.setAttribute('fullCalcOnLoad', '1');
+    files['xl/workbook.xml'] = strToU8(serializeXml(wbDoc));
+  }
 }
 
 /**
@@ -262,5 +300,9 @@ export function patchXlsx(bytes: Uint8Array, edits: Map<string, CellEdit[]>): Ui
     return bytes;
   }
   forceRecalculation(files);
-  return zipSync(files, { level: 6 });
+  const archive: Zippable = {};
+  for (const [name, data] of Object.entries(files)) {
+    archive[name] = PRECOMPRESSED_MEDIA.test(name) ? [data, { level: 0 }] : [data, { level: 6 }];
+  }
+  return zipSync(archive);
 }

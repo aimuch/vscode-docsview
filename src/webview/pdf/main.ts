@@ -13,7 +13,7 @@ import './pdf.css';
 import { app, config, el, errorText, onMessage, post, t, toArrayBuffer } from '../shared/api';
 import { icons } from '../shared/icons';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
-import { iconButton, segmented, toolbar } from '../shared/ui';
+import { customToolbar, iconButton, segmented } from '../shared/ui';
 import { createPager } from '../shared/zoom';
 
 const assets = `${config.assets}/pdfjs`;
@@ -222,20 +222,25 @@ async function buildOutline(doc: pdfjs.PDFDocumentProxy) {
 
 async function resolveOutlinePages(doc: pdfjs.PDFDocumentProxy) {
   const dests = outlineDests;
-  const pages = await Promise.all(
-    dests.map(async (dest) => {
-      try {
-        const explicit = typeof dest === 'string' ? await doc.getDestination(dest) : dest;
-        const target = explicit?.[0];
-        if (typeof target === 'number') {
-          return target + 1;
+  const pages = new Array<number>(dests.length).fill(0);
+  const batchSize = 8;
+  for (let start = 0; start < dests.length; start += batchSize) {
+    if (dests !== outlineDests || doc !== currentDoc) {
+      return;
+    }
+    await Promise.all(
+      dests.slice(start, start + batchSize).map(async (dest, offset) => {
+        try {
+          const explicit = typeof dest === 'string' ? await doc.getDestination(dest) : dest;
+          const target = explicit?.[0];
+          pages[start + offset] =
+            typeof target === 'number' ? target + 1 : target ? (await doc.getPageIndex(target as never)) + 1 : 0;
+        } catch {
+          pages[start + offset] = 0;
         }
-        return target ? (await doc.getPageIndex(target as never)) + 1 : 0;
-      } catch {
-        return 0;
-      }
-    }),
-  );
+      }),
+    );
+  }
   if (dests === outlineDests) {
     outlinePages = pages;
     highlightOutline(viewer.currentPageNumber || 1);
@@ -323,9 +328,26 @@ function highlightThumb(page: number) {
   }
 }
 
+// Release rendered thumbnail bitmaps while the tab is hidden; IntersectionObserver redraws visible ones on return.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && thumbObserver) {
+    for (const thumb of thumbs.querySelectorAll<HTMLElement>('.pdf-thumb')) {
+      const box = thumb.querySelector('.pdf-thumb-page');
+      const canvas = box?.querySelector('canvas');
+      if (canvas && box) {
+        canvas.width = 0;
+        canvas.height = 0;
+        box.replaceChildren();
+        thumbObserver.observe(thumb);
+      }
+    }
+  }
+});
+
 // ---------------------------------------------------------------- loading
 
 let workerReady: Promise<void> | undefined;
+let pendingWorkerBlobUrl: string | undefined;
 
 /** Webviews can only start workers from blob: URLs, so load the script text first. */
 function ensureWorker(): Promise<void> {
@@ -335,7 +357,8 @@ function ensureWorker(): Promise<void> {
       throw new Error(`pdf worker: HTTP ${res.status}`);
     }
     const blob = new Blob([await res.text()], { type: 'text/javascript' });
-    pdfjs.GlobalWorkerOptions.workerPort = new Worker(URL.createObjectURL(blob), { type: 'module' });
+    pendingWorkerBlobUrl = URL.createObjectURL(blob);
+    pdfjs.GlobalWorkerOptions.workerPort = new Worker(pendingWorkerBlobUrl, { type: 'module' });
   })();
   return workerReady;
 }
@@ -356,6 +379,10 @@ async function load(bytes: Uint8Array) {
       // Resource fetches go through the page, where the webview resource origin is reachable.
       useWorkerFetch: false,
     }).promise;
+    if (pendingWorkerBlobUrl) {
+      URL.revokeObjectURL(pendingWorkerBlobUrl);
+      pendingWorkerBlobUrl = undefined;
+    }
     const previous = currentDoc;
     currentDoc = doc;
     reported = false;
@@ -375,25 +402,26 @@ async function load(bytes: Uint8Array) {
 
 // ---------------------------------------------------------------- toolbar
 
+const zoomGroup = el('div', { class: 'dv-zoom' }, [
+  iconButton('minus', t('zoomOut'), () => viewer.decreaseScale()),
+  zoomLabel,
+  iconButton('plus', t('zoomIn'), () => viewer.increaseScale()),
+  iconButton('fitWidth', t('fitWidth'), () => {
+    viewer.currentScaleValue = 'page-width';
+  }),
+]);
+
 app.append(
-  toolbar(
-    sidebar.toggle,
-    view.node,
-    '|',
-    pager.node,
-    '|',
-    el('div', { class: 'dv-zoom' }, [
-      iconButton('minus', t('zoomOut'), () => viewer.decreaseScale()),
-      zoomLabel,
-      iconButton('plus', t('zoomIn'), () => viewer.increaseScale()),
-      iconButton('fitWidth', t('fitWidth'), () => {
-        viewer.currentScaleValue = 'page-width';
-      }),
-    ]),
-    '|',
-    findBox,
-    findStatus,
-  ),
+  customToolbar({
+    subtitle: 'PDF',
+    slots: [
+      { id: 'nav', nodes: [sidebar.toggle] },
+      { id: 'view', nodes: [view.node] },
+      { id: 'pager', nodes: [pager.node] },
+      { id: 'zoom', nodes: [zoomGroup] },
+      { id: 'find', nodes: [findBox, findStatus] },
+    ],
+  }).node,
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [stage])]),
 );
 

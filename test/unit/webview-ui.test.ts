@@ -202,11 +202,11 @@ describe('toolbar controls', () => {
     expect([...buttons].map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'true']);
   });
 
-  it('every toolbar ends with the theme, light/dark and language controls', () => {
+  it('keeps the default toolbar clean with only the Settings drawer button on the right', () => {
     const bar = ui.toolbar(ui.iconButton('plus', 'x', () => undefined));
-    expect(bar.querySelector('.dv-theme-btn')).not.toBeNull();
-    const groups = [...bar.querySelectorAll('[role="group"]')].map((g) => g.getAttribute('aria-label'));
-    expect(groups).toEqual(['明暗', '界面语言']);
+    expect(bar.querySelector('.dv-settings-btn')).not.toBeNull();
+    // Theme, scheme and language stay inside the drawer until pinned.
+    expect(bar.querySelector<HTMLElement>('.dv-zone-right')?.hidden).toBe(true);
   });
 
   it('pager only navigates to pages that exist', () => {
@@ -275,32 +275,104 @@ describe('appearance', () => {
     expect(body.dataset.scheme).toBeUndefined();
   });
 
-  it('asks the host to save what the user picks in the toolbar and menu', () => {
-    const bar = ui.toolbar();
-    document.body.append(bar);
-    bar.querySelector<HTMLButtonElement>('[role="group"][aria-label="明暗"] button[aria-label="暗色"]')!.click();
-    [...bar.querySelectorAll<HTMLButtonElement>('[aria-label="界面语言"] button')].find((b) => b.textContent === 'EN')!.click();
+  it('opens the slide-over Settings Drawer and syncs appearance, language and extension settings', () => {
+    const tb = ui.customToolbar({
+      subtitle: 'Markdown',
+      slots: [
+        { id: 'nav', nodes: [ui.iconButton('sidebar', '目录', () => undefined)] },
+        { id: 'zoom', nodes: [ui.iconButton('plus', '放大', () => undefined)] },
+      ],
+    });
+    document.body.append(tb.node);
+    tb.node.querySelector<HTMLButtonElement>('.dv-settings-btn')!.click();
 
-    bar.querySelector<HTMLButtonElement>('.dv-theme-btn')!.click();
-    const menu = document.querySelector<HTMLElement>('.dv-menu')!;
-    expect(menu.hidden).toBe(false);
-    [...menu.querySelectorAll<HTMLButtonElement>('.dv-theme-card')][1].click();
-    const invert = menu.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    const drawers = [...document.querySelectorAll<HTMLElement>('.dv-st-drawer')];
+    const drawer = drawers[drawers.length - 1];
+    expect(drawer.hidden).toBe(false);
+
+    drawer.querySelector<HTMLButtonElement>('[role="group"][aria-label="明暗"] button[aria-pressed="false"]')!;
+    [...drawer.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="明暗"] button')]
+      .find((b) => b.textContent === '暗色')!
+      .click();
+    [...drawer.querySelectorAll<HTMLButtonElement>('.dv-st-choice')]
+      .find((b) => b.textContent === 'English')!
+      .click();
+    [...drawer.querySelectorAll<HTMLButtonElement>('.dv-theme-card')][1].click();
+    const invert = drawer.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
     invert.checked = true;
     invert.dispatchEvent(new Event('change'));
+    drawer.querySelector<HTMLButtonElement>('.dv-st-link')!.click();
 
     expect(posted).toEqual([
       { type: 'setAppearance', patch: { scheme: 'dark' } },
       { type: 'setAppearance', patch: { language: 'en' } },
       { type: 'setAppearance', patch: { theme: 'github' } },
       { type: 'setAppearance', patch: { invertPages: true } },
+      { type: 'openSettings' },
     ]);
-    // The UI reflects the choice straight away, before the host answers.
-    expect(menu.querySelector('.dv-theme-card[aria-checked="true"] .dv-theme-name')?.textContent).toBe('GitHub');
-    expect(bar.querySelector('.dv-theme-label')?.textContent).toBe('主题：GitHub');
+    expect(drawer.querySelector('.dv-theme-card[aria-checked="true"] .dv-theme-name')?.textContent).toBe('GitHub');
 
-    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-    expect(menu.hidden).toBe(true);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(drawer.hidden).toBe(true);
+    tb.node.remove();
+  });
+
+  it('pins items to left/right toolbar zones, reorders them, preserves foreign slots, and resets', () => {
+    // Reset to default layout with a foreign 'pager' slot included on the left.
+    hostSends({
+      type: 'toolbar',
+      toolbar: { left: ['nav', 'pager', 'zoom'], right: [] },
+    });
+    posted.length = 0;
+
+    const tb = ui.customToolbar({
+      subtitle: 'Markdown',
+      slots: [
+        { id: 'nav', nodes: [ui.iconButton('sidebar', '目录', () => undefined)] },
+        { id: 'zoom', nodes: [ui.iconButton('plus', '放大', () => undefined)] },
+      ],
+    });
+    document.body.append(tb.node);
+
+    const slotOrder = (zone: 'left' | 'right') =>
+      [...tb.node.querySelectorAll<HTMLElement>(`.dv-zone-${zone} .dv-slot`)].map((n) => n.dataset.slot);
+
+    expect(slotOrder('left')).toEqual(['nav', 'zoom']);
+    expect(slotOrder('right')).toEqual([]);
+
+    tb.openDrawer();
+    const drawers = [...document.querySelectorAll<HTMLElement>('.dv-st-drawer')];
+    const drawer = drawers[drawers.length - 1];
+
+    // Pin 'theme' and 'scheme' from the unpinned pool onto the right side of the top bar.
+    const pinRight = (slotId: string) => {
+      const chip = drawer.querySelector<HTMLElement>(`.dv-tb-pool-item[data-slot-id="${slotId}"]`)!;
+      const btns = chip.querySelectorAll<HTMLButtonElement>('.dv-tb-pin-btn');
+      btns[1].click();
+    };
+    pinRight('theme');
+    pinRight('scheme');
+    expect(slotOrder('right')).toEqual(['theme', 'scheme']);
+
+    // Reorder 'scheme' before 'theme' on the right side using the "Move earlier" button.
+    const schemeRow = drawer.querySelector<HTMLElement>('.dv-tb-list[data-zone="right"] .dv-tb-item[data-slot-id="scheme"]')!;
+    schemeRow.querySelectorAll<HTMLButtonElement>('.dv-tb-mini')[1].click();
+    expect(slotOrder('right')).toEqual(['scheme', 'theme']);
+
+    // Move 'zoom' from left to right, and verify foreign 'pager' slot is preserved in config!
+    const zoomRow = drawer.querySelector<HTMLElement>('.dv-tb-list[data-zone="left"] .dv-tb-item[data-slot-id="zoom"]')!;
+    zoomRow.querySelectorAll<HTMLButtonElement>('.dv-tb-mini')[0].click();
+    expect(slotOrder('left')).toEqual(['nav']);
+    expect(slotOrder('right')).toEqual(['scheme', 'theme', 'zoom']);
+    expect(ui.getToolbarConfig().left).toContain('pager');
+
+    // Reset back to default toolbar layout.
+    drawer.querySelector<HTMLButtonElement>('.dv-tb-reset')!.click();
+    expect(slotOrder('right')).toEqual([]);
+    expect(slotOrder('left')).toEqual(['nav', 'zoom']);
+
+    tb.closeDrawer();
+    tb.node.remove();
   });
 });
 
@@ -502,6 +574,30 @@ describe("grid lock and column menu", () => {
     expect(header.textContent).toBe("B ↑");
     header.querySelector<HTMLButtonElement>(".grid-col-menu")!.click();
     expect(menus).toEqual([1]);
+    parent.remove();
+  });
+
+  it("reports truncated paste when row growth is disabled (e.g. sorted/filtered CSV)", () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const edits: unknown[] = [];
+    let truncated = 0;
+    const g = new grid.Grid(parent, {
+      editable: true,
+      canGrowRows: false,
+      onEdit: (c) => edits.push(c),
+      onPasteTruncated: () => truncated++,
+    });
+    g.setData({ rowCount: 2, colCount: 2, cell: () => "", colWidths: [80, 80] });
+    g.goTo(1, 0);
+    const viewport = parent.querySelector<HTMLElement>(".grid-viewport")!;
+    const evt = new Event("paste", { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(evt, "clipboardData", {
+      value: { getData: (type: string) => (type === "text/plain" ? "r1\nr2\n" : "") },
+    });
+    viewport.dispatchEvent(evt);
+    expect(edits).toEqual([[{ r: 1, c: 0, text: "r1" }]]);
+    expect(truncated).toBe(1);
     parent.remove();
   });
 });

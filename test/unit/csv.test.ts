@@ -54,6 +54,12 @@ describe('detectDelimiter', () => {
 
   it('ignores delimiters inside quotes and prefers the consistent one', () => {
     expect(detectDelimiter('name;note\n"a,b,c,d";x\n"e,f";y\n')).toBe(';');
+    expect(detectDelimiter('name;note\n"say ""a,b""";x\n1;2\n')).toBe(';');
+  });
+
+  it('is not fooled by bare unquoted inch marks inside fields', () => {
+    expect(detectDelimiter('item;spec\nDell;24" Monitor\nLG;27" Display\n')).toBe(';');
+    expect(detectDelimiter('item|spec\nPipe|1/2" steel\nValve|3/4" brass\n')).toBe('|');
   });
 
   it('uses tab for .tsv regardless of content', () => {
@@ -168,5 +174,35 @@ describe('CsvSession', () => {
     session.setText(applyEdits(session.currentText, session.editCells([{ r: 1, c: 0, text: 'x,y,z,w' }])));
     expect(session.currentDelimiter).toBe(';');
     expect(session.model().rows[1]).toEqual(['x,y,z,w', '2']);
+  });
+
+  it('incrementally updates large multi-row CSVs identically to a full parse', () => {
+    const initial = Array.from({ length: 20 }, (_, i) => `row${i},val${i},note${i}`).join('\n') + '\n';
+    const session = new CsvSession('big.csv', 'auto');
+    session.setText(initial);
+
+    const step = (nextText: string) => {
+      const msg = session.setText(nextText);
+      expect(session.model().rows).toEqual(cells(nextText));
+      return msg;
+    };
+
+    // Single-cell in-place edit (including embedded delimiter & newline).
+    const e1 = applyEdits(session.currentText, session.editCells([{ r: 10, c: 1, text: 'hello, "world"\nline2' }]));
+    const m1 = step(e1);
+    expect(m1.type).toBe('rows');
+
+    // Identical text fast-path.
+    expect(step(e1)).toEqual({ type: 'rows', index: 0, rowCount: 20, colCount: 3, rows: [] });
+
+    // Row insertion and deletion.
+    const e2 = applyEdits(session.currentText, session.structure('insertRow', 5, 2));
+    expect(step(e2).type).toBe('sheet');
+    const e3 = applyEdits(session.currentText, session.structure('deleteRows', 5, 2));
+    expect(step(e3).type).toBe('sheet');
+
+    // Unclosed quote injected mid-document falls back cleanly to full parse.
+    const rawCorrupt = session.currentText.replace('val8', '"unclosed');
+    step(rawCorrupt);
   });
 });

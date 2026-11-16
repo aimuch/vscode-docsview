@@ -35,23 +35,35 @@ export function detectDelimiter(text: string, fileName = ''): string {
   };
   const limit = Math.min(text.length, 64 * 1024);
   let sawContent = false;
+  let atFieldStart = true;
   for (let i = 0; i < limit && lines < 20; i++) {
     const ch = text[i];
-    if (ch === '"') {
-      inQuotes = !inQuotes;
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < limit && text[i + 1] === '"') {
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      }
+    } else if (ch === '"' && atFieldStart) {
+      inQuotes = true;
       sawContent = true;
-    } else if (!inQuotes && (ch === '\n' || ch === '\r')) {
+      atFieldStart = false;
+    } else if (ch === '\n' || ch === '\r') {
       if (sawContent) {
         flush();
       }
       sawContent = false;
+      atFieldStart = true;
     } else {
       sawContent = true;
-      if (!inQuotes) {
-        const idx = CANDIDATES.indexOf(ch);
-        if (idx >= 0) {
-          line[idx]++;
-        }
+      const idx = CANDIDATES.indexOf(ch);
+      if (idx >= 0) {
+        line[idx]++;
+        atFieldStart = true;
+      } else {
+        atFieldStart = false;
       }
     }
   }

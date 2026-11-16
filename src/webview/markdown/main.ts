@@ -4,11 +4,11 @@ import type { TocEntry } from '../../common/protocol';
 import '../shared/base.css';
 import './markdown.css';
 import { app, el, errorText, isDark, onMessage, onThemeChange, post, t } from '../shared/api';
-import { getAppearance, highlightToggle, onAppearanceChange } from '../shared/appearance';
+import { getAppearance, highlightToggle, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
 import { icons } from '../shared/icons';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
-import { iconButton, moreMenu, segmented, toggleButton, toolbar } from '../shared/ui';
+import { customToolbar, iconButton, moreMenu, segmented, toggleButton } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 import { PreviewFind } from './find';
 import { attachTableHighlight } from './tableHighlight';
@@ -101,11 +101,16 @@ const findNext = iconButton('down', t('findNext'), () => {
 
 // ---------------------------------------------------------------- edit mode
 
-/** Full Markdown source of the last render, for editing blocks in place. */
-let sourceLines: string[] = [];
+/** Full Markdown source of the last render, split lazily only when editing a block in place. */
+let rawSource = '';
+let cachedSourceLines: string[] | undefined;
 let editing: { block: HTMLElement; box: HTMLElement } | undefined;
 /** A render that arrived while a block was being edited; applied once editing ends. */
 let deferredRender: { html: string; toc: TocEntry[] } | undefined;
+
+function getSourceLines(): string[] {
+  return (cachedSourceLines ??= rawSource.split(/\r?\n/));
+}
 
 const editToggle = toggleButton('pencil', t('editMode'), (on) => setEditMode(on));
 
@@ -143,12 +148,13 @@ function closeEditor() {
 
 function openEditor(block: HTMLElement) {
   closeEditor();
+  const lines = getSourceLines();
   const start = Number(block.dataset.line);
-  const end = Math.min(Number(block.dataset.lineEnd), sourceLines.length);
+  const end = Math.min(Number(block.dataset.lineEnd), lines.length);
   if (!Number.isFinite(start) || end <= start) {
     return;
   }
-  const original = sourceLines.slice(start, end).join('\n');
+  const original = lines.slice(start, end).join('\n');
   // Blocks end with blank separator lines; edit the text, keep the separation.
   const text = original.replace(/\n+$/, '');
   const lastLine = start + text.split('\n').length;
@@ -172,7 +178,8 @@ function openEditor(block: HTMLElement) {
     const value = textarea.value;
     if (value !== text) {
       const trailing = original.slice(text.length);
-      post({ type: 'editBlock', start, end: start + original.split('\n').length, text: value + trailing, expected: original });
+      const nextText = value === '' ? '' : value + trailing;
+      post({ type: 'editBlock', start, end: start + original.split('\n').length, text: nextText, expected: original });
     }
     closeEditor();
   };
@@ -215,9 +222,11 @@ article.addEventListener('dblclick', (event) => {
 // ---------------------------------------------------------------- right-to-left
 
 let rtl = readState().rtl === true;
+const rtlToggle = toggleButton('rtl', t('rtl'), (on) => setRtl(on));
 
 function setRtl(on: boolean) {
   rtl = on;
+  rtlToggle.set(on);
   writeState({ rtl });
   article.dir = on ? 'rtl' : '';
 }
@@ -234,39 +243,63 @@ function exportAs(format: 'html' | 'pdf') {
   post({ type: 'export', format, html: copy.innerHTML, theme: getAppearance().theme, dark: isDark(), rtl });
 }
 
-const more = moreMenu(t('more'), [
-  {
-    label: () => t('setDefault', getFileState().ext || 'md'),
-    visible: () => getFileState().isDefault !== undefined,
-    checked: () => getFileState().isDefault === true,
-    onClick: () => post({ type: 'setDefault', on: getFileState().isDefault !== true }),
-  },
-  '-',
-  { label: t('exportHtml'), onClick: () => exportAs('html') },
-  { label: t('exportPdf'), hint: t('exportPdfHint'), onClick: () => exportAs('pdf') },
-  '-',
-  { label: t('history'), visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
-  { label: t('rtl'), checked: () => rtl, onClick: () => setRtl(!rtl) },
-]);
+const exportDropdown = moreMenu(
+  t('exportMenu'),
+  [
+    { label: t('exportHtml'), onClick: () => exportAs('html') },
+    { label: t('exportPdf'), hint: t('exportPdfHint'), onClick: () => exportAs('pdf') },
+  ],
+  'export',
+);
+
+const historyBtn = iconButton('history', t('slotHistory'), () => post({ type: 'history' }));
+
+const topBar = customToolbar({
+  subtitle: 'Markdown',
+  slots: [
+    { id: 'nav', nodes: [sidebar.toggle] },
+    { id: 'view', nodes: [view.node] },
+    { id: 'zoom', nodes: zoom.nodes },
+    { id: 'find', nodes: [findBox, findCount, findPrev, findNext] },
+    { id: 'edit', label: t('editMode'), nodes: [editToggle.node] },
+    { id: 'highlight', nodes: [highlightToggle()] },
+    { id: 'actions', label: t('exportMenu'), nodes: [exportDropdown] },
+    { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
+    { id: 'rtl', nodes: [rtlToggle.node] },
+  ],
+  documentActions: [
+    { label: t('exportHtml'), icon: 'export', onClick: () => exportAs('html') },
+    { label: t('exportPdf'), hint: t('exportPdfHint'), icon: 'export', onClick: () => exportAs('pdf') },
+    { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
+  ],
+  documentOptions: [
+    {
+      label: () => t('setDefault', getFileState().ext || 'md'),
+      visible: () => getFileState().isDefault !== undefined,
+      checked: () => getFileState().isDefault === true,
+      onChange: (on) => post({ type: 'setDefault', on }),
+    },
+    {
+      label: t('editMode'),
+      checked: () => scroller.classList.contains('md-editing'),
+      onChange: (on) => setEditMode(on),
+    },
+    {
+      label: t('highlightRowCol'),
+      checked: () => getAppearance().highlight,
+      onChange: (on) => updateAppearance({ highlight: on }),
+    },
+    {
+      label: t('rtl'),
+      checked: () => rtl,
+      onChange: (on) => setRtl(on),
+    },
+  ],
+});
 
 scroller.tabIndex = -1;
 app.append(
-  toolbar(
-    sidebar.toggle,
-    view.node,
-    '|',
-    ...zoom.nodes,
-    '|',
-    findBox,
-    findCount,
-    findPrev,
-    findNext,
-    '|',
-    editToggle.node,
-    highlightToggle(),
-    'spacer',
-    more,
-  ),
+  topBar.node,
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [scroller])]),
 );
 setEditMode(readState().mdEdit === true);
@@ -337,12 +370,13 @@ function imagesSettled(): Promise<void> {
   }
   return new Promise((resolve) => {
     let left = pending.length;
+    const timer = setTimeout(resolve, 5000);
     const done = () => {
       if (--left <= 0) {
+        clearTimeout(timer);
         resolve();
       }
     };
-    setTimeout(resolve, 5000);
     for (const img of pending) {
       img.addEventListener('load', done, { once: true });
       img.addEventListener('error', done, { once: true });
@@ -551,7 +585,8 @@ document.addEventListener('click', (event) => {
 
 onMessage((message) => {
   if (message.type === 'render') {
-    sourceLines = message.source.split(/\r?\n/);
+    rawSource = message.source;
+    cachedSourceLines = undefined;
     render(message.html, message.toc);
   } else if (message.type === 'scrollTo') {
     scrollToLine(message.line);

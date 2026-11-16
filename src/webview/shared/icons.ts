@@ -28,6 +28,16 @@ export const icons = {
   sortDown: svg('<path d="M5 4v8M2.5 9.5L5 12l2.5-2.5M9 5h2M9 8h3.5M9 11h4.5"/>'),
   filter: svg('<path d="M2.5 3.5h11l-4.2 5v4l-2.6 1.5v-5.5z"/>'),
   crosshair: svg('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M2.5 6.5h11M2.5 9.5h11M6.5 2.5v11M9.5 2.5v11"/>'),
+  gear: svg(
+    '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1"/>',
+  ),
+  grip: svg(
+    '<circle cx="6" cy="4" r=".6" fill="currentColor"/><circle cx="10" cy="4" r=".6" fill="currentColor"/><circle cx="6" cy="8" r=".6" fill="currentColor"/><circle cx="10" cy="8" r=".6" fill="currentColor"/><circle cx="6" cy="12" r=".6" fill="currentColor"/><circle cx="10" cy="12" r=".6" fill="currentColor"/>',
+  ),
+  history: svg('<path d="M3 5.5V2.5m0 3h3M3.3 5.5a5.5 5.5 0 1 1-.5 4"/><path d="M8 5v3.2l2.3 1.3"/>'),
+  export: svg('<path d="M8 10.5V2.5M5 5.2L8 2.5l3 2.7M3 10.5v2a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-2"/>'),
+  rtl: svg('<path d="M7 3h5M9 3v8M11.5 3v8M7 3a2.2 2.2 0 0 0 0 4.4H9M6.5 13l-2.5-2 2.5-2M4 11h8"/>'),
+  invert: svg('<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/>'),
 };
 
 export type IconName = keyof typeof icons;

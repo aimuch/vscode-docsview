@@ -3,7 +3,7 @@
 // `--dev` additionally builds the browser harness server and the smoke test into out/.
 import * as esbuild from 'esbuild';
 import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +20,26 @@ const common = {
   legalComments: 'none',
 };
 
+// Heavy format parsers live in standalone CJS chunks loaded on demand, keeping dist/extension.js tiny.
+const lazyHostMap = new Map([
+  [join(root, 'src/host/markdown/renderer.ts'), './host/markdown-renderer.cjs'],
+  [join(root, 'src/host/spreadsheet.ts'), './host/spreadsheet.cjs'],
+  [join(root, 'src/host/doc/docExtractor.ts'), './host/doc-extractor.cjs'],
+]);
+
+const externalLazyHostPlugin = {
+  name: 'external-lazy-host',
+  setup(build) {
+    build.onResolve({ filter: /^\./ }, (a) => {
+      if (a.kind !== 'dynamic-import') {
+        return null;
+      }
+      const target = lazyHostMap.get(resolve(a.resolveDir, `${a.path}.ts`));
+      return target ? { path: target, external: true } : null;
+    });
+  },
+};
+
 const extension = {
   ...common,
   entryPoints: [join(root, 'src/extension.ts')],
@@ -28,7 +48,20 @@ const extension = {
   format: 'cjs',
   target: 'node20',
   external: ['vscode'],
+  // Emit CJS require() for lazy host chunks so resolution is deterministic inside Electron's extension host.
+  supported: { 'dynamic-import': false },
+  plugins: [externalLazyHostPlugin],
 };
+
+const hostChunks = [...lazyHostMap.entries()].map(([entry, outRel]) => ({
+  ...common,
+  entryPoints: [entry],
+  outfile: join(root, 'dist', outRel),
+  platform: 'node',
+  format: 'cjs',
+  target: 'node20',
+  external: ['vscode'],
+}));
 
 const viewers = ['markdown', 'sheet', 'docx', 'pdf', 'pptx', 'text'];
 
@@ -91,7 +124,7 @@ async function main() {
   if (!watch) {
     rmSync(join(root, 'dist'), { recursive: true, force: true });
   }
-  const configs = [extension, webview, ...(dev ? [devServer, smoke] : [])];
+  const configs = [extension, ...hostChunks, webview, ...(dev ? [devServer, smoke] : [])];
   if (watch) {
     const contexts = await Promise.all(configs.map((c) => esbuild.context(c)));
     copyPdfAssets();

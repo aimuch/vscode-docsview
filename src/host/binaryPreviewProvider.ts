@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import type { HostMessage, ViewerKind, WebviewMessage } from '../common/protocol';
-import { extractDocText } from './doc/docExtractor';
 import { configureWebview, debounce, handleCommonMessage, parentUri, t, onWebviewMessage } from './webviewHtml';
 
 function baseName(uri: vscode.Uri): string {
@@ -43,6 +42,7 @@ export class BinaryPreviewProvider implements vscode.CustomReadonlyEditorProvide
       try {
         const bytes = await vscode.workspace.fs.readFile(uri);
         if (kind === 'text') {
+          const { extractDocText } = await import('./doc/docExtractor');
           post({ type: 'text', name: baseName(uri), body: await extractDocText(bytes) });
         } else {
           // readFile yields a Node Buffer, which webview.postMessage would JSON-encode

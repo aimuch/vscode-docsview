@@ -3,7 +3,7 @@ import '../shared/base.css';
 import './docx.css';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
-import { segmented, toolbar } from '../shared/ui';
+import { customToolbar, segmented } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 
 const stage = el('div', { class: 'dv-stage' });
@@ -42,7 +42,14 @@ const zoom = createZoom((value) => {
 }, stage);
 
 app.append(
-  toolbar(sidebar.toggle, view.node, '|', ...zoom.nodes),
+  customToolbar({
+    subtitle: 'DOCX',
+    slots: [
+      { id: 'nav', nodes: [sidebar.toggle] },
+      { id: 'view', nodes: [view.node] },
+      { id: 'zoom', nodes: zoom.nodes },
+    ],
+  }).node,
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [stage])]),
   styles,
 );

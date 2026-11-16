@@ -119,6 +119,81 @@ export const DEFAULT_APPEARANCE: Appearance = {
   language: 'auto',
 };
 
+// ---------------------------------------------------------------- toolbar layout
+
+export type ToolbarItemId =
+  | 'nav'
+  | 'view'
+  | 'pager'
+  | 'zoom'
+  | 'cellBar'
+  | 'find'
+  | 'edit'
+  | 'highlight'
+  | 'structure'
+  | 'actions'
+  | 'history'
+  | 'rtl'
+  | 'theme'
+  | 'scheme'
+  | 'invertPages'
+  | 'language';
+
+export const ALL_TOOLBAR_ITEMS: readonly ToolbarItemId[] = [
+  'nav',
+  'view',
+  'pager',
+  'zoom',
+  'cellBar',
+  'find',
+  'edit',
+  'highlight',
+  'structure',
+  'actions',
+  'history',
+  'rtl',
+  'theme',
+  'scheme',
+  'invertPages',
+  'language',
+];
+
+export interface ToolbarConfig {
+  left: ToolbarItemId[];
+  right: ToolbarItemId[];
+}
+
+export const DEFAULT_TOOLBAR: ToolbarConfig = {
+  left: ['nav', 'view', 'pager', 'zoom', 'cellBar', 'find', 'edit', 'highlight', 'structure'],
+  right: [],
+};
+
+const VALID_TOOLBAR_SET = new Set<string>(ALL_TOOLBAR_ITEMS);
+
+/** Sanitises user/persisted toolbar layouts: drops unknown or duplicate IDs. */
+export function normalizeToolbarConfig(raw: unknown): ToolbarConfig {
+  if (!raw || typeof raw !== 'object') {
+    return { left: [...DEFAULT_TOOLBAR.left], right: [...DEFAULT_TOOLBAR.right] };
+  }
+  const obj = raw as { left?: unknown; right?: unknown };
+  const seen = new Set<ToolbarItemId>();
+  const clean = (arr: unknown, fallback: readonly ToolbarItemId[]): ToolbarItemId[] => {
+    const source = Array.isArray(arr) ? arr : fallback;
+    const out: ToolbarItemId[] = [];
+    for (const item of source) {
+      if (typeof item === 'string' && VALID_TOOLBAR_SET.has(item) && !seen.has(item as ToolbarItemId)) {
+        seen.add(item as ToolbarItemId);
+        out.push(item as ToolbarItemId);
+      }
+    }
+    return out;
+  };
+  return {
+    left: clean(obj.left, DEFAULT_TOOLBAR.left),
+    right: clean(obj.right, DEFAULT_TOOLBAR.right),
+  };
+}
+
 // ---------------------------------------------------------------- messages
 
 export type HostMessage =
@@ -132,9 +207,10 @@ export type HostMessage =
   | { type: 'cells'; index: number; cells: { r: number; c: number; cell: Cell }[] }
   | { type: 'rows'; index: number; rowCount: number; colCount: number; rows: { r: number; cells: Cell[] }[] }
   | { type: 'appearance'; appearance: Appearance }
+  | { type: 'toolbar'; toolbar: ToolbarConfig }
   /** Whether the document is also open in a text editor (drives the preview/split switch). */
   | { type: 'viewState'; split: boolean }
-  /** File-level state for the "More" menu. `isDefault` is undefined when it does not apply. */
+  /** File-level state for the settings drawer. `isDefault` is undefined when it does not apply. */
   | { type: 'fileState'; isDefault?: boolean; ext: string; history: boolean }
   | { type: 'error'; message: string };
 
@@ -146,6 +222,8 @@ export type WebviewMessage =
   | { type: 'edit'; index: number; changes: CellChange[] }
   | { type: 'structure'; index: number; op: StructureOp; at: number; count: number }
   | { type: 'setAppearance'; patch: Partial<Appearance> }
+  | { type: 'setToolbar'; toolbar: ToolbarConfig }
+  | { type: 'openSettings' }
   /** Open the document in the text editor: replacing this editor, or beside it. */
   | { type: 'showSource'; beside: boolean }
   /** Close text editors of this document that are open beside the preview. */
@@ -169,4 +247,5 @@ export interface WebviewConfig {
   /** Resolved UI language. */
   lang: 'en' | 'zh';
   appearance: Appearance;
+  toolbar?: ToolbarConfig;
 }

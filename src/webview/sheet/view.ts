@@ -83,11 +83,25 @@ export function viewRows(rows: Cell[][], dataRows: number, fixed: number, view: 
   if (view.sortCol !== undefined) {
     const c = view.sortCol;
     const dir = view.sortDir ?? 1;
-    // Stable: equal values keep their original order.
-    body = body
-      .map((r, i) => ({ r, i }))
-      .sort((x, y) => compareCells(rows[x.r]?.[c], rows[y.r]?.[c], dir) || x.i - y.i)
-      .map((x) => x.r);
+    // Precompute sort keys once per row (Schwartzian transform) instead of re-parsing in O(n log n) comparisons.
+    const keyed = body.map((r, i) => {
+      const cell = rows[r]?.[c];
+      const t = text(cell).trim();
+      return { r, i, empty: !t, num: t ? numericValue(cell) : undefined, str: t };
+    });
+    keyed.sort((x, y) => {
+      if (x.empty || y.empty) {
+        return x.empty && y.empty ? x.i - y.i : x.empty ? 1 : -1;
+      }
+      if (x.num !== undefined && y.num !== undefined) {
+        return (x.num - y.num) * dir || x.i - y.i;
+      }
+      if (x.num !== undefined || y.num !== undefined) {
+        return (x.num !== undefined ? -1 : 1) * dir;
+      }
+      return collator.compare(x.str, y.str) * dir || x.i - y.i;
+    });
+    body = keyed.map((x) => x.r);
   }
   return [...head, ...body];
 }

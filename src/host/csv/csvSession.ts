@@ -26,6 +26,34 @@ function sameCells(a: string[], b: string[]): boolean {
   return true;
 }
 
+function findRecordAtOrBefore(records: CsvRecord[], offset: number): number {
+  let lo = 0;
+  let hi = records.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (records[mid].start <= offset) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return lo;
+}
+
+function findRecordAfter(records: CsvRecord[], offset: number, from: number): number {
+  let lo = from;
+  let hi = records.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (records[mid].start <= offset) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
 /**
  * Holds the parsed state of one CSV text and converts table operations into text edits.
  * The owner applies those edits to the real document and feeds the new text back via
@@ -60,7 +88,11 @@ export class CsvSession {
   setText(text: string, eol = this.eol): HostMessage {
     const previous = this.parsed ? this.records : undefined;
     const previousCols = this.colCount;
+    const oldText = this.text;
     this.eol = eol;
+    if (previous && text === oldText) {
+      return { type: 'rows', index: 0, rowCount: this.records.length, colCount: this.colCount, rows: [] };
+    }
     this.text = text;
     // Detect once: re-detecting after every edit could flip the delimiter mid-session.
     if (!this.parsed || !previous?.length) {
@@ -69,13 +101,70 @@ export class CsvSession {
           ? this.delimiterSetting
           : detectDelimiter(text, this.name);
     }
-    this.records = parseCsv(text, this.delimiter);
-    this.colCount = this.records.reduce((max, r) => Math.max(max, r.cells.length), 0);
+
+    let diffRowStart = 0;
+    let diffRowEnd = 0;
+    let usedIncremental = false;
+
+    if (previous && previous.length >= 4 && text.length > 0) {
+      const minLen = Math.min(oldText.length, text.length);
+      let diffStart = 0;
+      while (diffStart < minLen && oldText.charCodeAt(diffStart) === text.charCodeAt(diffStart)) {
+        diffStart++;
+      }
+      let oldEnd = oldText.length;
+      let newEnd = text.length;
+      while (oldEnd > diffStart && newEnd > diffStart && oldText.charCodeAt(oldEnd - 1) === text.charCodeAt(newEnd - 1)) {
+        oldEnd--;
+        newEnd--;
+      }
+      const r0 = Math.max(0, findRecordAtOrBefore(previous, diffStart) - 1);
+      const r1 = Math.min(previous.length, findRecordAfter(previous, oldEnd, r0 + 1) + 1);
+      const sliceStart = previous[r0].start;
+      const delta = text.length - oldText.length;
+      const newSliceEnd = r1 < previous.length ? previous[r1].start + delta : text.length;
+      const sub = text.slice(sliceStart, newSliceEnd);
+      const mid = parseCsv(sub, this.delimiter);
+      // If r1 < previous.length, the window ends with the untouched terminator before previous[r1].
+      // An unclosed quote inside `sub` would swallow that terminator (`end === sub.length`); fall back then.
+      if (r1 === previous.length || (mid.length > 0 && mid[mid.length - 1].end < sub.length)) {
+        for (const rec of mid) {
+          rec.start += sliceStart;
+          rec.end += sliceStart;
+        }
+        const tail: CsvRecord[] = new Array(previous.length - r1);
+        for (let i = r1; i < previous.length; i++) {
+          const rec = previous[i];
+          tail[i - r1] = { start: rec.start + delta, end: rec.end + delta, cells: rec.cells };
+        }
+        this.records = [...previous.slice(0, r0), ...mid, ...tail];
+        let removedMax = 0;
+        for (let i = r0; i < r1; i++) {
+          removedMax = Math.max(removedMax, previous[i].cells.length);
+        }
+        const midMax = mid.reduce((max, r) => Math.max(max, r.cells.length), 0);
+        if (removedMax < previousCols || midMax >= previousCols) {
+          this.colCount = Math.max(previousCols, midMax);
+        } else {
+          this.colCount = this.records.reduce((max, r) => Math.max(max, r.cells.length), 0);
+        }
+        diffRowStart = r0;
+        diffRowEnd = r0 + mid.length;
+        usedIncremental = true;
+      }
+    }
+
+    if (!usedIncremental) {
+      this.records = parseCsv(text, this.delimiter);
+      this.colCount = this.records.reduce((max, r) => Math.max(max, r.cells.length), 0);
+      diffRowStart = 0;
+      diffRowEnd = this.records.length;
+    }
     this.parsed = true;
 
     if (previous && previous.length === this.records.length && previousCols === this.colCount) {
       const rows: { r: number; cells: string[] }[] = [];
-      for (let r = 0; r < previous.length && rows.length <= MAX_PATCH_ROWS; r++) {
+      for (let r = diffRowStart; r < diffRowEnd && rows.length <= MAX_PATCH_ROWS; r++) {
         if (!sameCells(previous[r].cells, this.records[r].cells)) {
           rows.push({ r, cells: this.records[r].cells });
         }

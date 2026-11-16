@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
-import type {
-  Appearance,
-  HostMessage,
-  LanguageSetting,
-  SchemeSetting,
-  ThemeId,
-  ViewerKind,
-  WebviewMessage,
+import {
+  normalizeToolbarConfig,
+  type Appearance,
+  type HostMessage,
+  type LanguageSetting,
+  type SchemeSetting,
+  type ThemeId,
+  type ToolbarConfig,
+  type ViewerKind,
+  type WebviewMessage,
 } from '../common/protocol';
 import { renderShell } from '../common/shell';
 import { pickLang, translate, type Lang, type StringKey } from '../common/strings';
@@ -44,6 +46,10 @@ export function readAppearance(): Appearance {
     lockEdits: config.get<boolean>(SETTING_KEYS.lockEdits, false),
     language: pick(SETTING_KEYS.language, LANGUAGES),
   };
+}
+
+export function readToolbar(): ToolbarConfig {
+  return normalizeToolbarConfig(vscode.workspace.getConfiguration('docsview').get('toolbar'));
 }
 
 /** UI language: the user's explicit choice, else VS Code's display language. */
@@ -138,6 +144,7 @@ export function configureWebview(
           assets: webview.asWebviewUri(dist).toString(),
           lang: view.lang,
           appearance: readAppearance(),
+          toolbar: readToolbar(),
         },
         cspSource: webview.cspSource,
         baseHref,
@@ -153,6 +160,10 @@ export function configureWebview(
 export function watchViews(): vscode.Disposable[] {
   return [
     vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('docsview.toolbar')) {
+        const message: HostMessage = { type: 'toolbar', toolbar: readToolbar() };
+        views.forEach((view) => void view.webview.postMessage(message));
+      }
       if (
         !e.affectsConfiguration('docsview.appearance') &&
         !e.affectsConfiguration('docsview.language') &&
@@ -255,6 +266,16 @@ export function handleCommonMessage(
           void config.update(SETTING_KEYS[key], message.patch[key], vscode.ConfigurationTarget.Global);
         }
       }
+      break;
+    }
+    case 'setToolbar': {
+      void vscode.workspace
+        .getConfiguration('docsview')
+        .update('toolbar', normalizeToolbarConfig(message.toolbar), vscode.ConfigurationTarget.Global);
+      break;
+    }
+    case 'openSettings': {
+      void vscode.commands.executeCommand('workbench.action.openSettings', 'docsview');
       break;
     }
     case 'showSource':

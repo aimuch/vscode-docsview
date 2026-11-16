@@ -18,5 +18,6 @@
   "config.language": "Language of the DocsView interface. \"auto\" follows the VS Code display language.",
   "config.highlightRowColumn": "Highlight the row and column of the selected cell in CSV and Excel views, and of the hovered cell in Markdown tables.",
   "config.table.lockEditing": "Lock cell editing in CSV and Excel views until it is unlocked from the toolbar.",
+  "config.toolbar": "Items shown on the left and right sides of the DocsView top toolbar, and their display order.",
   "command.showHistory": "DocsView: Show Version History"
 }

@@ -1,7 +1,21 @@
-// Toolbar building blocks shared by every viewer. The appearance controls (theme,
-// light/dark, language) are appended to every toolbar automatically.
-import { el } from './api';
-import { appearanceControls } from './appearance';
+// Toolbar building blocks, customizable top bar layout, and the slide-over Settings Drawer.
+import {
+  DEFAULT_TOOLBAR,
+  normalizeToolbarConfig,
+  type ToolbarConfig,
+  type ToolbarItemId,
+} from '../../common/protocol';
+import type { StringKey } from '../../common/strings';
+import { config, el, onMessage, post, t } from './api';
+import {
+  buildAppearanceDrawerSections,
+  invertToggle,
+  languageToolbarGroup,
+   onAppearanceChange,
+  schemeToolbarGroup,
+  themeToolbarButton,
+} from './appearance';
+import { onFileState } from './fileState';
 import { icons, type IconName } from './icons';
 
 export function iconButton(icon: IconName, title: string, onClick: () => void): HTMLButtonElement {
@@ -90,25 +104,13 @@ export function spacer(): HTMLElement {
   return el('div', { class: 'dv-spacer' });
 }
 
-/** Viewer-specific controls on the left, shared appearance controls on the right. */
-export function toolbar(...nodes: (HTMLElement | 'spacer' | '|')[]): HTMLElement {
-  const bar = el(
-    'div',
-    { class: 'dv-toolbar' },
-    nodes.map((n) => (n === 'spacer' ? spacer() : n === '|' ? divider() : n)),
-  );
-  if (!nodes.includes('spacer')) {
-    bar.append(spacer());
-  }
-  bar.append(...appearanceControls());
-  return bar;
-}
-
-// ---------------------------------------------------------------- "More" menu
+// ---------------------------------------------------------------- dropdown action menu
 
 export interface MenuItem {
   label: string | (() => string);
   hint?: string;
+  /** Optional icon shown on action buttons in the drawer. */
+  icon?: IconName;
   /** Shows a check mark when true. */
   checked?: () => boolean;
   /** Hidden when this returns false. */
@@ -116,52 +118,63 @@ export interface MenuItem {
   onClick: () => void;
 }
 
-/** A "More" button with a drop-down of less frequent actions. Items are re-evaluated on every open. */
-export function moreMenu(label: string, items: (MenuItem | "-")[]): HTMLElement {
-  const button = el("button", { class: "dv-btn dv-more-btn", title: label });
-  button.type = "button";
-  button.setAttribute("aria-haspopup", "menu");
-  button.setAttribute("aria-expanded", "false");
-  const iconHolder = el("span", { class: "dv-more-icon" });
-  iconHolder.innerHTML = icons.more;
-  button.append(iconHolder, el("span", { text: label }));
+/** A compact button with a drop-down menu of actions. Items are re-evaluated on every open. */
+export function moreMenu(label: string, items: (MenuItem | '-')[], icon: IconName = 'more'): HTMLElement {
+  const button = el('button', { class: 'dv-btn dv-more-btn', title: label });
+  button.type = 'button';
+  button.setAttribute('aria-haspopup', 'menu');
+  button.setAttribute('aria-expanded', 'false');
+  const iconHolder = el('span', { class: 'dv-more-icon' });
+  iconHolder.innerHTML = icons[icon];
+  button.append(iconHolder, el('span', { text: label }));
 
-  const menu = el("div", { class: "dv-menu dv-more-menu" });
-  menu.setAttribute("role", "menu");
+  const menu = el('div', { class: 'dv-menu dv-more-menu' });
+  menu.setAttribute('role', 'menu');
   menu.hidden = true;
 
+  const onOutside = (e: MouseEvent) => {
+    if (!menu.contains(e.target as Node) && !button.contains(e.target as Node)) {
+      close();
+    }
+  };
+
   const close = () => {
-    menu.hidden = true;
-    button.setAttribute("aria-expanded", "false");
+    if (!menu.hidden) {
+      menu.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('mousedown', onOutside);
+    }
   };
 
   const build = () => {
-    const visible = items.filter((item) => item === "-" || item.visible?.() !== false);
-    // No separators at the ends or next to each other once hidden items are gone.
+    const visible = items.filter((item) => item === '-' || item.visible?.() !== false);
     const cleaned = visible.filter(
-      (item, i) => item !== "-" || (i > 0 && i < visible.length - 1 && visible[i - 1] !== "-"),
+      (item, i) => item !== '-' || (i > 0 && i < visible.length - 1 && visible[i - 1] !== '-'),
     );
     menu.replaceChildren(
       ...cleaned.map((item) => {
-        if (item === "-") {
-          return el("div", { class: "dv-menu-sep" });
+        if (item === '-') {
+          return el('div', { class: 'dv-menu-sep' });
         }
-        const row = el("button", { class: "dv-menu-item" });
-        row.type = "button";
+        const row = el('button', { class: 'dv-menu-item' });
+        row.type = 'button';
         const checked = item.checked?.() ?? false;
-        row.setAttribute("role", item.checked ? "menuitemcheckbox" : "menuitem");
+        row.setAttribute('role', item.checked ? 'menuitemcheckbox' : 'menuitem');
         if (item.checked) {
-          row.setAttribute("aria-checked", String(checked));
+          row.setAttribute('aria-checked', String(checked));
         }
-        const mark = el("span", { class: "dv-menu-check" });
+        const mark = el('span', { class: 'dv-menu-check' });
         if (checked) {
           mark.innerHTML = icons.check;
         }
-        row.append(mark, el("span", { class: "dv-menu-label", text: typeof item.label === "function" ? item.label() : item.label }));
+        row.append(
+          mark,
+          el('span', { class: 'dv-menu-label', text: typeof item.label === 'function' ? item.label() : item.label }),
+        );
         if (item.hint) {
-          row.append(el("span", { class: "dv-menu-hint-text", text: item.hint }));
+          row.append(el('span', { class: 'dv-menu-hint-text', text: item.hint }));
         }
-        row.addEventListener("click", () => {
+        row.addEventListener('click', () => {
           close();
           item.onClick();
         });
@@ -170,36 +183,646 @@ export function moreMenu(label: string, items: (MenuItem | "-")[]): HTMLElement 
     );
   };
 
-  button.addEventListener("click", () => {
+  button.addEventListener('click', () => {
     if (!menu.hidden) {
       close();
       return;
     }
     build();
     menu.hidden = false;
-    button.setAttribute("aria-expanded", "true");
+    button.setAttribute('aria-expanded', 'true');
+    document.addEventListener('mousedown', onOutside);
     const rect = button.getBoundingClientRect();
     menu.style.top = `${rect.bottom + 6}px`;
     menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
-    menu.querySelector<HTMLElement>(".dv-menu-item")?.focus();
+    menu.querySelector<HTMLElement>('.dv-menu-item')?.focus();
   });
-  menu.addEventListener("keydown", (e) => {
-    const rows = [...menu.querySelectorAll<HTMLElement>(".dv-menu-item")];
+  menu.addEventListener('keydown', (e) => {
+    const rows = [...menu.querySelectorAll<HTMLElement>('.dv-menu-item')];
     const index = rows.indexOf(document.activeElement as HTMLElement);
-    if (e.key === "Escape") {
+    if (e.key === 'Escape') {
       close();
       button.focus();
-    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      const next = (index + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length;
+      const next = (index + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
       rows[next]?.focus();
-    }
-  });
-  document.addEventListener("mousedown", (e) => {
-    if (!menu.hidden && !menu.contains(e.target as Node) && !button.contains(e.target as Node)) {
-      close();
     }
   });
   document.body.append(menu);
   return button;
+}
+
+// ---------------------------------------------------------------- toolbar layout state
+
+const SLOT_LABELS: Record<ToolbarItemId, StringKey> = {
+  nav: 'slotNav',
+  view: 'slotView',
+  pager: 'slotPager',
+  zoom: 'slotZoom',
+  cellBar: 'slotCellBar',
+  find: 'slotFind',
+  edit: 'slotEdit',
+  highlight: 'slotHighlight',
+  structure: 'slotStructure',
+  actions: 'slotActions',
+  history: 'slotHistory',
+  rtl: 'slotRtl',
+  theme: 'slotTheme',
+  scheme: 'slotScheme',
+  invertPages: 'slotInvert',
+  language: 'slotLanguage',
+};
+
+let currentToolbar: ToolbarConfig = normalizeToolbarConfig(config.toolbar);
+const toolbarListeners = new Set<(cfg: ToolbarConfig) => void>();
+
+export function getToolbarConfig(): ToolbarConfig {
+  return currentToolbar;
+}
+
+export function setToolbarConfig(next: ToolbarConfig, notifyHost = true): void {
+  currentToolbar = normalizeToolbarConfig(next);
+  toolbarListeners.forEach((l) => l(currentToolbar));
+  if (notifyHost) {
+    post({ type: 'setToolbar', toolbar: currentToolbar });
+  }
+}
+
+onMessage((message) => {
+  if (message.type === 'toolbar') {
+    currentToolbar = normalizeToolbarConfig(message.toolbar);
+    toolbarListeners.forEach((l) => l(currentToolbar));
+  }
+});
+
+/**
+ * Merges a viewer's local ordering (`desired` subset of `supported`) back into `globalList`,
+ * keeping slots that belong to other formats anchored next to their neighbours.
+ */
+function mergeZone(
+  globalList: readonly ToolbarItemId[],
+  supported: ReadonlySet<ToolbarItemId>,
+  desired: readonly ToolbarItemId[],
+): ToolbarItemId[] {
+  const desiredSet = new Set(desired);
+  const beforeMap = new Map<ToolbarItemId, ToolbarItemId[]>();
+  let pendingForeign: ToolbarItemId[] = [];
+  for (const id of globalList) {
+    if (!supported.has(id)) {
+      pendingForeign.push(id);
+    } else if (desiredSet.has(id)) {
+      if (pendingForeign.length) {
+        beforeMap.set(id, pendingForeign);
+        pendingForeign = [];
+      }
+    }
+  }
+  const out: ToolbarItemId[] = [];
+  for (const id of desired) {
+    const before = beforeMap.get(id);
+    if (before) {
+      out.push(...before);
+    }
+    out.push(id);
+  }
+  if (pendingForeign.length) {
+    out.push(...pendingForeign);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- customizable toolbar & Settings Drawer
+
+export interface ToolbarSlot {
+  id: ToolbarItemId;
+  label?: string;
+  nodes: HTMLElement[];
+  /** Optional runtime predicate (e.g. hide CSV row/col buttons on Excel). */
+  visible?: () => boolean;
+}
+
+export interface DrawerOption {
+  label: string | (() => string);
+  checked: () => boolean;
+  visible?: () => boolean;
+  onChange: (checked: boolean) => void;
+}
+
+export interface CustomToolbarOptions {
+  slots: ToolbarSlot[];
+  /** Extra status/indicator elements always shown after the left slots (e.g. active filter chip). */
+  extraLeft?: HTMLElement[];
+  /** Action buttons shown under "This Document" in the Settings Drawer. */
+  documentActions?: MenuItem[];
+  /** Checkboxes shown under "This Document" in the Settings Drawer. */
+  documentOptions?: DrawerOption[];
+  /** Subtitle shown in the drawer header (format or file name). */
+  subtitle?: string | (() => string);
+}
+
+export interface CustomToolbar {
+  node: HTMLElement;
+  /** Re-evaluates slot visibility and refreshes the drawer if open. */
+  refresh(): void;
+  openDrawer(): void;
+  closeDrawer(): void;
+}
+
+const PAGED_KINDS = new Set(['docx', 'pdf', 'pptx', 'text']);
+
+export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
+  const slotMap = new Map<ToolbarItemId, { spec: ToolbarSlot; wrap: HTMLElement }>();
+  const register = (spec: ToolbarSlot) => {
+    if (slotMap.has(spec.id)) {
+      return;
+    }
+    const wrap = el('div', { class: 'dv-slot' }, spec.nodes);
+    wrap.dataset.slot = spec.id;
+    slotMap.set(spec.id, { spec, wrap });
+  };
+
+  for (const s of opts.slots) {
+    register(s);
+  }
+  // Automatically register shared appearance/language slots supported by this viewer.
+  if (config.kind === 'markdown') {
+    register({ id: 'theme', nodes: [themeToolbarButton()] });
+  }
+  if (PAGED_KINDS.has(config.kind)) {
+    register({ id: 'invertPages', nodes: [invertToggle()] });
+  }
+  register({ id: 'scheme', nodes: [schemeToolbarGroup()] });
+  register({ id: 'language', nodes: [languageToolbarGroup()] });
+
+  const supportedIds = new Set<ToolbarItemId>(slotMap.keys());
+  const leftZone = el('div', { class: 'dv-zone dv-zone-left' });
+  const rightZone = el('div', { class: 'dv-zone dv-zone-right' });
+
+  const gearBtn = iconButton('gear', t('settings'), () => {
+    if (drawerOpen) {
+      closeDrawer();
+    } else {
+      openDrawer();
+    }
+  });
+  gearBtn.classList.add('dv-settings-btn');
+  gearBtn.setAttribute('aria-haspopup', 'dialog');
+  gearBtn.setAttribute('aria-expanded', 'false');
+
+  const rightSep = divider();
+  const bar = el('div', { class: 'dv-toolbar' }, [
+    leftZone,
+    ...(opts.extraLeft ?? []),
+    spacer(),
+    rightZone,
+    rightSep,
+    gearBtn,
+  ]);
+
+  function slotVisible(entry: { spec: ToolbarSlot; wrap: HTMLElement }): boolean {
+    if (entry.spec.visible && !entry.spec.visible()) {
+      return false;
+    }
+    return entry.spec.nodes.some((n) => !n.hidden);
+  }
+
+  function fillZone(zoneEl: HTMLElement, ids: readonly ToolbarItemId[]): number {
+    const children: HTMLElement[] = [];
+    let count = 0;
+    for (const id of ids) {
+      const entry = slotMap.get(id);
+      if (!entry || !slotVisible(entry)) {
+        continue;
+      }
+      if (count > 0) {
+        children.push(divider());
+      }
+      children.push(entry.wrap);
+      count++;
+    }
+    zoneEl.replaceChildren(...children);
+    zoneEl.hidden = count === 0;
+    return count;
+  }
+
+  function reconcileBar(): void {
+    fillZone(leftZone, currentToolbar.left);
+    const rightCount = fillZone(rightZone, currentToolbar.right);
+    rightSep.hidden = rightCount === 0;
+  }
+
+  // -------------------------------------------------------------- Settings Drawer (Git Map style)
+
+  const backdrop = el('div', { class: 'dv-st-backdrop' });
+  backdrop.hidden = true;
+
+  const drawer = el('aside', { class: 'dv-st-drawer' });
+  drawer.setAttribute('role', 'dialog');
+  drawer.setAttribute('aria-label', t('settings'));
+  drawer.hidden = true;
+
+  const subtitleEl = el('span', { class: 'dv-st-subtitle' });
+  const closeBtn = iconButton('close', t('close'), () => {
+    closeDrawer();
+    gearBtn.focus();
+  });
+  closeBtn.classList.add('dv-st-close');
+
+  const headerEl = el('div', { class: 'dv-st-header' }, [
+    el('h2', { class: 'dv-st-title', text: t('settings') }),
+    subtitleEl,
+    closeBtn,
+  ]);
+  const contentEl = el('div', { class: 'dv-st-content' });
+  const openExtLink = el('button', { class: 'dv-st-link', text: t('openExtSettings') });
+  openExtLink.type = 'button';
+  openExtLink.addEventListener('click', () => post({ type: 'openSettings' }));
+  const footerEl = el('div', { class: 'dv-st-footer' }, [
+    el('span', { class: 'dv-st-hint', text: t('appearanceHint') }),
+    openExtLink,
+  ]);
+
+  drawer.append(headerEl, contentEl, footerEl);
+
+  let drawerOpen = false;
+  let draggingId: ToolbarItemId | undefined;
+
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && drawerOpen) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeDrawer();
+      gearBtn.focus();
+    }
+  };
+
+  backdrop.addEventListener('mousedown', () => closeDrawer());
+
+  function slotTitle(id: ToolbarItemId): string {
+    return slotMap.get(id)?.spec.label ?? t(SLOT_LABELS[id]);
+  }
+
+  function localZones(): { left: ToolbarItemId[]; right: ToolbarItemId[]; hidden: ToolbarItemId[] } {
+    const left = currentToolbar.left.filter((id) => supportedIds.has(id));
+    const right = currentToolbar.right.filter((id) => supportedIds.has(id));
+    const pinned = new Set<ToolbarItemId>([...left, ...right]);
+    const hidden = [...supportedIds].filter((id) => !pinned.has(id));
+    return { left, right, hidden };
+  }
+
+  function applyLocalZones(nextLeft: ToolbarItemId[], nextRight: ToolbarItemId[]): void {
+    setToolbarConfig({
+      left: mergeZone(currentToolbar.left, supportedIds, nextLeft),
+      right: mergeZone(currentToolbar.right, supportedIds, nextRight),
+    });
+  }
+
+  function moveItem(
+    id: ToolbarItemId,
+    targetZone: 'left' | 'right' | 'hidden',
+    targetIndex?: number,
+  ): void {
+    const { left, right } = localZones();
+    const nextLeft = left.filter((x) => x !== id);
+    const nextRight = right.filter((x) => x !== id);
+    if (targetZone === 'left') {
+      const idx = targetIndex === undefined ? nextLeft.length : Math.max(0, Math.min(nextLeft.length, targetIndex));
+      nextLeft.splice(idx, 0, id);
+    } else if (targetZone === 'right') {
+      const idx = targetIndex === undefined ? nextRight.length : Math.max(0, Math.min(nextRight.length, targetIndex));
+      nextRight.splice(idx, 0, id);
+    }
+    applyLocalZones(nextLeft, nextRight);
+  }
+
+  function shiftInZone(zone: 'left' | 'right', id: ToolbarItemId, delta: -1 | 1): void {
+    const { left, right } = localZones();
+    const list = zone === 'left' ? [...left] : [...right];
+    const idx = list.indexOf(id);
+    const swap = idx + delta;
+    if (idx < 0 || swap < 0 || swap >= list.length) {
+      return;
+    }
+    [list[idx], list[swap]] = [list[swap], list[idx]];
+    if (zone === 'left') {
+      applyLocalZones(list, right);
+    } else {
+      applyLocalZones(left, list);
+    }
+  }
+
+  function buildZoneList(zone: 'left' | 'right', items: ToolbarItemId[]): HTMLElement {
+    const listEl = el('div', { class: 'dv-tb-list' });
+    listEl.dataset.zone = zone;
+
+    listEl.addEventListener('dragover', (e) => {
+      if (!draggingId) {
+        return;
+      }
+      e.preventDefault();
+      listEl.classList.add('dv-tb-dragover');
+    });
+    listEl.addEventListener('dragleave', (e) => {
+      if (!listEl.contains(e.relatedTarget as Node | null)) {
+        listEl.classList.remove('dv-tb-dragover');
+      }
+    });
+    listEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      listEl.classList.remove('dv-tb-dragover');
+      if (!draggingId) {
+        return;
+      }
+      const id = draggingId;
+      draggingId = undefined;
+      moveItem(id, zone);
+    });
+
+    if (!items.length) {
+      listEl.append(el('div', { class: 'dv-tb-empty', text: t('toolbarEmptyZone') }));
+      return listEl;
+    }
+
+    items.forEach((id, index) => {
+      const row = el('div', { class: 'dv-tb-item' });
+      row.dataset.slotId = id;
+      row.draggable = true;
+
+      const handle = el('span', { class: 'dv-tb-grip' });
+      handle.innerHTML = icons.grip;
+      const name = el('span', { class: 'dv-tb-name', text: slotTitle(id) });
+
+      const switchZoneBtn = iconButton(
+        zone === 'left' ? 'right' : 'left',
+        t(zone === 'left' ? 'toRight' : 'toLeft'),
+        () => moveItem(id, zone === 'left' ? 'right' : 'left'),
+      );
+      switchZoneBtn.classList.add('dv-tb-mini');
+
+      const upBtn = iconButton('up', t('moveUp'), () => shiftInZone(zone, id, -1));
+      upBtn.classList.add('dv-tb-mini');
+      upBtn.disabled = index === 0;
+
+      const downBtn = iconButton('down', t('moveDown'), () => shiftInZone(zone, id, 1));
+      downBtn.classList.add('dv-tb-mini');
+      downBtn.disabled = index === items.length - 1;
+
+      const hideBtn = iconButton('close', t('removeFromBar'), () => moveItem(id, 'hidden'));
+      hideBtn.classList.add('dv-tb-mini');
+
+      row.append(handle, name, el('span', { class: 'dv-tb-btns' }, [switchZoneBtn, upBtn, downBtn, hideBtn]));
+
+      row.addEventListener('dragstart', (e) => {
+        draggingId = id;
+        row.classList.add('dv-tb-dragging');
+        e.dataTransfer?.setData('text/plain', id);
+      });
+      row.addEventListener('dragend', () => {
+        draggingId = undefined;
+        row.classList.remove('dv-tb-dragging');
+      });
+      row.addEventListener('dragover', (e) => {
+        if (!draggingId || draggingId === id) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = row.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        row.classList.toggle('dv-drop-before', before);
+        row.classList.toggle('dv-drop-after', !before);
+      });
+      row.addEventListener('dragleave', () => {
+        row.classList.remove('dv-drop-before', 'dv-drop-after');
+      });
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const rect = row.getBoundingClientRect();
+        const before = e.clientY < rect.top + rect.height / 2;
+        row.classList.remove('dv-drop-before', 'dv-drop-after');
+        listEl.classList.remove('dv-tb-dragover');
+        if (!draggingId || draggingId === id) {
+          return;
+        }
+        const dragged = draggingId;
+        draggingId = undefined;
+        // Adjust target index when moving downward within the same zone.
+        const currentInZone = items.indexOf(dragged);
+        let targetIdx = before ? index : index + 1;
+        if (currentInZone >= 0 && currentInZone < targetIdx) {
+          targetIdx--;
+        }
+        moveItem(dragged, zone, targetIdx);
+      });
+
+      listEl.append(row);
+    });
+
+    return listEl;
+  }
+
+  function buildToolbarSection(): HTMLElement {
+    const { left, right, hidden } = localZones();
+    const resetBtn = el('button', { class: 'dv-st-action-btn dv-tb-reset', text: t('toolbarReset') });
+    resetBtn.type = 'button';
+    resetBtn.addEventListener('click', () => {
+      setToolbarConfig({ left: [...DEFAULT_TOOLBAR.left], right: [...DEFAULT_TOOLBAR.right] });
+    });
+
+    const head = el('div', { class: 'dv-st-head-row' }, [
+      el('h3', { class: 'dv-st-heading', text: t('toolbarSection') }),
+      resetBtn,
+    ]);
+
+    const zonesGrid = el('div', { class: 'dv-tb-zones' }, [
+      el('div', { class: 'dv-tb-col' }, [
+        el('div', { class: 'dv-tb-col-title', text: t('toolbarLeft') }),
+        buildZoneList('left', left),
+      ]),
+      el('div', { class: 'dv-tb-col' }, [
+        el('div', { class: 'dv-tb-col-title', text: t('toolbarRight') }),
+        buildZoneList('right', right),
+        el('div', { class: 'dv-st-muted dv-tb-pin-note', text: t('settingsPinnedHint') }),
+      ]),
+    ]);
+
+    const children: HTMLElement[] = [head, zonesGrid];
+
+    if (hidden.length) {
+      const pool = el('div', { class: 'dv-tb-pool' });
+      for (const id of hidden) {
+        const chip = el('div', { class: 'dv-tb-pool-item' });
+        chip.dataset.slotId = id;
+        chip.draggable = true;
+        chip.addEventListener('dragstart', (e) => {
+          draggingId = id;
+          e.dataTransfer?.setData('text/plain', id);
+        });
+        chip.addEventListener('dragend', () => {
+          draggingId = undefined;
+        });
+
+        const addLeft = el('button', { class: 'dv-tb-pin-btn', text: t('pinLeft'), title: t('toLeft') });
+        addLeft.type = 'button';
+        addLeft.addEventListener('click', () => moveItem(id, 'left'));
+
+        const addRight = el('button', { class: 'dv-tb-pin-btn', text: t('pinRight'), title: t('toRight') });
+        addRight.type = 'button';
+        addRight.addEventListener('click', () => moveItem(id, 'right'));
+
+        chip.append(
+          el('span', { class: 'dv-tb-name', text: slotTitle(id) }),
+          el('span', { class: 'dv-tb-btns' }, [addLeft, addRight]),
+        );
+        pool.append(chip);
+      }
+      children.push(el('div', { class: 'dv-tb-col-title', text: t('toolbarHidden') }), pool);
+    }
+
+    return el('section', { class: 'dv-st-section' }, children);
+  }
+
+  function buildDocumentSection(): HTMLElement | undefined {
+    const visibleActions = (opts.documentActions ?? []).filter((a) => a.visible?.() !== false);
+    const visibleOptions = (opts.documentOptions ?? []).filter((o) => o.visible?.() !== false);
+    if (!visibleActions.length && !visibleOptions.length) {
+      return undefined;
+    }
+    const children: HTMLElement[] = [el('h3', { class: 'dv-st-heading', text: t('thisDocument') })];
+
+    if (visibleActions.length) {
+      const actionGrid = el(
+        'div',
+        { class: 'dv-st-actions' },
+        visibleActions.map((item) => {
+          const btn = el('button', { class: 'dv-st-action-btn' });
+          btn.type = 'button';
+          if (item.icon) {
+            const ic = el('span', { class: 'dv-st-action-icon' });
+            ic.innerHTML = icons[item.icon];
+            btn.append(ic);
+          }
+          btn.append(
+            el('span', { text: typeof item.label === 'function' ? item.label() : item.label }),
+          );
+          if (item.hint) {
+            btn.append(el('span', { class: 'dv-st-muted', text: `(${item.hint})` }));
+          }
+          btn.addEventListener('click', () => {
+            closeDrawer();
+            item.onClick();
+          });
+          return btn;
+        }),
+      );
+      children.push(actionGrid);
+    }
+
+    if (visibleOptions.length) {
+      const optList = el(
+        'div',
+        { class: 'dv-st-options' },
+        visibleOptions.map((opt) => {
+          const box = el('input');
+          box.type = 'checkbox';
+          box.checked = opt.checked();
+          box.addEventListener('change', () => {
+            opt.onChange(box.checked);
+            reconcileBar();
+          });
+          const labelText = typeof opt.label === 'function' ? opt.label() : opt.label;
+          return el('label', { class: 'dv-check' }, [box, el('span', { text: labelText })]);
+        }),
+      );
+      children.push(optList);
+    }
+
+    return el('section', { class: 'dv-st-section' }, children);
+  }
+
+  function renderDrawer(): void {
+    const sub = typeof opts.subtitle === 'function' ? opts.subtitle() : (opts.subtitle ?? config.kind.toUpperCase());
+    subtitleEl.textContent = sub;
+    const scrollTop = contentEl.scrollTop;
+    const docSection = buildDocumentSection();
+    contentEl.replaceChildren(
+      ...(docSection ? [docSection] : []),
+      ...buildAppearanceDrawerSections(),
+      buildToolbarSection(),
+    );
+    contentEl.scrollTop = scrollTop;
+  }
+
+  function ensureDrawerMounted(): void {
+    if (!backdrop.isConnected) {
+      document.body.append(backdrop, drawer);
+    }
+  }
+
+  function openDrawer(): void {
+    ensureDrawerMounted();
+    renderDrawer();
+    drawerOpen = true;
+    backdrop.hidden = false;
+    drawer.hidden = false;
+    // Trigger CSS slide-in transition on next frame.
+    requestAnimationFrame(() => drawer.classList.add('dv-st-open'));
+    gearBtn.setAttribute('aria-expanded', 'true');
+    gearBtn.classList.add('dv-active');
+    window.addEventListener('keydown', onKeyDown, true);
+    closeBtn.focus();
+  }
+
+  function closeDrawer(): void {
+    if (!drawerOpen) {
+      return;
+    }
+    drawerOpen = false;
+    drawer.classList.remove('dv-st-open');
+    backdrop.hidden = true;
+    drawer.hidden = true;
+    gearBtn.setAttribute('aria-expanded', 'false');
+    gearBtn.classList.remove('dv-active');
+    window.removeEventListener('keydown', onKeyDown, true);
+  }
+
+  function refresh(): void {
+    reconcileBar();
+    if (drawerOpen) {
+      renderDrawer();
+    }
+  }
+
+  toolbarListeners.add(refresh);
+  onFileState(refresh);
+  onAppearanceChange(() => {
+    if (drawerOpen) {
+      renderDrawer();
+    }
+  });
+
+  reconcileBar();
+
+  return {
+    node: bar,
+    refresh,
+    openDrawer,
+    closeDrawer,
+  };
+}
+
+/** Legacy positional toolbar helper: puts `nodes` on the left and the Settings gear on the right. */
+export function toolbar(...nodes: (HTMLElement | 'spacer' | '|')[]): HTMLElement {
+  const leftNodes: HTMLElement[] = [];
+  for (const n of nodes) {
+    if (n === 'spacer') {
+      continue;
+    }
+    leftNodes.push(n === '|' ? divider() : n);
+  }
+  return customToolbar({
+    slots: leftNodes.length ? [{ id: 'view', nodes: leftNodes }] : [],
+  }).node;
 }

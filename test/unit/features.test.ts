@@ -1,10 +1,10 @@
 // Sort/filter, format conversion and Markdown export helpers.
 import ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
-import type { Cell } from '../../src/common/protocol';
+import { DEFAULT_TOOLBAR, normalizeToolbarConfig, type Cell } from '../../src/common/protocol';
 import { rowsToDelimited, rowsToXlsx, sanitizeSheetName, workbookToDelimited, workbookToXlsx } from '../../src/host/convert';
 import { parseCsv } from '../../src/host/csv/csvParser';
-import { exportPage, inlineFonts, inlineImages } from '../../src/host/markdown/exportPage';
+import { exportPage, inlineFonts, inlineImages, sanitizeExportHtml } from '../../src/host/markdown/exportPage';
 import { compareCells, emptyView, isActive, numericValue, viewRows, type SheetView } from '../../src/webview/sheet/view';
 
 // ---------------------------------------------------------------- sort & filter
@@ -147,7 +147,52 @@ describe('markdown export', () => {
     expect(page).toContain('<title>Notes &lt;1&gt;</title>');
     expect(page).toContain('<body data-theme="paper" data-scheme="dark" class="dv-dark">');
     expect(page).toContain('<article class="markdown-body" dir="rtl">');
+    expect(page).toContain('http-equiv="Content-Security-Policy"');
+    expect(page).not.toContain('script-src');
     expect(page).not.toContain('window.print');
-    expect(exportPage({ ...base, dark: false, rtl: false, print: true })).toContain('window.print()');
+
+    const printable = exportPage({ ...base, dark: false, rtl: false, lang: 'en', print: true });
+    expect(printable).toContain('<html lang="en">');
+    expect(printable).toContain('window.print()');
+    const nonce = /script-src 'nonce-([^']+)'/.exec(printable)?.[1];
+    expect(nonce).toBeTruthy();
+    expect(printable).toContain(`<script nonce="${nonce}">`);
+  });
+
+  it('strips scripts, active embeds, event handlers and unsafe URLs from exported HTML', () => {
+    const dirty = [
+      '<p onclick="alert(1)" title="ok">Hello</p>',
+      '<scr<script>ipt>evil()</script>ipt>',
+      '<iframe src="https://evil.example"></iframe>',
+      '<img src="data:image/png;base64,AA==" onerror="alert(2)">',
+      '<a href="javascript:alert(3)">bad1</a>',
+      '<a href="&#106;avascript:alert(4)">bad2</a>',
+      '<a href="data:text/html,<script>alert(5)</script>">bad3</a>',
+      '<a href="https://example.com">good</a>',
+    ].join('');
+    const clean = sanitizeExportHtml(dirty);
+    expect(clean).not.toContain('<script');
+    expect(clean).not.toContain('<iframe');
+    expect(clean).not.toContain('onclick');
+    expect(clean).not.toContain('onerror');
+    expect(clean).not.toContain('javascript:');
+    expect(clean).not.toContain('&#106;avascript');
+    expect(clean).not.toContain('data:text/html');
+    expect(clean).toContain('<p title="ok">Hello</p>');
+    expect(clean).toContain('<img src="data:image/png;base64,AA==">');
+    expect(clean).toContain('<a href="https://example.com">good</a>');
+  });
+
+  it('normalises custom toolbar layouts, dropping unknown and duplicate entries', () => {
+    expect(normalizeToolbarConfig(null)).toEqual(DEFAULT_TOOLBAR);
+    expect(
+      normalizeToolbarConfig({
+        left: ['zoom', 'unknown', 'zoom', 'nav'],
+        right: ['nav', 'theme', 'scheme'],
+      }),
+    ).toEqual({
+      left: ['zoom', 'nav'],
+      right: ['theme', 'scheme'],
+    });
   });
 });

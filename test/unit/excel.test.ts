@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { CellObject } from '../../src/common/protocol';
 import { parseCellInput } from '../../src/host/excel/cellInput';
 import { ExcelSession } from '../../src/host/excel/excelSession';
-import { formatNumber, loadWorkbook } from '../../src/host/excel/reader';
+import { dateToSerial, formatNumber, loadWorkbook } from '../../src/host/excel/reader';
 import { patchXlsx } from '../../src/host/excel/xlsxPatcher';
 
 /** A styled workbook plus parts no cell edit should ever touch (stand-ins for a chart and an image). */
@@ -66,6 +66,13 @@ describe('formatNumber', () => {
     expect(formatNumber(15594, '¥#,##0.00')).toBe('¥15,594.00');
     expect(formatNumber(45000, 'yyyy年m月d日')).toBe('2023年3月15日');
     expect(formatNumber(0.1 + 0.2)).toBe('0.3');
+  });
+
+  it('handles 1900 leap-year offset and 1904 date system accurately', () => {
+    expect(formatNumber(dateToSerial(new Date(Date.UTC(1900, 0, 1))), 'yyyy-mm-dd')).toBe('1900-01-01');
+    expect(formatNumber(dateToSerial(new Date(Date.UTC(1900, 1, 28))), 'yyyy-mm-dd')).toBe('1900-02-28');
+    expect(formatNumber(dateToSerial(new Date(Date.UTC(1900, 2, 1))), 'yyyy-mm-dd')).toBe('1900-03-01');
+    expect(formatNumber(0, 'yyyy-mm-dd', true)).toBe('1904-01-01');
   });
 });
 
@@ -132,6 +139,33 @@ describe('patchXlsx', () => {
   it('rejects an unknown sheet instead of silently dropping edits', async () => {
     const original = await makeWorkbook();
     expect(() => patchXlsx(original, new Map([['Missing', [{ r: 0, c: 0, text: 'x' }]]]))).toThrow(/Missing/);
+  });
+
+  it('handles prefixed and non-self-closing <calcPr> and drops stale cell metadata attributes', async () => {
+    const original = await makeWorkbook();
+    const files = unzipSync(original);
+    // Simulate a prefixed workbook XML with a paired <x:calcPr></x:calcPr> and metadata attributes on B2.
+    const origWb = strFromU8(files['xl/workbook.xml']);
+    const rId = /name="Data"[^>]*r:id="([^"]+)"/.exec(origWb)?.[1] ?? 'rId1';
+    files['xl/workbook.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<x:workbook xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        `<x:sheets><x:sheet name="Data" sheetId="1" r:id="${rId}"/></x:sheets>` +
+        '<x:calcPr calcId="191029"></x:calcPr></x:workbook>',
+    );
+    files['xl/worksheets/sheet1.xml'] = strToU8(
+      strFromU8(files['xl/worksheets/sheet1.xml']).replace('<c r="B2"', '<c r="B2" cm="1" vm="2" ph="1"'),
+    );
+    const patched = patchXlsx(zipSync(files), new Map([['Data', [{ r: 1, c: 1, text: '' }]]]));
+    const after = unzipSync(patched);
+    const wbXml = strFromU8(after['xl/workbook.xml']);
+    expect(wbXml.match(/<(?:x:)?calcPr\b/g)).toHaveLength(1);
+    expect(wbXml).toContain('<x:calcPr');
+    expect(wbXml).toContain('calcId="191029"');
+    expect(wbXml).toContain('fullCalcOnLoad="1"');
+    const sheetXml = strFromU8(after['xl/worksheets/sheet1.xml']);
+    expect(sheetXml).not.toMatch(/\b(?:cm|vm|ph)=/);
   });
 });
 

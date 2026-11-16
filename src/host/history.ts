@@ -5,6 +5,11 @@ import * as vscode from 'vscode';
 import { t } from './webviewHtml';
 
 const KEEP = 30;
+/** Skip snapshotting individual files past 25 MB so saving a huge file stays fast. */
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+/** Cap total history storage across all files; oldest snapshots are pruned first. */
+const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
+const ORPHAN_TTL_MS = 7 * 24 * 3600 * 1000;
 const TEXT_EXTENSIONS = new Set(['md', 'markdown', 'csv', 'tsv']);
 const HISTORY_EXTENSIONS = new Set([...TEXT_EXTENSIONS, 'xlsx', 'xlsm']);
 
@@ -65,6 +70,79 @@ export async function listVersions(uri: vscode.Uri): Promise<Version[]> {
   return versions.sort((a, b) => b.time - a.time);
 }
 
+async function pruneGlobalStorage(): Promise<void> {
+  if (!root) {
+    return;
+  }
+  try {
+    const folders = await vscode.workspace.fs.readDirectory(root);
+    const allVersions: { uri: vscode.Uri; folder: vscode.Uri; time: number; size: number }[] = [];
+    let totalBytes = 0;
+    const now = Date.now();
+
+    for (const [dirName, type] of folders) {
+      if (type !== vscode.FileType.Directory) {
+        continue;
+      }
+      const folder = vscode.Uri.joinPath(root, dirName);
+      let entries: [string, vscode.FileType][];
+      try {
+        entries = await vscode.workspace.fs.readDirectory(folder);
+      } catch {
+        continue;
+      }
+      // Remove stale history folders whose source file was deleted/renamed over a week ago.
+      if (entries.some(([n]) => n === 'meta.json')) {
+        try {
+          const meta = JSON.parse(
+            Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder, 'meta.json'))).toString('utf8'),
+          ) as { uri?: string; updatedAt?: number };
+          if (meta.uri && meta.updatedAt && now - meta.updatedAt > ORPHAN_TTL_MS) {
+            try {
+              await vscode.workspace.fs.stat(vscode.Uri.parse(meta.uri));
+            } catch {
+              await vscode.workspace.fs.delete(folder, { recursive: true });
+              continue;
+            }
+          }
+        } catch {
+          // Ignore malformed metadata.
+        }
+      }
+      for (const [name, ftype] of entries) {
+        if (ftype === vscode.FileType.File && /^\d+\./.test(name)) {
+          const file = vscode.Uri.joinPath(folder, name);
+          try {
+            const stat = await vscode.workspace.fs.stat(file);
+            totalBytes += stat.size;
+            allVersions.push({ uri: file, folder, time: parseInt(name, 10), size: stat.size });
+          } catch {
+            // File disappeared concurrently.
+          }
+        }
+      }
+    }
+
+    if (totalBytes <= MAX_TOTAL_BYTES) {
+      return;
+    }
+    allVersions.sort((a, b) => a.time - b.time);
+    for (const item of allVersions) {
+      if (totalBytes <= MAX_TOTAL_BYTES) {
+        break;
+      }
+      try {
+        await vscode.workspace.fs.delete(item.uri);
+        totalBytes -= item.size;
+      } catch {
+        // Ignore concurrent deletion.
+      }
+    }
+  } catch {
+    // Best-effort background cleanup.
+  }
+}
+
 /**
  * Keeps the current on-disk content of `uri` as a version, unless it is identical to the
  * newest one already kept. Never throws: history must not get in the way of saving.
@@ -74,9 +152,13 @@ export async function snapshot(uri: vscode.Uri): Promise<void> {
     return;
   }
   try {
+    const stat = await vscode.workspace.fs.stat(uri);
+    if (stat.size > MAX_FILE_BYTES) {
+      return;
+    }
     const bytes = await vscode.workspace.fs.readFile(uri);
     const versions = await listVersions(uri);
-    if (versions[0]) {
+    if (versions[0] && versions[0].size === bytes.byteLength) {
       const latest = await vscode.workspace.fs.readFile(versions[0].uri);
       if (Buffer.from(latest).equals(Buffer.from(bytes))) {
         return;
@@ -86,9 +168,14 @@ export async function snapshot(uri: vscode.Uri): Promise<void> {
     await vscode.workspace.fs.createDirectory(folder);
     const time = Math.max(Date.now(), (versions[0]?.time ?? 0) + 1);
     await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder, `${time}.${extension(uri)}`), bytes);
+    await vscode.workspace.fs.writeFile(
+      vscode.Uri.joinPath(folder, 'meta.json'),
+      Buffer.from(JSON.stringify({ uri: uri.toString(), updatedAt: time }), 'utf8'),
+    );
     for (const old of versions.slice(KEEP - 1)) {
       await vscode.workspace.fs.delete(old.uri);
     }
+    void pruneGlobalStorage();
   } catch {
     // The file may not exist yet (first save) or storage may be unavailable.
   }

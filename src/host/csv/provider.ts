@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
-import { rowsToDelimited, rowsToXlsx } from '../convert';
 import { saveConverted } from '../fileActions';
 import { configureWebview, debounce, handleCommonMessage, t, onWebviewMessage } from '../webviewHtml';
 import type { TextEdit } from './csvParser';
@@ -92,13 +91,18 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
             sync();
             const rows = session.model().rows as string[][];
             const format = message.format;
-            const bytes =
-              format === 'xlsx'
-                ? rowsToXlsx(rows, name)
-                : Promise.resolve(new TextEncoder().encode(rowsToDelimited(rows, format, eol())));
-            void bytes
-              .then((b) => saveConverted(document.uri, format, b))
-              .catch((err: unknown) => vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)));
+            const currentEol = eol();
+            const run = async () => {
+              const { rowsToDelimited, rowsToXlsx } = await import('../spreadsheet');
+              const bytes =
+                format === 'xlsx'
+                  ? await rowsToXlsx(rows, name)
+                  : new TextEncoder().encode(rowsToDelimited(rows, format, currentEol));
+              await saveConverted(document.uri, format, bytes);
+            };
+            void run().catch((err: unknown) =>
+              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+            );
             break;
           }
           case 'structure':

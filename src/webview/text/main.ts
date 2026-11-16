@@ -2,7 +2,7 @@
 import '../shared/base.css';
 import './text.css';
 import { app, el, onMessage, post, showStatus, t } from '../shared/api';
-import { toolbar } from '../shared/ui';
+import { customToolbar } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 
 const notice = el('div', { class: 'dv-notice', text: t('docNotice') });
@@ -11,7 +11,14 @@ const page = el('div', { class: 'text-page dv-page-invert' });
 stage.append(page);
 
 const zoom = createZoom((value) => page.style.setProperty('zoom', String(value)), stage);
-app.append(toolbar(...zoom.nodes), notice, stage);
+app.append(
+  customToolbar({
+    subtitle: 'DOC',
+    slots: [{ id: 'zoom', nodes: zoom.nodes }],
+  }).node,
+  notice,
+  stage,
+);
 showStatus(page, t('loading'));
 
 onMessage((message) => {

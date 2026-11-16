@@ -5,9 +5,11 @@ import * as XLSX from 'xlsx';
 import type { Cell, CellObject, CellStyle, MergeRange, SheetModel } from '../../common/protocol';
 
 export interface LoadedSheet {
-  model: SheetModel;
+  readonly name: string;
+  readonly date1904?: boolean;
+  readonly model: SheetModel;
   /** Number format per cell ("r,c"), used to format values typed into that cell. */
-  numFmts: Map<string, string>;
+  readonly numFmts: Map<string, string>;
 }
 
 export interface LoadedWorkbook {
@@ -52,9 +54,10 @@ function quoteLiterals(fmt: string): string {
   return cached;
 }
 
-export function formatNumber(value: number, numFmt?: string): string {
+export function formatNumber(value: number, numFmt?: string, date1904 = false): string {
   try {
-    return XLSX.SSF.format(numFmt && numFmt !== 'General' ? quoteLiterals(numFmt) : 'General', value);
+    const fmt = numFmt && numFmt !== 'General' ? quoteLiterals(numFmt) : 'General';
+    return XLSX.SSF.format(fmt, value, date1904 ? ({ date1904: true } as never) : undefined);
   } catch {
     return String(value);
   }
@@ -131,74 +134,109 @@ function borderCss(side: { style?: string; color?: ColorLike } | undefined): str
   return `${BORDER_CSS[side.style]} #${toHex(side.color) ?? '000000'}`;
 }
 
+function styleKey(s: CellStyle): string {
+  return `${s.bold ? 1 : 0}|${s.italic ? 1 : 0}|${s.underline ? 1 : 0}|${s.strike ? 1 : 0}|${s.color ?? ''}|${s.bg ?? ''}|${s.align ?? ''}|${s.valign ?? ''}|${s.fontSize ?? ''}|${s.wrap ? 1 : 0}|${s.bt ?? ''}|${s.br ?? ''}|${s.bb ?? ''}|${s.bl ?? ''}`;
+}
+
 function convertStyle(cell: ExcelJS.Cell): CellStyle | undefined {
-  const style: CellStyle = {};
   const font = cell.font;
+  const fill = cell.fill;
+  const alignment = cell.alignment;
+  const border = cell.border;
+  if (!font && !fill && !alignment && !border) {
+    return undefined;
+  }
+  const style: CellStyle = {};
+  let hasAny = false;
   if (font) {
     if (font.bold) {
       style.bold = true;
+      hasAny = true;
     }
     if (font.italic) {
       style.italic = true;
+      hasAny = true;
     }
     if (font.underline && font.underline !== 'none') {
       style.underline = true;
+      hasAny = true;
     }
     if (font.strike) {
       style.strike = true;
+      hasAny = true;
     }
     const color = toHex(font.color as ColorLike | undefined);
     // Default text colour is left to the theme so plain workbooks follow dark mode.
     if (color && color !== '000000') {
       style.color = `#${color}`;
+      hasAny = true;
     }
     if (font.size && font.size !== 11) {
       style.fontSize = Math.round((font.size * 96) / 72);
+      hasAny = true;
     }
   }
-  const fill = cell.fill;
   if (fill && fill.type === 'pattern' && fill.pattern === 'solid') {
     const bg = toHex(fill.fgColor as ColorLike | undefined);
     if (bg && bg !== 'FFFFFF') {
       style.bg = `#${bg}`;
+      hasAny = true;
     }
   }
-  const alignment = cell.alignment;
   if (alignment) {
     const h = alignment.horizontal;
     if (h === 'left' || h === 'right' || h === 'center') {
       style.align = h;
+      hasAny = true;
     } else if (h === 'centerContinuous') {
       style.align = 'center';
+      hasAny = true;
     }
     const v = alignment.vertical;
     if (v === 'top' || v === 'bottom' || v === 'middle') {
       style.valign = v;
+      hasAny = true;
     }
     if (alignment.wrapText) {
       style.wrap = true;
+      hasAny = true;
     }
   }
-  const border = cell.border;
   if (border) {
-    style.bt = borderCss(border.top as never);
-    style.br = borderCss(border.right as never);
-    style.bb = borderCss(border.bottom as never);
-    style.bl = borderCss(border.left as never);
-  }
-  for (const key of Object.keys(style) as (keyof CellStyle)[]) {
-    if (style[key] === undefined) {
-      delete style[key];
+    const bt = borderCss(border.top as never);
+    const br = borderCss(border.right as never);
+    const bb = borderCss(border.bottom as never);
+    const bl = borderCss(border.left as never);
+    if (bt) {
+      style.bt = bt;
+      hasAny = true;
+    }
+    if (br) {
+      style.br = br;
+      hasAny = true;
+    }
+    if (bb) {
+      style.bb = bb;
+      hasAny = true;
+    }
+    if (bl) {
+      style.bl = bl;
+      hasAny = true;
     }
   }
-  return Object.keys(style).length ? style : undefined;
+  return hasAny ? style : undefined;
 }
 
 // ---------------------------------------------------------------- exceljs
 
-/** exceljs yields dates as UTC-midnight Date objects; convert back to an Excel serial. */
-function dateToSerial(date: Date): number {
-  return date.getTime() / 86_400_000 + 25569;
+/**
+ * exceljs yields dates as UTC-midnight Date objects (already adjusted for date1904);
+ * convert back to a 1900-based Excel serial for SSF formatting, accounting for the
+ * Lotus 1-2-3 non-existent 1900-02-29 (serial 60) offset.
+ */
+export function dateToSerial(date: Date): number {
+  const serial = date.getTime() / 86_400_000 + 25569;
+  return serial < 61 ? serial - 1 : serial;
 }
 
 function richText(value: { richText: { text: string }[] }): string {
@@ -286,156 +324,198 @@ function fillHoles(row: Cell[], length: number): Cell[] {
   return row;
 }
 
+function buildExcelJsSheet(ws: ExcelJS.Worksheet): { model: SheetModel; numFmts: Map<string, string> } {
+  const styles: CellStyle[] = [];
+  const styleKeys = new Map<string, number>();
+  const styleIndex = (style: CellStyle) => {
+    const key = styleKey(style);
+    let index = styleKeys.get(key);
+    if (index === undefined) {
+      index = styles.push(style) - 1;
+      styleKeys.set(key, index);
+    }
+    return index;
+  };
+
+  const rows: Cell[][] = [];
+  const numFmts = new Map<string, string>();
+  const rowHeights: Record<number, number> = {};
+  let usedCols = 0;
+
+  ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const r = rowNumber - 1;
+    const out: Cell[] = [];
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      // Cells swallowed by a merge mirror the master's value; the grid draws only the master.
+      if (cell.isMerged && cell.master !== cell) {
+        return;
+      }
+      const c = colNumber - 1;
+      const converted = convertCell(cell, styleIndex);
+      out[c] = converted.cell;
+      if (converted.numFmt) {
+        numFmts.set(`${r},${c}`, converted.numFmt);
+      }
+    });
+    usedCols = Math.max(usedCols, out.length);
+    rows[r] = fillHoles(out, out.length);
+    if (row.height) {
+      rowHeights[r] = Math.max(8, Math.round((row.height * 96) / 72));
+    }
+  });
+  for (let r = 0; r < rows.length; r++) {
+    rows[r] ??= [];
+  }
+
+  const merges: MergeRange[] = [];
+  const rawMerges = (ws as unknown as { _merges?: Record<string, unknown> })._merges ?? {};
+  for (const entry of Object.values(rawMerges)) {
+    const m = ((entry as { model?: unknown }).model ?? entry) as {
+      top: number;
+      left: number;
+      bottom: number;
+      right: number;
+    };
+    if (m && m.bottom >= m.top && m.right >= m.left) {
+      merges.push({ r: m.top - 1, c: m.left - 1, rs: m.bottom - m.top + 1, cs: m.right - m.left + 1 });
+      usedCols = Math.max(usedCols, m.right);
+    }
+  }
+
+  usedCols = Math.max(usedCols, ws.columnCount);
+  const colCount = Math.max(usedCols + EXTRA_COLS, 10);
+  const rowCount = Math.max(Math.max(rows.length, ws.rowCount) + EXTRA_ROWS, 40);
+
+  let anyWidth = false;
+  const colWidths: (number | null)[] = [];
+  for (let c = 0; c < colCount; c++) {
+    const width = c < usedCols ? ws.getColumn(c + 1).width : undefined;
+    if (width) {
+      anyWidth = true;
+      colWidths.push(Math.max(8, Math.round(width * 7 + 5)));
+    } else {
+      colWidths.push(null);
+    }
+  }
+
+  const view = ws.views?.[0] as { state?: string; xSplit?: number; ySplit?: number } | undefined;
+  const model: SheetModel = { name: ws.name, rowCount, colCount, rows };
+  if (styles.length) {
+    model.styles = styles;
+  }
+  if (anyWidth) {
+    model.colWidths = colWidths;
+  }
+  if (Object.keys(rowHeights).length) {
+    model.rowHeights = rowHeights;
+  }
+  if (merges.length) {
+    model.merges = merges;
+  }
+  if (view?.state === 'frozen') {
+    model.frozenRows = view.ySplit || 0;
+    model.frozenCols = view.xSplit || 0;
+  }
+  return { model, numFmts };
+}
+
+function lazySheet(
+  name: string,
+  date1904: boolean,
+  factory: () => { model: SheetModel; numFmts: Map<string, string> },
+): LoadedSheet {
+  let built: { model: SheetModel; numFmts: Map<string, string> } | undefined;
+  let build: (() => { model: SheetModel; numFmts: Map<string, string> }) | undefined = factory;
+  const ensure = () => {
+    if (!built) {
+      built = build!();
+      build = undefined;
+    }
+    return built;
+  };
+  return {
+    name,
+    date1904,
+    get model() {
+      return ensure().model;
+    },
+    get numFmts() {
+      return ensure().numFmts;
+    },
+  };
+}
+
 async function loadWithExcelJs(bytes: Uint8Array): Promise<LoadedWorkbook> {
   const workbook = new ExcelJS.Workbook();
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   await workbook.xlsx.load(buffer);
-
-  const sheets: LoadedSheet[] = [];
-  for (const ws of workbook.worksheets) {
-    const styles: CellStyle[] = [];
-    const styleKeys = new Map<string, number>();
-    const styleIndex = (style: CellStyle) => {
-      const key = JSON.stringify(style);
-      let index = styleKeys.get(key);
-      if (index === undefined) {
-        index = styles.push(style) - 1;
-        styleKeys.set(key, index);
-      }
-      return index;
-    };
-
-    const rows: Cell[][] = [];
-    const numFmts = new Map<string, string>();
-    const rowHeights: Record<number, number> = {};
-    let usedCols = 0;
-
-    ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-      const r = rowNumber - 1;
-      const out: Cell[] = [];
-      row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-        // Cells swallowed by a merge mirror the master's value; the grid draws only the master.
-        if (cell.isMerged && cell.master !== cell) {
-          return;
-        }
-        const c = colNumber - 1;
-        const converted = convertCell(cell, styleIndex);
-        out[c] = converted.cell;
-        if (converted.numFmt) {
-          numFmts.set(`${r},${c}`, converted.numFmt);
-        }
-      });
-      usedCols = Math.max(usedCols, out.length);
-      rows[r] = fillHoles(out, out.length);
-      if (row.height) {
-        rowHeights[r] = Math.max(8, Math.round((row.height * 96) / 72));
-      }
+  const date1904 = Boolean((workbook.properties as { date1904?: boolean } | undefined)?.date1904);
+  const sheets = workbook.worksheets.map((ws) => {
+    let ref: ExcelJS.Worksheet | undefined = ws;
+    return lazySheet(ws.name, date1904, () => {
+      const out = buildExcelJsSheet(ref!);
+      ref = undefined;
+      return out;
     });
-    for (let r = 0; r < rows.length; r++) {
-      rows[r] ??= [];
-    }
-
-    const merges: MergeRange[] = [];
-    const rawMerges = (ws as unknown as { _merges?: Record<string, unknown> })._merges ?? {};
-    for (const entry of Object.values(rawMerges)) {
-      const m = ((entry as { model?: unknown }).model ?? entry) as {
-        top: number;
-        left: number;
-        bottom: number;
-        right: number;
-      };
-      if (m && m.bottom >= m.top && m.right >= m.left) {
-        merges.push({ r: m.top - 1, c: m.left - 1, rs: m.bottom - m.top + 1, cs: m.right - m.left + 1 });
-        usedCols = Math.max(usedCols, m.right);
-      }
-    }
-
-    usedCols = Math.max(usedCols, ws.columnCount);
-    const colCount = Math.max(usedCols + EXTRA_COLS, 10);
-    const rowCount = Math.max(Math.max(rows.length, ws.rowCount) + EXTRA_ROWS, 40);
-
-    let anyWidth = false;
-    const colWidths: (number | null)[] = [];
-    for (let c = 0; c < colCount; c++) {
-      const width = c < usedCols ? ws.getColumn(c + 1).width : undefined;
-      if (width) {
-        anyWidth = true;
-        colWidths.push(Math.max(8, Math.round(width * 7 + 5)));
-      } else {
-        colWidths.push(null);
-      }
-    }
-
-    const view = ws.views?.[0] as { state?: string; xSplit?: number; ySplit?: number } | undefined;
-    const model: SheetModel = { name: ws.name, rowCount, colCount, rows };
-    if (styles.length) {
-      model.styles = styles;
-    }
-    if (anyWidth) {
-      model.colWidths = colWidths;
-    }
-    if (Object.keys(rowHeights).length) {
-      model.rowHeights = rowHeights;
-    }
-    if (merges.length) {
-      model.merges = merges;
-    }
-    if (view?.state === 'frozen') {
-      model.frozenRows = view.ySplit || 0;
-      model.frozenCols = view.xSplit || 0;
-    }
-    sheets.push({ model, numFmts });
-  }
+  });
   return { sheets, editable: true };
 }
 
 // ---------------------------------------------------------------- SheetJS
 
+function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet): { model: SheetModel; numFmts: Map<string, string> } {
+  const data = ((ws as unknown as Record<string, unknown>)['!data'] ?? []) as (XLSX.CellObject | undefined)[][];
+  let usedCols = 0;
+  const rows: Cell[][] = [];
+  for (let r = 0; r < data.length; r++) {
+    const src = data[r] ?? [];
+    const out: Cell[] = [];
+    for (let c = 0; c < src.length; c++) {
+      const cell = src[c];
+      if (!cell || cell.t === 'z') {
+        out.push(null);
+        continue;
+      }
+      const text = cell.w ?? (cell.v === undefined ? '' : String(cell.v));
+      const numeric = cell.t === 'n' || cell.t === 'd';
+      out.push(cell.f || numeric ? { v: text, raw: cell.f ? `=${cell.f}` : undefined, n: numeric || undefined } : text);
+    }
+    usedCols = Math.max(usedCols, out.length);
+    rows.push(out);
+  }
+  const merges: MergeRange[] = (ws['!merges'] ?? []).map((m) => ({
+    r: m.s.r,
+    c: m.s.c,
+    rs: m.e.r - m.s.r + 1,
+    cs: m.e.c - m.s.c + 1,
+  }));
+  const cols = ws['!cols'];
+  const model: SheetModel = {
+    name,
+    rowCount: Math.max(rows.length, 1),
+    colCount: Math.max(usedCols, 1),
+    rows,
+  };
+  if (merges.length) {
+    model.merges = merges;
+  }
+  if (cols?.some((col) => col?.wpx)) {
+    model.colWidths = Array.from({ length: model.colCount }, (_, c) => cols[c]?.wpx ?? null);
+  }
+  return { model, numFmts: new Map() };
+}
+
 function loadWithSheetJs(bytes: Uint8Array): LoadedWorkbook {
   const workbook = XLSX.read(bytes, { type: 'array', dense: true, cellText: true, cellFormula: true });
-  const sheets: LoadedSheet[] = [];
-  for (const name of workbook.SheetNames) {
-    const ws = workbook.Sheets[name];
-    const data = ((ws as unknown as Record<string, unknown>)['!data'] ?? []) as (XLSX.CellObject | undefined)[][];
-    let usedCols = 0;
-    const rows: Cell[][] = [];
-    for (let r = 0; r < data.length; r++) {
-      const src = data[r] ?? [];
-      const out: Cell[] = [];
-      for (let c = 0; c < src.length; c++) {
-        const cell = src[c];
-        if (!cell || cell.t === 'z') {
-          out.push(null);
-          continue;
-        }
-        const text = cell.w ?? (cell.v === undefined ? '' : String(cell.v));
-        const numeric = cell.t === 'n' || cell.t === 'd';
-        out.push(cell.f || numeric ? { v: text, raw: cell.f ? `=${cell.f}` : undefined, n: numeric || undefined } : text);
-      }
-      usedCols = Math.max(usedCols, out.length);
-      rows.push(out);
-    }
-    const merges: MergeRange[] = (ws['!merges'] ?? []).map((m) => ({
-      r: m.s.r,
-      c: m.s.c,
-      rs: m.e.r - m.s.r + 1,
-      cs: m.e.c - m.s.c + 1,
-    }));
-    const cols = ws['!cols'];
-    const model: SheetModel = {
-      name,
-      rowCount: Math.max(rows.length, 1),
-      colCount: Math.max(usedCols, 1),
-      rows,
-    };
-    if (merges.length) {
-      model.merges = merges;
-    }
-    if (cols?.some((col) => col?.wpx)) {
-      model.colWidths = Array.from({ length: model.colCount }, (_, c) => cols[c]?.wpx ?? null);
-    }
-    sheets.push({ model, numFmts: new Map() });
-  }
+  const date1904 = Boolean(workbook.Workbook?.WBProps?.date1904);
+  const sheets = workbook.SheetNames.map((name) => {
+    let ref: XLSX.WorkSheet | undefined = workbook.Sheets[name];
+    return lazySheet(name, date1904, () => {
+      const out = buildSheetJsSheet(name, ref!);
+      ref = undefined;
+      return out;
+    });
+  });
   return { sheets, editable: false };
 }
 

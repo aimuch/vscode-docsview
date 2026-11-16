@@ -51,8 +51,9 @@ describe("package.json", () => {
     });
   });
 
-  it("depends on no other extension", () => {
+  it("depends on no other extension and activates non-blockingly after startup", () => {
     expect(pkg.extensionDependencies ?? []).toEqual([]);
     expect(pkg.extensionPack ?? []).toEqual([]);
+    expect(pkg.activationEvents).toContain("onStartupFinished");
   });
 });

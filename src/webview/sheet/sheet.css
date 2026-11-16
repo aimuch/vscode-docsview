@@ -7,7 +7,7 @@
 
 .sheet-address {
   flex: none;
-  min-width: 64px;
+  min-width: 48px;
   padding: 0 6px;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
@@ -35,6 +35,8 @@
 .sheet-tabs {
   flex: none;
   display: flex;
+  align-items: center;
+  min-height: 24px;
   gap: 2px;
   padding: 3px 8px;
   overflow-x: auto;
@@ -75,10 +77,6 @@
 
 .sheet-find-icon {
   display: flex;
-}
-
-.sheet-address {
-  min-width: 48px;
 }
 
 /* Sort / filter status chip. */
@@ -139,11 +137,6 @@
   gap: 2px;
   min-width: 0;
   overflow-x: auto;
-}
-
-.sheet-tabs {
-  align-items: center;
-  min-height: 24px;
 }
 
 .sheet-tabs > .dv-label {

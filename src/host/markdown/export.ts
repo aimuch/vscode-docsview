@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 import type { ThemeId } from '../../common/protocol';
-import { exportPage, inlineFonts, inlineImages } from './exportPage';
+import { exportPage, inlineFonts, inlineImages, sanitizeExportHtml } from './exportPage';
 import { askSaveLocation } from '../fileActions';
-import { parentUri, t } from '../webviewHtml';
+import { lang, parentUri, t } from '../webviewHtml';
 
 export interface ExportRequest {
   format: 'html' | 'pdf';
@@ -15,6 +15,17 @@ export interface ExportRequest {
   theme: ThemeId;
   dark: boolean;
   rtl: boolean;
+}
+
+/** Ensures a resolved resource URI stays inside one of the roots the webview itself can read. */
+function isUnderAllowedRoot(target: vscode.Uri, allowedRoots: vscode.Uri[]): boolean {
+  return allowedRoots.some((root) => {
+    if (target.scheme !== root.scheme || target.authority !== root.authority) {
+      return false;
+    }
+    const base = root.path.endsWith('/') ? root.path : `${root.path}/`;
+    return target.path === root.path || target.path.startsWith(base);
+  });
 }
 
 export async function exportMarkdown(extensionUri: vscode.Uri, docUri: vscode.Uri, request: ExportRequest): Promise<void> {
@@ -32,17 +43,31 @@ export async function exportMarkdown(extensionUri: vscode.Uri, docUri: vscode.Ur
   }
   const css = inlineFonts(Buffer.from(cssBytes).toString('utf8'), (path) => fonts.get(path));
   const docDir = parentUri(docUri);
-  const body = await inlineImages(request.html, async (path) => {
+  const wsRoot = vscode.workspace.getWorkspaceFolder(docUri)?.uri ?? docDir;
+  const allowedRoots = [docDir, ...(vscode.workspace.workspaceFolders?.map((f) => f.uri) ?? [])];
+  const sanitized = sanitizeExportHtml(request.html);
+  const body = await inlineImages(sanitized, async (path) => {
     try {
-      return await vscode.workspace.fs.readFile(
-        path.startsWith('/') ? vscode.Uri.file(path) : vscode.Uri.joinPath(docDir, path),
-      );
+      const resolved = path.startsWith('/')
+        ? vscode.Uri.joinPath(wsRoot, path)
+        : vscode.Uri.joinPath(docDir, path);
+      if (!isUnderAllowedRoot(resolved, allowedRoots)) {
+        return undefined;
+      }
+      return await vscode.workspace.fs.readFile(resolved);
     } catch {
       return undefined;
     }
   });
   const name = docUri.path.slice(docUri.path.lastIndexOf('/') + 1);
-  const page = exportPage({ ...request, title: name.replace(/\.[^.]+$/, ''), css, body, print: request.format === 'pdf' });
+  const page = exportPage({
+    ...request,
+    title: name.replace(/\.[^.]+$/, ''),
+    css,
+    body,
+    lang: lang(),
+    print: request.format === 'pdf',
+  });
 
   if (request.format === 'html') {
     const target = await askSaveLocation(docUri, 'html', 'HTML');
