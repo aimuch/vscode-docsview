@@ -15,8 +15,8 @@ if (!Number.isInteger(run) || run < 0) {
 
 const file = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
 const pkg = JSON.parse(readFileSync(file, 'utf8'));
-const [major, minor] = String(pkg.version).split('.');
-pkg.version = `${Number(major)}.${Number(minor)}.${run}`;
+const [major, minor, patch = '0'] = String(pkg.version).split('.');
+pkg.version = `${Number(major)}.${Number(minor)}.${Math.max(Number(patch) || 0, run)}`;
 writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
 
 console.log(pkg.version);

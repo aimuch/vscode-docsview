@@ -127,12 +127,45 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
               }
               break;
             }
-            post(result.message);
+            result.messages.forEach(post);
             this.changeEmitter.fire({
               document,
               label: 'Edit cells',
-              undo: () => document.post(result.undo()),
-              redo: () => document.post(result.redo()),
+              undo: () => result.undo().forEach((m) => document.post(m)),
+              redo: () => result.redo().forEach((m) => document.post(m)),
+            });
+            break;
+          }
+          case 'structure': {
+            const result = session?.structure(message.index, message.op, message.at, message.count);
+            if (!result) {
+              break;
+            }
+            result.messages.forEach(post);
+            this.changeEmitter.fire({
+              document,
+              label: message.op,
+              undo: () => result.undo().forEach((m) => document.post(m)),
+              redo: () => result.redo().forEach((m) => document.post(m)),
+            });
+            break;
+          }
+          case 'sheetOp': {
+            const result =
+              message.op === 'add'
+                ? session?.addSheet(message.name)
+                : message.op === 'rename'
+                  ? session?.renameSheet(message.index, message.name)
+                  : session?.deleteSheet(message.index);
+            if (!result) {
+              break;
+            }
+            result.messages.forEach(post);
+            this.changeEmitter.fire({
+              document,
+              label: `Sheet: ${message.op}`,
+              undo: () => result.undo().forEach((m) => document.post(m)),
+              redo: () => result.redo().forEach((m) => document.post(m)),
             });
             break;
           }

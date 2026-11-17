@@ -151,39 +151,61 @@ export async function runEditingChecks(api: Api, samples: string, work: string, 
 
   await check(results, 'markdown: split, preview, source buttons', 'docsview.markdown', async () => {
     const uri = vscode.Uri.file(join(samples, 'demo.md'));
-    await open(api, uri, 'docsview.markdown');
+    const config = vscode.workspace.getConfiguration('docsview');
+    try {
+      await config.update('markdown.splitPosition', 'sourceLeft', vscode.ConfigurationTarget.Global);
+      await open(api, uri, 'docsview.markdown');
 
-    send(api, uri, { type: 'showSource', beside: true }, 'markdown');
-    await waitFor('text editor beside the preview', () => {
-      const { text, custom } = tabs(uri);
-      return text.length === 1 && custom.length === 1 && text[0].group !== custom[0].group;
-    });
+      // Default splitPosition ('sourceLeft'): clicking Split inside preview puts Source left, Preview right.
+      send(api, uri, { type: 'showSource', beside: true }, 'markdown');
+      await waitFor('source left, preview right from preview toolbar', () => {
+        const { text, custom } = tabs(uri);
+        return text.length === 1 && custom.length === 1 && text[0].group.viewColumn < custom[0].group.viewColumn;
+      });
 
-    send(api, uri, { type: 'closeSource' }, 'markdown');
-    await waitFor('text editor closed, preview kept', () => {
-      const { text, custom } = tabs(uri);
-      return text.length === 0 && custom.length === 1;
-    });
+      // Live-switching splitPosition to 'previewLeft' swaps panes so Preview is left, Source is right.
+      await config.update('markdown.splitPosition', 'previewLeft', vscode.ConfigurationTarget.Global);
+      await waitFor('preview left, source right after setting change', () => {
+        const { text, custom } = tabs(uri);
+        return text.length === 1 && custom.length === 1 && custom[0].group.viewColumn < text[0].group.viewColumn;
+      });
 
-    send(api, uri, { type: 'showSource', beside: false }, 'markdown');
-    await waitFor('text editor in the preview group', () => {
-      const { text, custom } = tabs(uri);
-      const active = vscode.window.tabGroups.activeTabGroup.activeTab;
-      return text.length === 1 && custom.length === 1 && text[0].group === custom[0].group && active === text[0];
-    });
+      send(api, uri, { type: 'closeSource' }, 'markdown');
+      await waitFor('text editor closed, preview kept', () => {
+        const { text, custom } = tabs(uri);
+        return text.length === 0 && custom.length === 1;
+      });
 
-    // From the text editor, the title-bar buttons bring the preview back.
-    const previewActive = () => {
-      const active = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
-      return active instanceof vscode.TabInputCustom && active.uri.toString() === uri.toString();
-    };
-    await vscode.commands.executeCommand('docsview.showPreview');
-    await waitFor('"open preview" switches back to the preview', previewActive);
+      send(api, uri, { type: 'showSource', beside: false }, 'markdown');
+      await waitFor('text editor in the preview group', () => {
+        const { text, custom } = tabs(uri);
+        const active = vscode.window.tabGroups.activeTabGroup.activeTab;
+        return text.length === 1 && custom.length === 1 && text[0].group === custom[0].group && active === text[0];
+      });
 
-    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
-    await vscode.commands.executeCommand('docsview.showPreviewToSide');
-    await waitFor('"open preview to the side" shows the preview', previewActive);
-    return 'split opens beside, preview closes it, source opens in place, title-bar buttons switch back';
+      // From the text editor, the title-bar buttons bring the preview back and honour splitPosition.
+      const previewActive = () => {
+        const active = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+        return active instanceof vscode.TabInputCustom && active.uri.toString() === uri.toString();
+      };
+      await vscode.commands.executeCommand('docsview.showPreview');
+      await waitFor('"open preview" switches back to the preview', previewActive);
+
+      await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+      await vscode.commands.executeCommand('docsview.showPreviewToSide');
+      await waitFor('"open preview to the side" honours previewLeft', () => {
+        const { text, custom } = tabs(uri);
+        return (
+          previewActive() &&
+          text.length === 1 &&
+          custom.length === 1 &&
+          custom[0].group.viewColumn < text[0].group.viewColumn
+        );
+      });
+      return 'split honours sourceLeft/previewLeft from both toolbars, preview closes it, source opens in place';
+    } finally {
+      await config.update('markdown.splitPosition', undefined, vscode.ConfigurationTarget.Global);
+    }
   });
 
   await check(results, 'csv: text button', 'docsview.csv', async () => {

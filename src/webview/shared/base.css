@@ -281,11 +281,50 @@ body {
 
 .dv-notice {
   flex: none;
-  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px 4px 12px;
   font-size: 12px;
   color: var(--vscode-editorInfo-foreground, var(--vscode-foreground));
   background: var(--vscode-inputValidation-infoBackground, rgba(0, 120, 215, 0.12));
   border-bottom: 1px solid var(--dv-border);
+}
+
+.dv-notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.dv-notice-mute {
+  flex: none;
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: inherit;
+  opacity: 0.8;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dv-notice-mute:hover {
+  opacity: 1;
+  background: rgba(128, 128, 128, 0.15);
+}
+
+.dv-notice-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: inherit;
+  opacity: 0.75;
+}
+
+.dv-notice-close:hover {
+  opacity: 1;
 }
 
 .dv-status {
@@ -541,7 +580,7 @@ body {
 
 .dv-side {
   flex: none;
-  width: 250px;
+  width: 244px;
   max-width: 45%;
   min-height: 0;
   display: flex;
@@ -550,15 +589,74 @@ body {
   border-right: 1px solid var(--dv-border);
 }
 
+@media (max-width: 720px) {
+  .dv-side {
+    width: 196px;
+  }
+}
+
+.dv-side-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 32px;
+  padding: 0 4px 0 12px;
+  border-bottom: 1px solid var(--dv-border);
+}
+
+.dv-side-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dv-side-collapse {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  opacity: 0.75;
+}
+
+.dv-side-collapse:hover {
+  opacity: 1;
+}
+
+.dv-side-expand {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 12;
+  width: 28px;
+  height: 28px;
+  background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+  border: 1px solid var(--dv-border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.18));
+  opacity: 0.72;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.dv-side-expand:hover {
+  opacity: 1;
+  border-color: var(--vscode-focusBorder);
+}
+
 .dv-side-tabs {
   flex: none;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
+  display: flex;
+  align-items: center;
+  padding-right: 4px;
   border-bottom: 1px solid var(--dv-border);
 }
 
 .dv-side-tab {
+  flex: 1;
+  min-width: 0;
   height: 32px;
   font: inherit;
   border: 0;

@@ -1,7 +1,7 @@
 // Collapsible navigation sidebar (optionally tabbed) and the outline tree shown in it.
 import { el, getState, setState, t } from './api';
 import { icons } from './icons';
-import { toggleButton } from './ui';
+import { iconButton, toggleButton } from './ui';
 
 interface PersistedState {
   sidebar?: { open: boolean; tab?: string };
@@ -19,17 +19,27 @@ export function writeState(patch: Partial<PersistedState>): void {
 export class Sidebar {
   readonly node: HTMLElement;
   readonly toggle: HTMLButtonElement;
+  /** Floating button rendered inside `.dv-main` when the sidebar is collapsed. */
+  readonly expandBtn: HTMLButtonElement;
   private readonly panels = new Map<string, HTMLElement>();
   private readonly tabButtons = new Map<string, HTMLButtonElement>();
   private readonly setToggle: (on: boolean) => void;
   private tab: string;
   private tabListeners: ((tab: string) => void)[] = [];
 
-  constructor(label: string, tabs: { id: string; label: string }[] = [{ id: 'main', label }]) {
+  constructor(
+    label: string,
+    tabs: { id: string; label: string }[] = [{ id: 'main', label }],
+    opts: { defaultOpen?: boolean } = {},
+  ) {
     this.node = el('aside', { class: 'dv-side' });
     this.node.setAttribute('aria-label', label);
     const saved = readState().sidebar;
     this.tab = saved?.tab && tabs.some((x) => x.id === saved.tab) ? saved.tab : tabs[0].id;
+
+    const collapseBtn = iconButton('sidebarCollapse', t('collapseSidebar'), () => this.setOpen(false));
+    collapseBtn.classList.add('dv-side-collapse');
+    collapseBtn.setAttribute('aria-label', t('collapseSidebar'));
 
     if (tabs.length > 1) {
       const tablist = el('div', { class: 'dv-side-tabs' });
@@ -42,7 +52,14 @@ export class Sidebar {
         this.tabButtons.set(tab.id, b);
         tablist.append(b);
       }
+      tablist.append(collapseBtn);
       this.node.append(tablist);
+    } else {
+      const head = el('div', { class: 'dv-side-head' }, [
+        el('span', { class: 'dv-side-title', text: label }),
+        collapseBtn,
+      ]);
+      this.node.append(head);
     }
     for (const tab of tabs) {
       const panel = el('div', { class: 'dv-side-panel' });
@@ -51,11 +68,16 @@ export class Sidebar {
       this.node.append(panel);
     }
 
+    this.expandBtn = iconButton('sidebarExpand', t('expandSidebar'), () => this.setOpen(true));
+    this.expandBtn.classList.add('dv-side-expand');
+    this.expandBtn.setAttribute('aria-label', t('expandSidebar'));
+
     const toggle = toggleButton('sidebar', label, (on) => this.setOpen(on));
     this.toggle = toggle.node;
     this.setToggle = toggle.set;
-    // Open by default on a roomy pane; afterwards remember the user's choice.
-    this.setOpen(saved?.open ?? window.innerWidth >= 900, false);
+    // Open by default when `defaultOpen` is true (e.g. Markdown) or on a roomy pane; remember user's choice.
+    const defaultOpen = opts.defaultOpen ?? window.innerWidth >= 900;
+    this.setOpen(saved?.open ?? defaultOpen, false);
     this.setTab(this.tab, false);
   }
 
@@ -77,6 +99,7 @@ export class Sidebar {
 
   setOpen(open: boolean, persist = true): void {
     this.node.hidden = !open;
+    this.expandBtn.hidden = open;
     this.setToggle(open);
     if (persist) {
       writeState({ sidebar: { open, tab: this.tab } });

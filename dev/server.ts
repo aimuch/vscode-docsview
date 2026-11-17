@@ -65,6 +65,16 @@ function kindFor(file: string): { kind: ViewerKind; engine: 'markdown' | 'csv' |
       return { kind: 'pdf', engine: 'binary' };
     case '.pptx':
       return { kind: 'pptx', engine: 'binary' };
+    case '.png':
+    case '.jpg':
+    case '.jpeg':
+    case '.webp':
+    case '.gif':
+    case '.bmp':
+    case '.svg':
+    case '.ico':
+    case '.avif':
+      return { kind: 'image', engine: 'binary' };
     default:
       return undefined;
   }
@@ -182,7 +192,30 @@ function createSession(file: string): Session {
             }
             undoStack.push(result);
             redoStack.length = 0;
-            return [result.message];
+            return result.messages;
+          }
+          case 'structure': {
+            const result = session?.structure(message.index, message.op, message.at, message.count);
+            if (!result) {
+              return [];
+            }
+            undoStack.push(result);
+            redoStack.length = 0;
+            return result.messages;
+          }
+          case 'sheetOp': {
+            const result =
+              message.op === 'add'
+                ? session?.addSheet(message.name)
+                : message.op === 'rename'
+                  ? session?.renameSheet(message.index, message.name)
+                  : session?.deleteSheet(message.index);
+            if (!result) {
+              return [];
+            }
+            undoStack.push(result);
+            redoStack.length = 0;
+            return result.messages;
           }
           case 'dev-undo': {
             const last = undoStack.pop();
@@ -190,7 +223,7 @@ function createSession(file: string): Session {
               return [];
             }
             redoStack.push(last);
-            return [last.undo()];
+            return last.undo();
           }
           case 'dev-redo': {
             const next = redoStack.pop();
@@ -198,7 +231,7 @@ function createSession(file: string): Session {
               return [];
             }
             undoStack.push(next);
-            return [next.redo()];
+            return next.redo();
           }
           case 'dev-save': {
             if (session) {

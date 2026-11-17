@@ -1,16 +1,19 @@
 {
   "displayName": "DocsView 文档预览",
-  "description": "在 VS Code 中预览 Markdown、Excel、Word、CSV、PDF、PPT 文件，CSV 与 xlsx 单元格可直接编辑。不依赖任何其他插件。",
+  "description": "在 VS Code 中预览 Markdown、Excel、Word、CSV、PDF、PPT 与图片文件，支持 Excel 公式实时计算与行列/工作表编辑，以及图片像素坐标、RGB/HEX 取色与 BBox 画框测距。",
   "editor.markdown": "DocsView Markdown 预览",
   "editor.csv": "DocsView 表格（CSV/TSV）",
   "editor.excel": "DocsView 电子表格",
   "editor.word": "DocsView Word 预览",
   "editor.pdf": "DocsView PDF 预览",
   "editor.pptx": "DocsView 幻灯片预览",
+  "editor.image": "DocsView 图片与像素/BBox 预览",
   "command.showPreview": "DocsView：打开预览",
   "command.showPreviewToSide": "DocsView：在侧边打开预览",
   "command.showSource": "DocsView：显示源文件",
   "config.markdown.scrollSync": "在 Markdown 编辑器与预览之间同步滚动。",
+  "config.markdown.contentWidth": "Markdown 预览正文宽度：居中固定阅读宽度或自适应铺满窗口宽度。",
+  "config.markdown.splitPosition": "分栏预览时源码编辑器与预览窗口的左右位置。",
   "config.csv.delimiter": "CSV 文件使用的分隔符。\"auto\" 表示根据文件内容自动识别。",
   "config.appearance.theme": "Markdown 与表格视图的预览主题。\"editor\" 表示使用 VS Code 当前配色。",
   "config.appearance.colorScheme": "DocsView 预览的明暗外观。\"auto\" 表示跟随 VS Code 主题。",
@@ -18,6 +21,7 @@
   "config.language": "DocsView 界面语言。\"auto\" 表示跟随 VS Code 的显示语言。",
   "config.highlightRowColumn": "在 CSV 与 Excel 视图中高亮选中单元格所在的行和列，在 Markdown 表格中高亮鼠标所在的行和列。",
   "config.table.lockEditing": "锁定 CSV 与 Excel 视图的单元格编辑，需在工具栏解锁后才能修改。",
+  "config.showNotices": "在 Excel、PPT、旧版 Word 等预览顶部显示说明提示条（如公式重算提示）。",
   "config.toolbar": "DocsView 顶部工具栏左侧与右侧显示的项目及其排列顺序。",
   "command.showHistory": "DocsView：查看版本历史"
 }

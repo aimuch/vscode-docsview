@@ -25,6 +25,9 @@ const initial: Appearance = {
   highlight: true,
   lockEdits: false,
   language: 'auto',
+  mdWidth: 'fixed',
+  splitPosition: 'sourceLeft',
+  showNotices: true,
 };
 
 beforeAll(async () => {
@@ -181,6 +184,32 @@ describe('Sidebar', () => {
     sidebar.writeState({ sidebar: { open: true } });
     expect(savedState).toEqual({ plain: true, sidebar: { open: true } });
   });
+
+  it('opens by default even on narrow panes when defaultOpen is true, and collapses/expands from sidebar controls', () => {
+    savedState = undefined;
+    const prevWidth = window.innerWidth;
+    window.innerWidth = 640;
+    try {
+      const side = new sidebar.Sidebar('目录', undefined, { defaultOpen: true });
+      expect(side.open).toBe(true);
+      expect(side.expandBtn.hidden).toBe(true);
+      expect(side.node.querySelector('.dv-side-title')?.textContent).toBe('目录');
+
+      // Collapse from inside the sidebar header.
+      side.node.querySelector<HTMLButtonElement>('.dv-side-collapse')!.click();
+      expect(side.open).toBe(false);
+      expect(side.expandBtn.hidden).toBe(false);
+      expect(side.toggle.getAttribute('aria-pressed')).toBe('false');
+
+      // Re-expand from the floating expand button.
+      side.expandBtn.click();
+      expect(side.open).toBe(true);
+      expect(side.expandBtn.hidden).toBe(true);
+      expect(side.toggle.getAttribute('aria-pressed')).toBe('true');
+    } finally {
+      window.innerWidth = prevWidth;
+    }
+  });
 });
 
 // ---------------------------------------------------------------- toolbar controls
@@ -207,6 +236,38 @@ describe('toolbar controls', () => {
     expect(bar.querySelector('.dv-settings-btn')).not.toBeNull();
     // Theme, scheme and language stay inside the drawer until pinned.
     expect(bar.querySelector<HTMLElement>('.dv-zone-right')?.hidden).toBe(true);
+  });
+
+  it('dismisses notice banners locally or globally via "不再提示"', () => {
+    savedState = undefined;
+    hostSends({ type: 'appearance', appearance: initial });
+    posted.length = 0;
+
+    const nb = ui.noticeBanner('公式不会重算');
+    expect(nb.node.hidden).toBe(false);
+    expect(nb.node.querySelector('.dv-notice-text')?.textContent).toBe('公式不会重算');
+
+    // Dismiss locally with the close button.
+    nb.node.querySelector<HTMLButtonElement>('.dv-notice-close')!.click();
+    expect(nb.node.hidden).toBe(true);
+
+    // Transient flash warnings still show up and can be dismissed early.
+    nb.flash('已锁定编辑', 10000);
+    expect(nb.node.hidden).toBe(false);
+    expect(nb.node.querySelector<HTMLElement>('.dv-notice-mute')?.hidden).toBe(true);
+    nb.node.querySelector<HTMLButtonElement>('.dv-notice-close')!.click();
+    expect(nb.node.hidden).toBe(true);
+
+    // Re-enabling showNotices in settings restores dismissed banners; "不再提示" turns showNotices off globally.
+    hostSends({ type: 'appearance', appearance: { ...initial, showNotices: false } });
+    hostSends({ type: 'appearance', appearance: { ...initial, showNotices: true } });
+    expect(nb.node.hidden).toBe(false);
+
+    nb.node.querySelector<HTMLButtonElement>('.dv-notice-mute')!.click();
+    expect(nb.node.hidden).toBe(true);
+    expect(posted).toContainEqual({ type: 'setAppearance', patch: { showNotices: false } });
+
+    hostSends({ type: 'appearance', appearance: initial });
   });
 
   it('pager only navigates to pages that exist', () => {
@@ -294,6 +355,12 @@ describe('appearance', () => {
     [...drawer.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="明暗"] button')]
       .find((b) => b.textContent === '暗色')!
       .click();
+    [...drawer.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="Markdown 宽度"] button')]
+      .find((b) => b.textContent === '自适应宽度')!
+      .click();
+    [...drawer.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="分栏布局"] button')]
+      .find((b) => b.textContent === '预览在左')!
+      .click();
     [...drawer.querySelectorAll<HTMLButtonElement>('.dv-st-choice')]
       .find((b) => b.textContent === 'English')!
       .click();
@@ -303,8 +370,11 @@ describe('appearance', () => {
     invert.dispatchEvent(new Event('change'));
     drawer.querySelector<HTMLButtonElement>('.dv-st-link')!.click();
 
+    expect(body.dataset.mdWidth).toBe('fluid');
     expect(posted).toEqual([
       { type: 'setAppearance', patch: { scheme: 'dark' } },
+      { type: 'setAppearance', patch: { mdWidth: 'fluid' } },
+      { type: 'setAppearance', patch: { splitPosition: 'previewLeft' } },
       { type: 'setAppearance', patch: { language: 'en' } },
       { type: 'setAppearance', patch: { theme: 'github' } },
       { type: 'setAppearance', patch: { invertPages: true } },

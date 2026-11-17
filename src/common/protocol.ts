@@ -3,7 +3,7 @@
 // harness encodes as base64).
 import type { StringKey } from './strings';
 
-export type ViewerKind = 'markdown' | 'sheet' | 'docx' | 'pdf' | 'pptx' | 'text';
+export type ViewerKind = 'markdown' | 'sheet' | 'docx' | 'pdf' | 'pptx' | 'text' | 'image';
 
 // ---------------------------------------------------------------- spreadsheet model
 
@@ -68,8 +68,12 @@ export interface WorkbookInfo {
   sheets: { name: string }[];
   /** Cell values can be edited. */
   editable: boolean;
-  /** Rows/columns can be inserted and deleted (CSV only). */
+  /** Rows/columns can be inserted and deleted (CSV and editable xlsx/xlsm). */
   canStructure: boolean;
+  /** Sheets can be added, renamed and deleted (editable xlsx/xlsm). */
+  canManageSheets?: boolean;
+  /** Backed by a plain-text file (CSV/TSV), enabling the Table/Text switch. */
+  hasSource?: boolean;
   /** Informational banner, as a string key so the webview can show it in the current UI language. */
   noticeKey?: StringKey;
 }
@@ -96,6 +100,8 @@ export interface TocEntry {
 export type ThemeId = 'editor' | 'github' | 'paper' | 'academic';
 export type SchemeSetting = 'auto' | 'light' | 'dark';
 export type LanguageSetting = 'auto' | 'zh-cn' | 'en';
+export type MarkdownWidth = 'fixed' | 'fluid';
+export type SplitPosition = 'sourceLeft' | 'previewLeft';
 
 /** User preferences shared by every DocsView editor (stored in VS Code settings). */
 export interface Appearance {
@@ -108,6 +114,12 @@ export interface Appearance {
   /** Sheets: cells cannot be edited until unlocked. */
   lockEdits: boolean;
   language: LanguageSetting;
+  /** Markdown preview content width: centered reading column ('fixed') or adaptive full width ('fluid'). */
+  mdWidth: MarkdownWidth;
+  /** Side-by-side split arrangement: source on the left or preview on the left. */
+  splitPosition: SplitPosition;
+  /** Show informational banners at the top of Excel, PPTX and legacy DOC previews. */
+  showNotices: boolean;
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -117,6 +129,9 @@ export const DEFAULT_APPEARANCE: Appearance = {
   highlight: true,
   lockEdits: false,
   language: 'auto',
+  mdWidth: 'fixed',
+  splitPosition: 'sourceLeft',
+  showNotices: true,
 };
 
 // ---------------------------------------------------------------- toolbar layout
@@ -126,6 +141,8 @@ export type ToolbarItemId =
   | 'view'
   | 'pager'
   | 'zoom'
+  | 'width'
+  | 'bbox'
   | 'cellBar'
   | 'find'
   | 'edit'
@@ -144,6 +161,8 @@ export const ALL_TOOLBAR_ITEMS: readonly ToolbarItemId[] = [
   'view',
   'pager',
   'zoom',
+  'width',
+  'bbox',
   'cellBar',
   'find',
   'edit',
@@ -164,7 +183,7 @@ export interface ToolbarConfig {
 }
 
 export const DEFAULT_TOOLBAR: ToolbarConfig = {
-  left: ['nav', 'view', 'pager', 'zoom', 'cellBar', 'find', 'edit', 'highlight', 'structure'],
+  left: ['nav', 'view', 'pager', 'zoom', 'bbox', 'cellBar', 'find', 'edit', 'highlight', 'structure'],
   right: [],
 };
 
@@ -221,6 +240,9 @@ export type WebviewMessage =
   | { type: 'getSheet'; index: number }
   | { type: 'edit'; index: number; changes: CellChange[] }
   | { type: 'structure'; index: number; op: StructureOp; at: number; count: number }
+  | { type: 'sheetOp'; op: 'add'; name?: string }
+  | { type: 'sheetOp'; op: 'rename'; index: number; name: string }
+  | { type: 'sheetOp'; op: 'delete'; index: number }
   | { type: 'setAppearance'; patch: Partial<Appearance> }
   | { type: 'setToolbar'; toolbar: ToolbarConfig }
   | { type: 'openSettings' }

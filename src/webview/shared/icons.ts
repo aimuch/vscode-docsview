@@ -4,6 +4,8 @@ const svg = (body: string) =>
 
 export const icons = {
   sidebar: svg('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10"/>'),
+  sidebarCollapse: svg('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10M10.8 6.2L9 8l1.8 1.8"/>'),
+  sidebarExpand: svg('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10M9 6.2L10.8 8 9 9.8"/>'),
   minus: svg('<path d="M3.5 8h9"/>'),
   plus: svg('<path d="M3.5 8h9M8 3.5v9"/>'),
   left: svg('<path d="M10 4l-4 4 4 4"/>'),
@@ -29,7 +31,7 @@ export const icons = {
   filter: svg('<path d="M2.5 3.5h11l-4.2 5v4l-2.6 1.5v-5.5z"/>'),
   crosshair: svg('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M2.5 6.5h11M2.5 9.5h11M6.5 2.5v11M9.5 2.5v11"/>'),
   gear: svg(
-    '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1"/>',
+    '<circle cx="8" cy="8" r="2"/><path d="M6.65 3.29L6.74 1.52A6.6 6.6 0 0 1 9.26 1.52L9.35 3.29A4.9 4.9 0 0 1 11.4 4.48L12.98 3.67A6.6 6.6 0 0 1 14.24 5.85L12.75 6.81A4.9 4.9 0 0 1 12.75 9.19L14.24 10.15A6.6 6.6 0 0 1 12.98 12.33L11.4 11.52A4.9 4.9 0 0 1 9.35 12.71L9.26 14.48A6.6 6.6 0 0 1 6.74 14.48L6.65 12.71A4.9 4.9 0 0 1 4.6 11.52L3.02 12.33A6.6 6.6 0 0 1 1.76 10.15L3.25 9.19A4.9 4.9 0 0 1 3.25 6.81L1.76 5.85A6.6 6.6 0 0 1 3.02 3.67L4.6 4.48A4.9 4.9 0 0 1 6.65 3.29Z"/>',
   ),
   grip: svg(
     '<circle cx="6" cy="4" r=".6" fill="currentColor"/><circle cx="10" cy="4" r=".6" fill="currentColor"/><circle cx="6" cy="8" r=".6" fill="currentColor"/><circle cx="10" cy="8" r=".6" fill="currentColor"/><circle cx="6" cy="12" r=".6" fill="currentColor"/><circle cx="10" cy="12" r=".6" fill="currentColor"/>',

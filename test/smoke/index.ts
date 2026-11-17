@@ -16,6 +16,7 @@ const CASES: [file: string, viewType: string][] = [
   ['legacy.doc', 'docsview.word'],
   ['paper.pdf', 'docsview.pdf'],
   ['slides.pptx', 'docsview.pptx'],
+  ['assets/logo.svg', 'docsview.image'],
 ];
 
 const TIMEOUT_MS = 45_000;

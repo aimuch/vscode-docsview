@@ -6,8 +6,13 @@ function baseName(uri: vscode.Uri): string {
   return uri.path.slice(uri.path.lastIndexOf('/') + 1);
 }
 
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg', 'ico', 'avif']);
+
 function kindFor(uri: vscode.Uri): ViewerKind {
   const ext = uri.path.slice(uri.path.lastIndexOf('.') + 1).toLowerCase();
+  if (IMAGE_EXTS.has(ext)) {
+    return 'image';
+  }
   switch (ext) {
     case 'pdf':
       return 'pdf';
@@ -21,11 +26,11 @@ function kindFor(uri: vscode.Uri): ViewerKind {
 }
 
 /**
- * Read-only previews (docx / doc / pdf / pptx). The host only ships bytes (or extracted
+ * Read-only previews (docx / doc / pdf / pptx / image). The host only ships bytes (or extracted
  * text for .doc); rendering happens in the webview. Reloads when the file changes on disk.
  */
 export class BinaryPreviewProvider implements vscode.CustomReadonlyEditorProvider {
-  static readonly viewTypes = ['docsview.word', 'docsview.pdf', 'docsview.pptx'];
+  static readonly viewTypes = ['docsview.word', 'docsview.pdf', 'docsview.pptx', 'docsview.image'];
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 

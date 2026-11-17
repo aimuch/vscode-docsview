@@ -195,4 +195,31 @@ describe('markdown export', () => {
       right: ['theme', 'scheme'],
     });
   });
+
+  it('formats pixel RGB/HEX colours and converts/parses BBoxes in px and 0–1000 scales', async () => {
+    const { bboxDimensions, formatBBoxTuple, formatRgb, parseBBoxInput, rgbToHex } = await import(
+      '../../src/webview/image/bbox'
+    );
+    expect(rgbToHex(59, 130, 246)).toBe('#3B82F6');
+    expect(formatRgb(59, 130, 246, 255)).toBe('rgb(59, 130, 246)');
+    expect(formatRgb(59, 130, 246, 128)).toBe('rgba(59, 130, 246, 0.50)');
+
+    const box = { x1: 200, y1: 100, x2: 600, y2: 400 };
+    expect(bboxDimensions(box)).toEqual({ w: 400, h: 300 });
+    expect(formatBBoxTuple(box, 1000, 500, 'px')).toEqual([200, 100, 600, 400]);
+    expect(formatBBoxTuple(box, 1000, 500, 'norm')).toEqual([200, 200, 600, 800]);
+
+    expect(parseBBoxInput('[200, 200, 600, 800]', 1000, 500, 'norm')).toEqual({
+      x1: 200,
+      y1: 100,
+      x2: 600,
+      y2: 400,
+    });
+    expect(parseBBoxInput('{"bbox": [50, 40, 180, 120]}', 800, 600, 'px')).toEqual({
+      x1: 50,
+      y1: 40,
+      x2: 180,
+      y2: 120,
+    });
+  });
 });

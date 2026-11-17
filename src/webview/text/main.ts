@@ -2,10 +2,10 @@
 import '../shared/base.css';
 import './text.css';
 import { app, el, onMessage, post, showStatus, t } from '../shared/api';
-import { customToolbar } from '../shared/ui';
+import { customToolbar, noticeBanner } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 
-const notice = el('div', { class: 'dv-notice', text: t('docNotice') });
+const notice = noticeBanner(t('docNotice'));
 const stage = el('div', { class: 'dv-stage' });
 const page = el('div', { class: 'text-page dv-page-invert' });
 stage.append(page);
@@ -16,7 +16,7 @@ app.append(
     subtitle: 'DOC',
     slots: [{ id: 'zoom', nodes: zoom.nodes }],
   }).node,
-  notice,
+  notice.node,
   stage,
 );
 showStatus(page, t('loading'));

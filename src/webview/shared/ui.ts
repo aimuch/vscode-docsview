@@ -6,14 +6,17 @@ import {
   type ToolbarItemId,
 } from '../../common/protocol';
 import type { StringKey } from '../../common/strings';
-import { config, el, onMessage, post, t } from './api';
+import { config, el, getState, onMessage, post, setState, t } from './api';
 import {
   buildAppearanceDrawerSections,
+  getAppearance,
   invertToggle,
   languageToolbarGroup,
-   onAppearanceChange,
+  mdWidthToggle,
+  onAppearanceChange,
   schemeToolbarGroup,
   themeToolbarButton,
+  updateAppearance,
 } from './appearance';
 import { onFileState } from './fileState';
 import { icons, type IconName } from './icons';
@@ -102,6 +105,90 @@ export function divider(): HTMLElement {
 
 export function spacer(): HTMLElement {
   return el('div', { class: 'dv-spacer' });
+}
+
+export interface NoticeBanner {
+  node: HTMLElement;
+  /** Sets or clears the standing informational message (hidden when dismissed or disabled). */
+  setInfo(text: string): void;
+  /** Shows a temporary warning for `ms`, even if the standing banner was dismissed. */
+  flash(text: string, ms?: number): void;
+}
+
+/**
+ * Dismissible informational banner (`.dv-notice`): clicking `×` hides it for the current
+ * document; clicking "Don't show again" turns off `docsview.showNotices` globally.
+ */
+export function noticeBanner(initialInfo = ''): NoticeBanner {
+  let infoText = initialInfo;
+  let flashText = '';
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  let dismissed = getState<{ noticeDismissed?: boolean }>()?.noticeDismissed === true;
+  let lastGlobalShow = getAppearance().showNotices;
+
+  const textEl = el('span', { class: 'dv-notice-text' });
+  const muteBtn = el('button', { class: 'dv-notice-mute', text: t('dontShowAgain') });
+  muteBtn.type = 'button';
+  const closeBtn = iconButton('close', t('close'), () => {
+    if (flashText) {
+      clearTimeout(flashTimer);
+      flashText = '';
+    } else {
+      dismissed = true;
+      setState({ ...(getState<Record<string, unknown>>() ?? {}), noticeDismissed: true });
+    }
+    sync();
+  });
+  closeBtn.classList.add('dv-notice-close');
+
+  const node = el('div', { class: 'dv-notice' }, [textEl, muteBtn, closeBtn]);
+
+  function sync() {
+    if (flashText) {
+      textEl.textContent = flashText;
+      muteBtn.hidden = true;
+      node.hidden = false;
+    } else if (infoText && !dismissed && getAppearance().showNotices) {
+      textEl.textContent = infoText;
+      muteBtn.hidden = false;
+      node.hidden = false;
+    } else {
+      node.hidden = true;
+    }
+  }
+
+  muteBtn.addEventListener('click', () => {
+    updateAppearance({ showNotices: false });
+  });
+
+  onAppearanceChange((a) => {
+    if (!lastGlobalShow && a.showNotices) {
+      // Re-enabling notices in Settings brings back previously dismissed banners too.
+      dismissed = false;
+      setState({ ...(getState<Record<string, unknown>>() ?? {}), noticeDismissed: false });
+    }
+    lastGlobalShow = a.showNotices;
+    sync();
+  });
+
+  sync();
+
+  return {
+    node,
+    setInfo(text: string) {
+      infoText = text;
+      sync();
+    },
+    flash(text: string, ms = 3500) {
+      flashText = text;
+      clearTimeout(flashTimer);
+      sync();
+      flashTimer = setTimeout(() => {
+        flashText = '';
+        sync();
+      }, ms);
+    },
+  };
 }
 
 // ---------------------------------------------------------------- dropdown action menu
@@ -220,6 +307,8 @@ const SLOT_LABELS: Record<ToolbarItemId, StringKey> = {
   view: 'slotView',
   pager: 'slotPager',
   zoom: 'slotZoom',
+  width: 'slotWidth',
+  bbox: 'slotBbox',
   cellBar: 'slotCellBar',
   find: 'slotFind',
   edit: 'slotEdit',
@@ -347,6 +436,7 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
   }
   // Automatically register shared appearance/language slots supported by this viewer.
   if (config.kind === 'markdown') {
+    register({ id: 'width', nodes: [mdWidthToggle()] });
     register({ id: 'theme', nodes: [themeToolbarButton()] });
   }
   if (PAGED_KINDS.has(config.kind)) {

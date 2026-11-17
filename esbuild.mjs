@@ -63,7 +63,7 @@ const hostChunks = [...lazyHostMap.entries()].map(([entry, outRel]) => ({
   external: ['vscode'],
 }));
 
-const viewers = ['markdown', 'sheet', 'docx', 'pdf', 'pptx', 'text'];
+const viewers = ['markdown', 'sheet', 'docx', 'pdf', 'pptx', 'text', 'image'];
 
 const webview = {
   ...common,

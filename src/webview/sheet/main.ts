@@ -7,7 +7,7 @@ import { getAppearance, highlightToggle, lockToggle, onAppearanceChange, updateA
 import { getFileState } from '../shared/fileState';
 import { icons } from '../shared/icons';
 import { readState, writeState } from '../shared/sidebar';
-import { customToolbar, iconButton, moreMenu, segmented, toggleButton, type MenuItem } from '../shared/ui';
+import { customToolbar, iconButton, moreMenu, noticeBanner, segmented, toggleButton, type MenuItem } from '../shared/ui';
 import './sheet.css';
 import { emptyView, isActive, viewRows, type SheetView } from './view';
 
@@ -25,14 +25,29 @@ let grid: Grid | undefined;
 const toSource = (r: number) => (rowMap ? (rowMap[r] ?? -1) : r);
 
 const address = el('span', { class: 'sheet-address' });
-const formula = el('span', { class: 'sheet-formula' });
+const fxBadge = el('span', { class: 'sheet-fx', text: 'fx' });
+const formula = el('input', { class: 'sheet-formula' });
+formula.type = 'text';
+formula.spellcheck = false;
+formula.placeholder = t('formulaPlaceholder');
+formula.setAttribute('aria-label', t('formulaPlaceholder'));
+const formulaBar = el('span', { class: 'sheet-formula-wrap' }, [fxBadge, formula]);
+
 const summary = el('span', { class: 'dv-label' });
-const notice = el('div', { class: 'dv-notice' });
-notice.hidden = true;
+const notice = noticeBanner();
 const gridHost = el('div', { class: 'sheet-grid' });
-// Bottom bar: sheet tabs on the left, size summary on the right (like a spreadsheet status bar).
+// Bottom bar: sheet tabs (+ add-sheet button) on the left, size summary on the right.
 const tabs = el('div', { class: 'sheet-tab-list' });
-const statusBar = el('div', { class: 'sheet-tabs' }, [tabs, el('div', { class: 'dv-spacer' }), summary]);
+const addSheetBtn = iconButton('plus', t('newSheet'), () => {
+  if (getAppearance().lockEdits) {
+    flash(t('locked'));
+    return;
+  }
+  post({ type: 'sheetOp', op: 'add' });
+});
+addSheetBtn.classList.add('sheet-add-btn');
+addSheetBtn.hidden = true;
+const statusBar = el('div', { class: 'sheet-tabs' }, [tabs, addSheetBtn, el('div', { class: 'dv-spacer' }), summary]);
 const structureButtons: HTMLButtonElement[] = [];
 
 function viewOf(index: number): SheetView {
@@ -43,7 +58,7 @@ function viewOf(index: number): SheetView {
   return view;
 }
 
-function structure(op: StructureOp) {
+function structure(op: StructureOp, customAt?: number) {
   const sel = grid?.selection;
   if (!sel) {
     return;
@@ -58,7 +73,7 @@ function structure(op: StructureOp) {
     return;
   }
   const rows = op === 'insertRow' || op === 'deleteRows';
-  const at = rows ? sel.r0 : sel.c0;
+  const at = customAt ?? (rows ? sel.r0 : sel.c0);
   const count = op.startsWith('delete') ? (rows ? sel.r1 - sel.r0 : sel.c1 - sel.c0) + 1 : 1;
   post({ type: 'structure', index: active, op, at, count });
 }
@@ -407,7 +422,7 @@ const topBar = customToolbar({
   extraLeft: [filterChip],
   slots: [
     { id: 'view', nodes: [csvView.node, excelView.node] },
-    { id: 'cellBar', nodes: [address, formula] },
+    { id: 'cellBar', nodes: [address, formulaBar] },
     { id: 'find', nodes: [findToggle, findBox, findStatus] },
     { id: 'edit', label: t('lockEdits'), nodes: [lock] },
     { id: 'highlight', nodes: [highlightToggle()] },
@@ -451,7 +466,7 @@ const topBar = customToolbar({
   ],
 });
 
-app.append(topBar.node, notice, gridHost, statusBar);
+app.append(topBar.node, notice.node, gridHost, statusBar);
 showStatus(gridHost, t('loading'));
 
 // ---------------------------------------------------------------- helpers
@@ -537,30 +552,204 @@ function updateSummary() {
   summary.textContent = model ? `${t('rows', model.rowCount)} × ${t('cols', model.colCount)}` : '';
 }
 
-function onSelection(sel: Selection) {
+/** Cell targeted when the user started editing inside the formula bar. */
+let formulaTarget: { sheet: number; r: number; c: number; initial: string } | undefined;
+
+function syncFormulaFromSelection(sel: Selection) {
   const model = models.get(active);
+  const srcR = toSource(sel.r);
+  const raw = srcR >= 0 ? cellRaw(model?.rows[srcR]?.[sel.c]) : '';
+  if (document.activeElement !== formula) {
+    formula.value = raw;
+    formula.title = raw;
+  }
+}
+
+function commitFormulaBar() {
+  if (!formulaTarget || formulaTarget.sheet !== active) {
+    formulaTarget = undefined;
+    return;
+  }
+  const { r, c, initial } = formulaTarget;
+  formulaTarget = undefined;
+  if (!canEdit()) {
+    return;
+  }
+  const value = formula.value;
+  if (value !== initial) {
+    edit([{ r, c, text: value }]);
+  }
+}
+
+formula.addEventListener('focus', () => {
+  if (!canEdit()) {
+    if (info?.editable) {
+      flash(t('locked'));
+    } else if (info?.noticeKey) {
+      flash(t(info.noticeKey));
+    }
+    formula.blur();
+    grid?.focus();
+    return;
+  }
+  const sel = grid?.selection;
+  if (!sel) {
+    return;
+  }
+  const model = models.get(active);
+  const srcR = toSource(sel.r);
+  const cell = srcR >= 0 ? model?.rows[srcR]?.[sel.c] : undefined;
+  if (typeof cell === 'object' && cell?.ro) {
+    flash(t('cellReadonly'));
+    formula.blur();
+    grid?.focus();
+    return;
+  }
+  formulaTarget = { sheet: active, r: sel.r, c: sel.c, initial: formula.value };
+});
+
+formula.addEventListener('keydown', (e) => {
+  if (e.isComposing) {
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const target = formulaTarget;
+    commitFormulaBar();
+    if (target && grid) {
+      grid.goTo(target.r + 1, target.c);
+      grid.focus();
+    }
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    if (formulaTarget) {
+      formula.value = formulaTarget.initial;
+      formulaTarget = undefined;
+    }
+    grid?.focus();
+  }
+  e.stopPropagation();
+});
+
+formula.addEventListener('blur', () => {
+  commitFormulaBar();
+});
+
+function onSelection(sel: Selection) {
+  if (formulaTarget && document.activeElement === formula) {
+    commitFormulaBar();
+  }
   const single = sel.r0 === sel.r1 && sel.c0 === sel.c1;
   const row = (r: number) => toSource(r) + 1;
   address.textContent = single
     ? `${columnName(sel.c)}${row(sel.r)}`
     : `${columnName(sel.c0)}${row(sel.r0)}:${columnName(sel.c1)}${row(sel.r1)}`;
-  formula.textContent = cellRaw(model?.rows[toSource(sel.r)]?.[sel.c]);
-  formula.title = formula.textContent;
+  syncFormulaFromSelection(sel);
+}
+
+// ---------------------------------------------------------------- context menu (grid & sheet tabs)
+
+const ctxPopup = el('div', { class: 'dv-menu dv-more-menu sheet-ctx-menu' });
+ctxPopup.setAttribute('role', 'menu');
+ctxPopup.hidden = true;
+document.body.append(ctxPopup);
+
+function onCtxOutside(e: MouseEvent) {
+  if (!ctxPopup.contains(e.target as Node)) {
+    closeCtxPopup();
+  }
+}
+
+function closeCtxPopup() {
+  if (!ctxPopup.hidden) {
+    ctxPopup.hidden = true;
+    document.removeEventListener('mousedown', onCtxOutside);
+  }
+}
+
+ctxPopup.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeCtxPopup();
+    grid?.focus();
+  }
+});
+
+function showCtxPopup(x: number, y: number, rows: (HTMLElement | '-')[]) {
+  const cleaned = rows.filter((r, i) => r !== '-' || (i > 0 && i < rows.length - 1 && rows[i - 1] !== '-'));
+  if (!cleaned.length) {
+    return;
+  }
+  ctxPopup.replaceChildren(
+    ...cleaned.map((r) => (r === '-' ? el('div', { class: 'dv-menu-sep' }) : r)),
+  );
+  ctxPopup.hidden = false;
+  document.addEventListener('mousedown', onCtxOutside);
+  const left = Math.max(8, Math.min(x, window.innerWidth - ctxPopup.offsetWidth - 8));
+  const top = Math.max(8, Math.min(y, window.innerHeight - ctxPopup.offsetHeight - 8));
+  ctxPopup.style.left = `${left}px`;
+  ctxPopup.style.top = `${top}px`;
+  ctxPopup.style.right = 'auto';
+}
+
+function ctxAction(label: string, onClick: () => void, disabled = false): HTMLButtonElement {
+  const b = el('button', { class: 'dv-menu-item' });
+  b.type = 'button';
+  b.disabled = disabled;
+  b.setAttribute('role', 'menuitem');
+  b.append(el('span', { class: 'dv-menu-label', text: label }));
+  b.addEventListener('click', () => {
+    closeCtxPopup();
+    onClick();
+  });
+  return b;
+}
+
+function openGridContextMenu(x: number, y: number) {
+  const sel = grid?.selection;
+  if (!sel || !info?.editable) {
+    return;
+  }
+  const locked = getAppearance().lockEdits;
+  const items: (HTMLElement | '-')[] = [
+    ctxAction(
+      t('clearCell'),
+      () => {
+        if (locked) {
+          flash(t('locked'));
+          return;
+        }
+        const changes: CellChange[] = [];
+        for (let r = sel.r0; r <= sel.r1; r++) {
+          for (let c = sel.c0; c <= sel.c1; c++) {
+            changes.push({ r, c, text: '' });
+          }
+        }
+        edit(changes);
+      },
+      locked,
+    ),
+  ];
+  if (info.canStructure) {
+    items.push(
+      '-',
+      ctxAction(t('insertRowAbove'), () => structure('insertRow', sel.r0), locked),
+      ctxAction(t('insertRowBelow'), () => structure('insertRow', sel.r1 + 1), locked),
+      ctxAction(t('delRow'), () => structure('deleteRows'), locked),
+      '-',
+      ctxAction(t('insertColLeft'), () => structure('insertCol', sel.c0), locked),
+      ctxAction(t('insertColRight'), () => structure('insertCol', sel.c1 + 1), locked),
+      ctxAction(t('delCol'), () => structure('deleteCols'), locked),
+    );
+  }
+  showCtxPopup(x, y, items);
 }
 
 function showNotice() {
-  notice.textContent = info?.noticeKey ? t(info.noticeKey) : '';
-  notice.hidden = !info?.noticeKey;
+  notice.setInfo(info?.noticeKey ? t(info.noticeKey) : '');
 }
 
-let flashTimer: ReturnType<typeof setTimeout> | undefined;
 function flash(message: string) {
-  notice.textContent = message;
-  notice.hidden = false;
-  clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => {
-    showNotice();
-  }, 3500);
+  notice.flash(message, 3500);
 }
 
 function canEdit(): boolean {
@@ -568,9 +757,12 @@ function canEdit(): boolean {
 }
 
 function applyLock() {
-  grid?.setEditable(canEdit());
+  const editableNow = canEdit();
+  grid?.setEditable(editableNow);
+  formula.readOnly = !editableNow;
   const locked = getAppearance().lockEdits;
   structureButtons.forEach((b) => (b.disabled = locked));
+  addSheetBtn.disabled = locked;
 }
 
 onAppearanceChange(applyLock);
@@ -583,6 +775,11 @@ function ensureGrid(): Grid {
       canGrowRows: info?.canStructure ?? false,
       onEdit: (changes) => edit(changes),
       onSelection,
+      onEditorInput: (val) => {
+        if (document.activeElement !== formula) {
+          formula.value = val;
+        }
+      },
       onReadonlyCell: () => flash(t('cellReadonly')),
       onBlockedEdit: () => {
         if (info?.editable) {
@@ -595,6 +792,7 @@ function ensureGrid(): Grid {
         }
       },
       onColumnMenu: (col, anchor) => openColumnMenu(col, anchor),
+      onContextMenu: (_area, _r, _c, x, y) => openGridContextMenu(x, y),
     });
     grid.setRtl(rtl);
   }
@@ -653,16 +851,62 @@ function show(index: number, keepView: boolean) {
   post({ type: 'status', ok: true, detail: `${model.name}: ${model.rowCount}x${model.colCount}` });
 }
 
+function startTabRename(tabBtn: HTMLButtonElement, index: number, currentName: string) {
+  if (!info?.canManageSheets) {
+    return;
+  }
+  if (getAppearance().lockEdits) {
+    flash(t('locked'));
+    return;
+  }
+  const input = el('input', { class: 'dv-input sheet-tab-rename' });
+  input.type = 'text';
+  input.value = currentName;
+  input.maxLength = 31;
+  let done = false;
+  const finish = (commit: boolean) => {
+    if (done) {
+      return;
+    }
+    done = true;
+    const next = input.value.trim();
+    renderTabs();
+    if (commit && next && next !== currentName) {
+      post({ type: 'sheetOp', op: 'rename', index, name: next });
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.isComposing) {
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      finish(false);
+    }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', () => finish(true));
+  tabBtn.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
 function renderTabs() {
   const sheets = info?.sheets ?? [];
-  tabs.hidden = sheets.length <= 1;
+  const manageable = Boolean(info?.canManageSheets);
+  addSheetBtn.hidden = !manageable;
+  tabs.hidden = sheets.length <= 1 && !manageable;
   if (tabs.hidden) {
     tabs.replaceChildren();
     return;
   }
   tabs.replaceChildren(
     ...sheets.map((sheet, i) => {
-      const tab = button(sheet.name, sheet.name, () => {
+      const tip = manageable ? `${sheet.name} (${t('sheetTabHint')})` : sheet.name;
+      const tab = button(sheet.name, tip, () => {
         if (i !== active) {
           active = i;
           renderTabs();
@@ -672,6 +916,29 @@ function renderTabs() {
       });
       tab.classList.add('sheet-tab');
       tab.classList.toggle('dv-active', i === active);
+      if (manageable) {
+        tab.addEventListener('dblclick', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          startTabRename(tab, i, sheet.name);
+        });
+        tab.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const locked = getAppearance().lockEdits;
+          const rect = tab.getBoundingClientRect();
+          showCtxPopup(rect.left, rect.top - 108, [
+            ctxAction(t('renameSheet'), () => startTabRename(tab, i, sheet.name), locked),
+            ctxAction(
+              t('deleteSheet'),
+              () => post({ type: 'sheetOp', op: 'delete', index: i }),
+              locked || sheets.length <= 1,
+            ),
+            '-',
+            ctxAction(t('newSheet'), () => post({ type: 'sheetOp', op: 'add' }), locked),
+          ]);
+        });
+      }
       return tab;
     }),
   );
@@ -686,8 +953,9 @@ onMessage((message) => {
       active = Math.min(message.active, Math.max(0, info.sheets.length - 1));
       models.clear();
       showNotice();
-      csvView.node.hidden = !info.canStructure;
-      excelView.node.hidden = info.canStructure;
+      const isCsv = Boolean(info.hasSource);
+      csvView.node.hidden = !isCsv;
+      excelView.node.hidden = isCsv;
       structureGroup.hidden = !info.canStructure;
       lock.hidden = !info.editable;
       topBar.refresh();

@@ -53,6 +53,10 @@ export interface GridOptions {
   onColumnResize?(col: number, width: number): void;
   /** Adds a menu button to column headers (sort / filter). */
   onColumnMenu?(col: number, anchor: DOMRect): void;
+  /** Right-click context menu on a cell, row header, or column header. */
+  onContextMenu?(area: 'cell' | 'row' | 'col', r: number, c: number, clientX: number, clientY: number): void;
+  /** Live mirror of the in-cell editor text (for syncing the formula bar). */
+  onEditorInput?(value: string): void;
 }
 
 const ROW_HEIGHT = 24;
@@ -178,6 +182,7 @@ export class Grid {
       }
     });
     this.viewport.addEventListener('dblclick', (e) => this.onDoubleClick(e));
+    this.viewport.addEventListener('contextmenu', (e) => this.onContextMenuEvent(e));
     this.viewport.addEventListener('keydown', (e) => this.onKeyDown(e));
     this.viewport.addEventListener('copy', (e) => this.onCopy(e));
     this.viewport.addEventListener('cut', (e) => this.onCopy(e, true));
@@ -728,6 +733,39 @@ export class Grid {
     e.preventDefault();
   }
 
+  private onContextMenuEvent(e: MouseEvent): void {
+    if (!this.opts.onContextMenu || !this.source.rowCount || !this.source.colCount || e.target === this.editor) {
+      return;
+    }
+    e.preventDefault();
+    this.commitEdit();
+    const hit = this.hitTest(e.clientX, e.clientY);
+    if (hit.area === 'corner') {
+      return;
+    }
+    const sel = this.selection;
+    const lastRow = this.source.rowCount - 1;
+    const lastCol = this.source.colCount - 1;
+    if (hit.area === 'row') {
+      if (hit.r < sel.r0 || hit.r > sel.r1) {
+        this.anchor = { r: hit.r, c: 0 };
+        this.active = { r: hit.r, c: lastCol };
+        this.paintSelection();
+        this.emitSelection();
+      }
+    } else if (hit.area === 'col') {
+      if (hit.c < sel.c0 || hit.c > sel.c1) {
+        this.anchor = { r: 0, c: hit.c };
+        this.active = { r: lastRow, c: hit.c };
+        this.paintSelection();
+        this.emitSelection();
+      }
+    } else if (hit.r < sel.r0 || hit.r > sel.r1 || hit.c < sel.c0 || hit.c > sel.c1) {
+      this.select(hit.r, hit.c, false, false);
+    }
+    this.opts.onContextMenu(hit.area, hit.r, hit.c, e.clientX, e.clientY);
+  }
+
   // ------------------------------------------------------------------ column resize
 
   private resizeTargetFromVx(vx: number): number | undefined {
@@ -1046,6 +1084,7 @@ export class Grid {
       }
       e.stopPropagation();
     });
+    input.addEventListener('input', () => this.opts.onEditorInput?.(input.value));
     input.addEventListener('blur', () => this.commitEdit());
     for (const type of ['copy', 'cut', 'paste', 'mousedown', 'dblclick'] as const) {
       input.addEventListener(type, (e) => e.stopPropagation());

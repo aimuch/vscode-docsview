@@ -4,7 +4,9 @@ import {
   type Appearance,
   type HostMessage,
   type LanguageSetting,
+  type MarkdownWidth,
   type SchemeSetting,
+  type SplitPosition,
   type ThemeId,
   type ToolbarConfig,
   type ViewerKind,
@@ -21,6 +23,8 @@ import { reportStatus } from './status';
 const THEMES: readonly ThemeId[] = ['editor', 'github', 'paper', 'academic'];
 const SCHEMES: readonly SchemeSetting[] = ['auto', 'light', 'dark'];
 const LANGUAGES: readonly LanguageSetting[] = ['auto', 'zh-cn', 'en'];
+const MD_WIDTHS: readonly MarkdownWidth[] = ['fixed', 'fluid'];
+const SPLIT_POSITIONS: readonly SplitPosition[] = ['sourceLeft', 'previewLeft'];
 
 /** Setting key for each Appearance field, relative to the "docsview" section. */
 const SETTING_KEYS: Record<keyof Appearance, string> = {
@@ -30,6 +34,9 @@ const SETTING_KEYS: Record<keyof Appearance, string> = {
   highlight: 'highlightRowColumn',
   lockEdits: 'table.lockEditing',
   language: 'language',
+  mdWidth: 'markdown.contentWidth',
+  splitPosition: 'markdown.splitPosition',
+  showNotices: 'showNotices',
 };
 
 export function readAppearance(): Appearance {
@@ -45,6 +52,9 @@ export function readAppearance(): Appearance {
     highlight: config.get<boolean>(SETTING_KEYS.highlight, true),
     lockEdits: config.get<boolean>(SETTING_KEYS.lockEdits, false),
     language: pick(SETTING_KEYS.language, LANGUAGES),
+    mdWidth: pick(SETTING_KEYS.mdWidth, MD_WIDTHS),
+    splitPosition: pick(SETTING_KEYS.splitPosition, SPLIT_POSITIONS),
+    showNotices: config.get<boolean>(SETTING_KEYS.showNotices, true),
   };
 }
 
@@ -66,6 +76,7 @@ export function t(key: StringKey, ...args: (string | number)[]): string {
 
 interface View {
   kind: ViewerKind;
+  panel: vscode.WebviewPanel;
   webview: vscode.Webview;
   uri: vscode.Uri | undefined;
   /** The document can also be shown in a text editor (Markdown, CSV). */
@@ -82,11 +93,179 @@ export function parentUri(uri: vscode.Uri): vscode.Uri {
   return vscode.Uri.joinPath(uri, '..');
 }
 
-function hasSourceTab(uri: vscode.Uri): boolean {
+/** Custom editor viewType for text-backed formats (Markdown, CSV/TSV). */
+export function previewViewTypeFor(uri: vscode.Uri): string | undefined {
+  const path = uri.path.toLowerCase();
+  if (path.endsWith('.md') || path.endsWith('.markdown')) {
+    return 'docsview.markdown';
+  }
+  if (path.endsWith('.csv') || path.endsWith('.tsv')) {
+    return 'docsview.csv';
+  }
+  return undefined;
+}
+
+function findUriTabs(uri: vscode.Uri, viewType?: string) {
   const key = uri.toString();
-  return vscode.window.tabGroups.all.some((group) =>
-    group.tabs.some((tab) => tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === key),
-  );
+  const textTabs: { tab: vscode.Tab; group: vscode.TabGroup }[] = [];
+  const customTabs: { tab: vscode.Tab; group: vscode.TabGroup; viewType: string }[] = [];
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      if (tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === key) {
+        textTabs.push({ tab, group });
+      } else if (
+        tab.input instanceof vscode.TabInputCustom &&
+        tab.input.uri.toString() === key &&
+        (!viewType || tab.input.viewType === viewType)
+      ) {
+        customTabs.push({ tab, group, viewType: tab.input.viewType });
+      }
+    }
+  }
+  return { textTabs, customTabs };
+}
+
+/**
+ * True only when a text editor tab for `view.uri` is open in a DIFFERENT editor group
+ * from the preview panel (i.e. genuinely side-by-side split, not stacked in the same group).
+ */
+function hasSplitSourceTab(view: View): boolean {
+  if (!view.uri) {
+    return false;
+  }
+  const { textTabs, customTabs } = findUriTabs(view.uri);
+  const panelCol = view.panel.viewColumn ?? customTabs[0]?.group.viewColumn;
+  if (panelCol === undefined) {
+    return false;
+  }
+  return textTabs.some((t) => t.group.viewColumn !== panelCol);
+}
+
+/** Opens single-pane preview in the active group (collapsing split if already split). */
+export async function openSinglePreview(uri: vscode.Uri): Promise<void> {
+  const viewType = previewViewTypeFor(uri);
+  if (!viewType) {
+    return;
+  }
+  const { textTabs, customTabs } = findUriTabs(uri, viewType);
+  const activeCol = vscode.window.tabGroups.activeTabGroup.viewColumn;
+  const splitCustom = customTabs.find((c) => c.group.viewColumn !== activeCol);
+  if (splitCustom) {
+    await vscode.commands.executeCommand('vscode.openWith', uri, viewType, splitCustom.group.viewColumn);
+    const otherTexts = textTabs.filter((t) => t.group.viewColumn !== splitCustom.group.viewColumn).map((t) => t.tab);
+    if (otherTexts.length) {
+      await vscode.window.tabGroups.close(otherTexts);
+    }
+    return;
+  }
+  await vscode.commands.executeCommand('vscode.openWith', uri, viewType, vscode.ViewColumn.Active);
+}
+
+/**
+ * Opens or rearranges side-by-side split view so Source and Preview always occupy the
+ * configured left/right sides (`docsview.markdown.splitPosition`), regardless of whether
+ * split was triggered from the editor title bar or from inside the preview toolbar.
+ */
+export async function openSplitPreview(uri: vscode.Uri, focus: 'preview' | 'source' = 'preview'): Promise<void> {
+  const viewType = previewViewTypeFor(uri);
+  if (!viewType) {
+    await vscode.commands.executeCommand('vscode.openWith', uri, 'default', vscode.ViewColumn.Beside);
+    return;
+  }
+  const wantSourceLeft = readAppearance().splitPosition === 'sourceLeft';
+  const { textTabs, customTabs } = findUriTabs(uri, viewType);
+  const customEntry = customTabs[0];
+  const splitTextEntry = customEntry
+    ? textTabs.find((t) => t.group.viewColumn !== customEntry.group.viewColumn)
+    : undefined;
+
+  if (customEntry && splitTextEntry) {
+    const customCol = customEntry.group.viewColumn;
+    const textCol = splitTextEntry.group.viewColumn;
+    if ((textCol < customCol) !== wantSourceLeft) {
+      await vscode.commands.executeCommand('vscode.openWith', uri, 'default', customCol);
+      await vscode.commands.executeCommand('vscode.openWith', uri, viewType, customCol);
+      await vscode.commands.executeCommand(
+        wantSourceLeft ? 'workbench.action.moveEditorToRightGroup' : 'workbench.action.moveEditorToLeftGroup',
+      );
+      const after = findUriTabs(uri, viewType);
+      const newCustomCol = after.customTabs[0]?.group.viewColumn;
+      if (newCustomCol !== undefined) {
+        const dupTexts = after.textTabs.filter((t) => t.group.viewColumn === newCustomCol).map((t) => t.tab);
+        if (dupTexts.length) {
+          await vscode.window.tabGroups.close(dupTexts);
+        }
+      }
+    }
+  } else if (!customEntry) {
+    const baseCol = textTabs[0]?.group.viewColumn ?? vscode.window.tabGroups.activeTabGroup.viewColumn;
+    if (wantSourceLeft) {
+      await vscode.commands.executeCommand('vscode.openWith', uri, 'default', baseCol);
+      await vscode.commands.executeCommand('vscode.openWith', uri, viewType, vscode.ViewColumn.Beside);
+    } else {
+      await vscode.commands.executeCommand('vscode.openWith', uri, 'default', vscode.ViewColumn.Beside);
+      await vscode.commands.executeCommand('vscode.openWith', uri, viewType, baseCol);
+      const after = findUriTabs(uri, viewType);
+      const dupTexts = after.textTabs.filter((t) => t.group.viewColumn === baseCol).map((t) => t.tab);
+      if (dupTexts.length) {
+        await vscode.window.tabGroups.close(dupTexts);
+      }
+    }
+  } else {
+    const baseCol = customEntry.group.viewColumn;
+    if (!wantSourceLeft) {
+      await vscode.commands.executeCommand('vscode.openWith', uri, viewType, baseCol);
+      await vscode.commands.executeCommand('vscode.openWith', uri, 'default', vscode.ViewColumn.Beside);
+      const after = findUriTabs(uri, viewType);
+      const dupTexts = after.textTabs.filter((t) => t.group.viewColumn === baseCol).map((t) => t.tab);
+      if (dupTexts.length) {
+        await vscode.window.tabGroups.close(dupTexts);
+      }
+    } else {
+      if (!textTabs.some((t) => t.group.viewColumn === baseCol)) {
+        await vscode.commands.executeCommand('vscode.openWith', uri, 'default', baseCol);
+      }
+      await vscode.commands.executeCommand('vscode.openWith', uri, viewType, baseCol);
+      await vscode.commands.executeCommand('workbench.action.moveEditorToRightGroup');
+      const after = findUriTabs(uri, viewType);
+      const newCustomCol = after.customTabs[0]?.group.viewColumn;
+      if (newCustomCol !== undefined && newCustomCol !== baseCol) {
+        const dupTexts = after.textTabs.filter((t) => t.group.viewColumn === newCustomCol).map((t) => t.tab);
+        if (dupTexts.length) {
+          await vscode.window.tabGroups.close(dupTexts);
+        }
+      }
+    }
+  }
+
+  // Ensure focus lands on the requested pane after layout arrangement.
+  const finalTabs = findUriTabs(uri, viewType);
+  if (focus === 'preview' && finalTabs.customTabs[0]) {
+    await vscode.commands.executeCommand('vscode.openWith', uri, viewType, finalTabs.customTabs[0].group.viewColumn);
+  } else if (focus === 'source') {
+    const targetText =
+      finalTabs.textTabs.find((t) => t.group.viewColumn !== finalTabs.customTabs[0]?.group.viewColumn) ??
+      finalTabs.textTabs[0];
+    if (targetText) {
+      await vscode.commands.executeCommand('vscode.openWith', uri, 'default', targetText.group.viewColumn);
+    }
+  }
+}
+
+/** Switches to the source text editor (closing the split preview pane if currently split). */
+export async function openSingleSource(uri: vscode.Uri): Promise<void> {
+  const viewType = previewViewTypeFor(uri);
+  const { textTabs, customTabs } = findUriTabs(uri, viewType);
+  const customEntry = customTabs[0];
+  const splitTextEntry = customEntry
+    ? textTabs.find((t) => t.group.viewColumn !== customEntry.group.viewColumn)
+    : undefined;
+  if (customEntry && splitTextEntry) {
+    await vscode.commands.executeCommand('vscode.openWith', uri, 'default', splitTextEntry.group.viewColumn);
+    await vscode.window.tabGroups.close(customEntry.tab);
+    return;
+  }
+  await vscode.commands.executeCommand('vscode.openWith', uri, 'default', vscode.ViewColumn.Active);
 }
 
 function postFileState(view: View): void {
@@ -104,7 +283,7 @@ function postFileState(view: View): void {
 
 function postViewState(view: View): void {
   if (view.tracksSource && view.uri) {
-    const message: HostMessage = { type: 'viewState', split: hasSourceTab(view.uri) };
+    const message: HostMessage = { type: 'viewState', split: hasSplitSourceTab(view) };
     void view.webview.postMessage(message);
   }
 }
@@ -132,6 +311,7 @@ export function configureWebview(
 
   const view: View = {
     kind,
+    panel,
     webview,
     uri: opts.documentUri,
     tracksSource: opts.tracksSource ?? false,
@@ -152,7 +332,11 @@ export function configureWebview(
     },
   };
   views.add(view);
-  panel.onDidDispose(() => views.delete(view));
+  const viewStateSub = panel.onDidChangeViewState(() => postViewState(view));
+  panel.onDidDispose(() => {
+    viewStateSub.dispose();
+    views.delete(view);
+  });
   view.render();
 }
 
@@ -164,11 +348,21 @@ export function watchViews(): vscode.Disposable[] {
         const message: HostMessage = { type: 'toolbar', toolbar: readToolbar() };
         views.forEach((view) => void view.webview.postMessage(message));
       }
+      if (e.affectsConfiguration('docsview.markdown.splitPosition')) {
+        for (const view of views) {
+          if (view.tracksSource && view.uri && hasSplitSourceTab(view)) {
+            void openSplitPreview(view.uri, 'preview');
+          }
+        }
+      }
       if (
         !e.affectsConfiguration('docsview.appearance') &&
         !e.affectsConfiguration('docsview.language') &&
         !e.affectsConfiguration('docsview.highlightRowColumn') &&
-        !e.affectsConfiguration('docsview.table.lockEditing')
+        !e.affectsConfiguration('docsview.table.lockEditing') &&
+        !e.affectsConfiguration('docsview.markdown.contentWidth') &&
+        !e.affectsConfiguration('docsview.markdown.splitPosition') &&
+        !e.affectsConfiguration('docsview.showNotices')
       ) {
         return;
       }
@@ -279,12 +473,11 @@ export function handleCommonMessage(
       break;
     }
     case 'showSource':
-      void vscode.commands.executeCommand(
-        'vscode.openWith',
-        uri,
-        'default',
-        message.beside ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active,
-      );
+      if (message.beside) {
+        void openSplitPreview(uri, 'source');
+      } else {
+        void openSingleSource(uri);
+      }
       break;
     case 'closeSource': {
       const key = uri.toString();

@@ -46,6 +46,7 @@ function apply(): void {
     body.dataset.scheme = current.scheme;
   }
   body.dataset.theme = current.theme;
+  body.dataset.mdWidth = current.mdWidth;
   const dark = effectiveDark();
   setClass('dv-dark', dark);
   setClass('dv-invert-pages', dark && current.invertPages);
@@ -152,6 +153,24 @@ export function lockToggle(): HTMLButtonElement {
   const sync = () => {
     b.setAttribute('aria-pressed', String(current.lockEdits));
     b.classList.toggle('dv-active', current.lockEdits);
+  };
+  updaters.add(sync);
+  sync();
+  return b;
+}
+
+/** Compact toolbar toggle for Markdown fixed vs adaptive content width. */
+export function mdWidthToggle(): HTMLButtonElement {
+  const b = el('button', { class: 'dv-btn dv-icon-btn', title: t('mdWidthToggle') });
+  b.type = 'button';
+  b.innerHTML = icons.fitWidth;
+  b.addEventListener('click', () =>
+    updateAppearance({ mdWidth: current.mdWidth === 'fluid' ? 'fixed' : 'fluid' }),
+  );
+  const sync = () => {
+    const fluid = current.mdWidth === 'fluid';
+    b.setAttribute('aria-pressed', String(fluid));
+    b.classList.toggle('dv-active', fluid);
   };
   updaters.add(sync);
   sync();
@@ -313,6 +332,38 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
     return card;
   });
 
+  const mdWidthRow = el('div', { class: 'dv-st-row' }, [
+    el('span', { class: 'dv-st-label', text: t('mdWidth') }),
+    group(t('mdWidth'), [
+      segButton(
+        t('mdWidthFixed'),
+        () => current.mdWidth === 'fixed',
+        () => updateAppearance({ mdWidth: 'fixed' }),
+      ),
+      segButton(
+        t('mdWidthFluid'),
+        () => current.mdWidth === 'fluid',
+        () => updateAppearance({ mdWidth: 'fluid' }),
+      ),
+    ]),
+  ]);
+
+  const splitRow = el('div', { class: 'dv-st-row' }, [
+    el('span', { class: 'dv-st-label', text: t('splitPosition') }),
+    group(t('splitPosition'), [
+      segButton(
+        t('splitSourceLeft'),
+        () => current.splitPosition === 'sourceLeft',
+        () => updateAppearance({ splitPosition: 'sourceLeft' }),
+      ),
+      segButton(
+        t('splitPreviewLeft'),
+        () => current.splitPosition === 'previewLeft',
+        () => updateAppearance({ splitPosition: 'previewLeft' }),
+      ),
+    ]),
+  ]);
+
   const schemeRow = el('div', { class: 'dv-st-row' }, [
     el('span', { class: 'dv-st-label', text: t('scheme') }),
     group(
@@ -336,6 +387,15 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
   updaters.add(syncInvert);
   syncInvert();
 
+  const notices = el('input');
+  notices.type = 'checkbox';
+  notices.addEventListener('change', () => updateAppearance({ showNotices: notices.checked }));
+  const syncNotices = () => {
+    notices.checked = current.showNotices;
+  };
+  updaters.add(syncNotices);
+  syncNotices();
+
   const themeHeader = el('div', { class: 'dv-st-subhead' }, [
     el('span', { class: 'dv-st-label', text: t('theme') }),
     ...(config.kind !== 'markdown' ? [el('span', { class: 'dv-st-muted', text: t('themeMarkdownHint') })] : []),
@@ -345,8 +405,11 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
     el('h3', { class: 'dv-st-heading', text: t('appearanceAll') }),
     themeHeader,
     el('div', { class: 'dv-theme-grid' }, themeCards),
+    mdWidthRow,
+    splitRow,
     schemeRow,
     el('label', { class: 'dv-check' }, [invert, el('span', { text: t('invertPages') })]),
+    el('label', { class: 'dv-check' }, [notices, el('span', { text: t('showNotices') })]),
   ]);
 
   const langChoices = el('div', { class: 'dv-st-choices' });

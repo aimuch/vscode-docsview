@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -30,6 +30,8 @@
     "docx",
     "pdf",
     "pptx",
+    "image",
+    "bbox",
     "preview"
   ],
   "main": "./dist/extension.js",
@@ -115,6 +117,22 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "docsview.image",
+        "displayName": "%editor.image%",
+        "selector": [
+          { "filenamePattern": "*.png" },
+          { "filenamePattern": "*.jpg" },
+          { "filenamePattern": "*.jpeg" },
+          { "filenamePattern": "*.webp" },
+          { "filenamePattern": "*.gif" },
+          { "filenamePattern": "*.bmp" },
+          { "filenamePattern": "*.svg" },
+          { "filenamePattern": "*.ico" },
+          { "filenamePattern": "*.avif" }
+        ],
+        "priority": "default"
       }
     ],
     "commands": [
@@ -149,17 +167,17 @@
         {
           "command": "docsview.showPreview",
           "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i",
-          "group": "navigation@1"
+          "group": "navigation@-100"
         },
         {
           "command": "docsview.showPreviewToSide",
           "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i",
-          "group": "navigation@2"
+          "group": "navigation@-99"
         },
         {
           "command": "docsview.showSource",
           "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv'",
-          "group": "navigation@1"
+          "group": "navigation@-100"
         }
       ],
       "explorer/context": [
@@ -195,6 +213,32 @@
           "type": "boolean",
           "default": true,
           "description": "%config.markdown.scrollSync%"
+        },
+        "docsview.markdown.contentWidth": {
+          "type": "string",
+          "enum": [
+            "fixed",
+            "fluid"
+          ],
+          "enumItemLabels": [
+            "Fixed",
+            "Adaptive"
+          ],
+          "default": "fixed",
+          "description": "%config.markdown.contentWidth%"
+        },
+        "docsview.markdown.splitPosition": {
+          "type": "string",
+          "enum": [
+            "sourceLeft",
+            "previewLeft"
+          ],
+          "enumItemLabels": [
+            "Source Left, Preview Right",
+            "Preview Left, Source Right"
+          ],
+          "default": "sourceLeft",
+          "description": "%config.markdown.splitPosition%"
         },
         "docsview.csv.delimiter": {
           "type": "string",
@@ -272,6 +316,11 @@
           "default": false,
           "description": "%config.table.lockEditing%"
         },
+        "docsview.showNotices": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.showNotices%"
+        },
         "docsview.toolbar": {
           "type": "object",
           "default": {
@@ -280,6 +329,7 @@
               "view",
               "pager",
               "zoom",
+              "bbox",
               "cellBar",
               "find",
               "edit",

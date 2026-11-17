@@ -135,6 +135,10 @@ body[data-theme='academic'].dv-dark {
   overflow-wrap: break-word;
 }
 
+body[data-md-width='fluid'] .markdown-body {
+  max-width: none;
+}
+
 .markdown-body > :first-child {
   margin-top: 0;
 }

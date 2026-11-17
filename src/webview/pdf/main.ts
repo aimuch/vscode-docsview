@@ -422,7 +422,7 @@ app.append(
       { id: 'find', nodes: [findBox, findStatus] },
     ],
   }).node,
-  el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [stage])]),
+  el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, stage])]),
 );
 
 onMessage((message) => {

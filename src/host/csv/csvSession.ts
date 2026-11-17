@@ -74,7 +74,7 @@ export class CsvSession {
   ) {}
 
   get info(): WorkbookInfo {
-    return { sheets: [{ name: this.name }], editable: true, canStructure: true };
+    return { sheets: [{ name: this.name }], editable: true, canStructure: true, hasSource: true };
   }
 
   get currentText(): string {

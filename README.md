@@ -8,14 +8,15 @@ Preview common document formats inside VS Code and edit spreadsheets in place. *
 
 | 格式 | 扩展名 | 打开方式 | 能力 |
 | --- | --- | --- | --- |
-| Markdown | `.md` `.markdown` | 标题栏预览按钮 | GitHub 风格渲染、代码高亮、Mermaid、KaTeX 公式、任务列表、脚注、目录、实时刷新、与编辑器滚动同步 |
+| Markdown | `.md` `.markdown` | 标题栏预览按钮 | GitHub 风格渲染、固定/自适应宽度、自定义分栏左右位置、代码高亮、Mermaid、KaTeX 公式、目录导航（默认展开可收起）、与编辑器滚动同步 |
 | CSV / TSV | `.csv` `.tsv` | 标题栏预览按钮 | 表格视图，改单元格、增删行列；撤销/保存/编码由 VS Code 原生处理 |
-| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、冻结窗格、多工作表；可编辑单元格并保存 |
+| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、冻结窗格、公式栏编辑与实时公式计算、增删行列、新建/重命名/删除工作表 |
 | Excel（旧版等） | `.xls` `.ods` | 单击即预览 | 只读 |
 | Word | `.docx` | 单击即预览 | 页面版式、表格、图片、页眉页脚 |
 | Word（旧版） | `.doc` | 单击即预览 | **仅文字**，无版式 |
 | PDF | `.pdf` | 单击即预览 | 翻页、缩放、适应宽度、搜索、文字选择 |
 | PowerPoint | `.pptx` | 单击即预览 | 幻灯片列表、缩放（近似效果） |
+| 图片与像素标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览 | 实时像素坐标、9×9 放大镜取色（RGB / HEX 一键复制）、BBox 画框测距（支持像素与 `0–1000` 归一化坐标及 JSON 导出） |
 
 Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一致：点编辑器右上角的预览图标，或在命令面板运行 **DocsView：在侧边打开预览**。想让 CSV 默认用表格打开，可在设置里加：
 
@@ -76,19 +77,21 @@ Markdown / CSV 的文本编辑器右上角有两个 DocsView 图标：**打开�
 - 拖动列标题右边缘调整列宽
 - 以 `=` 开头输入公式，以 `'` 开头强制按文本保存
 
-### 关于 xlsx 编辑
+### 关于 xlsx 编辑与公式计算
 
-保存时只改写被编辑单元格所在工作表的 XML，文件里其余部分（样式、图表、透视表、宏、图片）逐字节保留，不会因为在这里改了一个数而丢东西。相应的限制：
+保存时采用 OOXML 局部补丁：只改写受影响的工作表与工作簿关系，文件里其余未触碰的部分（样式、图表、透视表、宏、图片）逐字节保留。支持：
 
-- 只能改单元格的值，不能增删行列或改样式
-- 不计算公式。依赖被修改单元格的公式在这里显示旧值，文件已标记为"打开时重新计算"，用 Excel/WPS 打开即更新
-- 共享公式、数组公式的主单元格为只读
+- **公式栏与实时求值**：可通过顶部 `fx` 公式栏或双击单元格输入数值、文本与 `=` 公式，内置引擎实时计算四则运算、跨表引用及常用函数（`SUM`、`AVERAGE`、`COUNT`、`MIN`、`MAX`、`IF`、`IFS`、`IFERROR`、`SUMIF`、`COUNTIF`、`VLOOKUP`、`XLOOKUP`、`INDEX`、`MATCH`、`ROUND`、文本与日期函数等），并在保存时同时标记 `fullCalcOnLoad="1"`
+- **增删行列与自动移位**：可通过工具栏按钮或右键菜单在任意位置插入/删除行列，自动平移合并单元格区域与公式引用坐标
+- **工作表管理**：底部标签栏支持 `+` 新建工作表、双击或右键重命名工作表、删除工作表（全部接入 VS Code 原生撤销/重做）
 
 ## 设置
 
 | 设置项 | 默认 | 说明 |
 | --- | --- | --- |
 | `docsview.markdown.scrollSync` | `true` | Markdown 编辑器与预览同步滚动 |
+| `docsview.markdown.contentWidth` | `fixed` | Markdown 正文宽度：`fixed`（固定阅读宽度）/ `fluid`（自适应铺满窗口） |
+| `docsview.markdown.splitPosition` | `sourceLeft` | 分栏预览左右顺序：`sourceLeft`（源码在左）/ `previewLeft`（预览在左） |
 | `docsview.csv.delimiter` | `auto` | CSV 分隔符；`auto` 按内容自动识别（逗号、分号、Tab、竖线） |
 | `docsview.appearance.theme` | `editor` | 预览主题：`editor` / `github` / `paper` / `academic` |
 | `docsview.appearance.colorScheme` | `auto` | 明暗：`auto`（跟随编辑器）/ `light` / `dark` |
@@ -96,6 +99,7 @@ Markdown / CSV 的文本编辑器右上角有两个 DocsView 图标：**打开�
 | `docsview.language` | `auto` | 界面语言：`auto` / `zh-cn` / `en` |
 | `docsview.highlightRowColumn` | `true` | 高亮选中（表格）或悬停（Markdown 表格）单元格所在的行和列 |
 | `docsview.table.lockEditing` | `false` | 锁定 CSV / Excel 单元格编辑 |
+| `docsview.showNotices` | `true` | 在预览顶部显示格式说明提示条 |
 | `docsview.toolbar` | 默认左区 | 顶部工具栏左侧与右侧显示的项目及其排列顺序 |
 
 ## 已知限制
@@ -147,6 +151,7 @@ npm run package     # 生成 .vsix
 | Word (legacy) | `.doc` | on click | **text only** |
 | PDF | `.pdf` | on click | paging, zoom, fit width, search, text selection |
 | PowerPoint | `.pptx` | on click | slide list, zoom (approximate rendering) |
+| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click | live pixel coordinates, 9×9 magnifier loupe, RGB/HEX picker, interactive BBox drawing & measurement (`px` and `0–1000` normalised) |
 
 Markdown and CSV keep opening as text; use the preview icon in the editor title or **DocsView: Open Preview to the Side**. Use **Reopen Editor With…** to switch any file between DocsView and the text editor.
 
@@ -154,6 +159,6 @@ Markdown and CSV keep opening as text; use the preview icon in the editor title 
 
 **More features:** find in the Markdown preview (Ctrl/Cmd+F); an edit mode where double-clicking a block edits its Markdown source in place; export to a self-contained HTML file, or to PDF through the browser's print dialog; column sort and "contains" filters in CSV/Excel views (display only, the file is never reordered; edits still land on the right rows); a lock that prevents accidental cell edits; conversion between CSV, TSV and XLSX; one-click "open .md/.csv with DocsView by default"; version history (a copy is kept before every save, up to 30 per file, with compare/open/restore); right-to-left text.
 
-**Editing xlsx:** saving rewrites only the worksheet XML of edited cells; every other part of the file (styles, charts, pivot tables, macros, images) is preserved byte-for-byte. In exchange, only cell values can be changed (no row/column insertion), formulas are not recalculated here (the workbook is flagged to recalculate when opened in Excel), and master cells of shared/array formulas are read-only.
+**Editing xlsx:** saving patches only the affected OOXML parts so untouched styles, charts, pivot tables, macros and images are preserved byte-for-byte. Includes an editable `fx` formula bar, real-time formula evaluation (arithmetic, cross-sheet refs, `SUM`, `AVERAGE`, `IF`, `SUMIF`, `COUNTIF`, `VLOOKUP`, `XLOOKUP`, `INDEX`, `MATCH`, etc.), row/column insertion and deletion with automatic reference/merge shifting, and worksheet creation, renaming and deletion with full VS Code Undo/Redo.
 
 **Limitations:** `.doc` shows extracted text only; `.docx` pages follow the page breaks stored in the file (documents without them render as one continuous page); `.pptx` rendering is approximate; CSV files over ~40 MB have no table view; password-protected Office files cannot be opened.

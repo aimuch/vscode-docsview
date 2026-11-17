@@ -5,19 +5,13 @@ import { ExcelEditorProvider } from './host/excel/provider';
 import { MarkdownPreviewProvider } from './host/markdown/provider';
 import { initHistory, listVersions, showHistory, watchTextSaves } from './host/history';
 import { onViewerStatus } from './host/status';
-import { dispatchToView, watchViews } from './host/webviewHtml';
-
-/** Text formats: opened as text by default, with our preview available on demand. */
-function previewViewType(uri: vscode.Uri): string | undefined {
-  const path = uri.path.toLowerCase();
-  if (path.endsWith('.md') || path.endsWith('.markdown')) {
-    return MarkdownPreviewProvider.viewType;
-  }
-  if (path.endsWith('.csv') || path.endsWith('.tsv')) {
-    return CsvEditorProvider.viewType;
-  }
-  return undefined;
-}
+import {
+  dispatchToView,
+  openSinglePreview,
+  openSingleSource,
+  openSplitPreview,
+  watchViews,
+} from './host/webviewHtml';
 
 /** Resource of the active tab, whether it is a text editor or one of our custom editors. */
 function activeResource(): vscode.Uri | undefined {
@@ -59,17 +53,19 @@ export function activate(context: vscode.ExtensionContext): {
     }),
   );
 
-  const open = (column: vscode.ViewColumn) => async (uri?: vscode.Uri) => {
-    const target = uri ?? activeResource();
-    const viewType = target && previewViewType(target);
-    if (target && viewType) {
-      await vscode.commands.executeCommand('vscode.openWith', target, viewType, column);
-    }
-  };
-
   context.subscriptions.push(
-    vscode.commands.registerCommand('docsview.showPreview', open(vscode.ViewColumn.Active)),
-    vscode.commands.registerCommand('docsview.showPreviewToSide', open(vscode.ViewColumn.Beside)),
+    vscode.commands.registerCommand('docsview.showPreview', async (uri?: vscode.Uri) => {
+      const target = uri ?? activeResource();
+      if (target) {
+        await openSinglePreview(target);
+      }
+    }),
+    vscode.commands.registerCommand('docsview.showPreviewToSide', async (uri?: vscode.Uri) => {
+      const target = uri ?? activeResource();
+      if (target) {
+        await openSplitPreview(target, 'preview');
+      }
+    }),
     vscode.commands.registerCommand('docsview.showHistory', async (uri?: vscode.Uri) => {
       const target = uri ?? activeResource();
       if (target) {
@@ -79,7 +75,7 @@ export function activate(context: vscode.ExtensionContext): {
     vscode.commands.registerCommand('docsview.showSource', async (uri?: vscode.Uri) => {
       const target = uri ?? activeResource();
       if (target) {
-        await vscode.commands.executeCommand('vscode.openWith', target, 'default');
+        await openSingleSource(target);
       }
     }),
   );

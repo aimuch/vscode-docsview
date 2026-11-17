@@ -3,13 +3,16 @@
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import type { Cell, CellObject, CellStyle, MergeRange, SheetModel } from '../../common/protocol';
+import { colToIndex, expandSharedFormula } from './formula';
 
 export interface LoadedSheet {
-  readonly name: string;
+  name: string;
   readonly date1904?: boolean;
   readonly model: SheetModel;
-  /** Number format per cell ("r,c"), used to format values typed into that cell. */
+  /** Number format per cell ("r,c"), used to format values typed or calculated in that cell. */
   readonly numFmts: Map<string, string>;
+  /** Exact underlying scalar values ("r,c") from the file (numbers, date serials, booleans, strings). */
+  readonly scalars: Map<string, number | string | boolean>;
 }
 
 export interface LoadedWorkbook {
@@ -270,10 +273,33 @@ function formatScalar(value: unknown, numFmt: string | undefined): { text: strin
   return { text: String(value), numeric: false };
 }
 
-function convertCell(cell: ExcelJS.Cell, styleIndex: (style: CellStyle) => number): { cell: Cell; numFmt?: string } {
+function scalarOfValue(value: unknown): number | string | boolean | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (value instanceof Date) {
+    return dateToSerial(value);
+  }
+  if (typeof value === 'boolean' || typeof value === 'string') {
+    return value;
+  }
+  if (value && typeof value === 'object' && Array.isArray((value as { richText?: unknown }).richText)) {
+    return richText(value as never);
+  }
+  return undefined;
+}
+
+function convertCell(
+  ws: ExcelJS.Worksheet,
+  cell: ExcelJS.Cell,
+  r: number,
+  c: number,
+  styleIndex: (style: CellStyle) => number,
+): { cell: Cell; numFmt?: string; scalar?: number | string | boolean } {
   const value = cell.value as unknown;
   const numFmt = cell.numFmt || undefined;
   const out: CellObject = { v: '' };
+  let scalar: number | string | boolean | undefined;
 
   if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
     const obj = value as Record<string, unknown>;
@@ -281,12 +307,24 @@ function convertCell(cell: ExcelJS.Cell, styleIndex: (style: CellStyle) => numbe
       const result = formatScalar(obj.result, numFmt);
       out.v = result.text;
       out.n = result.numeric || undefined;
-      const formula = (obj.formula as string | undefined) ?? cell.formula;
+      scalar = scalarOfValue(obj.result);
+      let formula = (obj.formula as string | undefined) ?? cell.formula;
+      if (!formula && typeof obj.sharedFormula === 'string') {
+        const refMatch = /^([A-Za-z]{1,3})(\d+)$/.exec(obj.sharedFormula);
+        if (refMatch) {
+          const master = ws.getCell(obj.sharedFormula);
+          const masterVal = master.value as { formula?: string } | null;
+          const masterFormula = masterVal?.formula ?? master.formula;
+          if (masterFormula) {
+            formula = expandSharedFormula(masterFormula, Number(refMatch[2]) - 1, colToIndex(refMatch[1]), r, c);
+          }
+        }
+      }
       if (formula) {
         out.raw = `=${formula}`;
       }
-      // Rewriting the master of a shared/array formula would break every dependent cell.
-      if (obj.shareType === 'shared' || obj.shareType === 'array') {
+      // Multi-cell CSE array formulas remain protected if their range spans multiple cells.
+      if (obj.shareType === 'array' && typeof obj.ref === 'string' && obj.ref.includes(':')) {
         out.ro = true;
       }
     } else if ('hyperlink' in obj) {
@@ -295,13 +333,16 @@ function convertCell(cell: ExcelJS.Cell, styleIndex: (style: CellStyle) => numbe
         text && typeof text === 'object' && Array.isArray((text as { richText?: unknown }).richText)
           ? richText(text as never)
           : String(text ?? obj.hyperlink ?? '');
+      scalar = out.v;
     } else {
       out.v = formatScalar(value, numFmt).text;
+      scalar = scalarOfValue(value);
     }
   } else {
     const formatted = formatScalar(value, numFmt);
     out.v = formatted.text;
     out.n = formatted.numeric || undefined;
+    scalar = scalarOfValue(value);
     if (typeof value === 'number' && String(value) !== formatted.text) {
       out.raw = String(value);
     }
@@ -312,7 +353,11 @@ function convertCell(cell: ExcelJS.Cell, styleIndex: (style: CellStyle) => numbe
     out.s = styleIndex(style);
   }
   const plain = out.s === undefined && out.raw === undefined && !out.n && !out.ro;
-  return { cell: plain ? out.v : out, numFmt: numFmt && numFmt !== 'General' ? numFmt : undefined };
+  return {
+    cell: plain ? out.v : out,
+    numFmt: numFmt && numFmt !== 'General' ? numFmt : undefined,
+    scalar,
+  };
 }
 
 function fillHoles(row: Cell[], length: number): Cell[] {
@@ -324,7 +369,13 @@ function fillHoles(row: Cell[], length: number): Cell[] {
   return row;
 }
 
-function buildExcelJsSheet(ws: ExcelJS.Worksheet): { model: SheetModel; numFmts: Map<string, string> } {
+interface BuiltSheetData {
+  model: SheetModel;
+  numFmts: Map<string, string>;
+  scalars: Map<string, number | string | boolean>;
+}
+
+function buildExcelJsSheet(ws: ExcelJS.Worksheet): BuiltSheetData {
   const styles: CellStyle[] = [];
   const styleKeys = new Map<string, number>();
   const styleIndex = (style: CellStyle) => {
@@ -339,6 +390,7 @@ function buildExcelJsSheet(ws: ExcelJS.Worksheet): { model: SheetModel; numFmts:
 
   const rows: Cell[][] = [];
   const numFmts = new Map<string, string>();
+  const scalars = new Map<string, number | string | boolean>();
   const rowHeights: Record<number, number> = {};
   let usedCols = 0;
 
@@ -351,10 +403,14 @@ function buildExcelJsSheet(ws: ExcelJS.Worksheet): { model: SheetModel; numFmts:
         return;
       }
       const c = colNumber - 1;
-      const converted = convertCell(cell, styleIndex);
+      const converted = convertCell(ws, cell, r, c, styleIndex);
       out[c] = converted.cell;
+      const key = `${r},${c}`;
       if (converted.numFmt) {
-        numFmts.set(`${r},${c}`, converted.numFmt);
+        numFmts.set(key, converted.numFmt);
+      }
+      if (converted.scalar !== undefined) {
+        scalars.set(key, converted.scalar);
       }
     });
     usedCols = Math.max(usedCols, out.length);
@@ -416,31 +472,44 @@ function buildExcelJsSheet(ws: ExcelJS.Worksheet): { model: SheetModel; numFmts:
     model.frozenRows = view.ySplit || 0;
     model.frozenCols = view.xSplit || 0;
   }
-  return { model, numFmts };
+  return { model, numFmts, scalars };
 }
 
 function lazySheet(
-  name: string,
+  initialName: string,
   date1904: boolean,
-  factory: () => { model: SheetModel; numFmts: Map<string, string> },
+  factory: () => BuiltSheetData,
 ): LoadedSheet {
-  let built: { model: SheetModel; numFmts: Map<string, string> } | undefined;
-  let build: (() => { model: SheetModel; numFmts: Map<string, string> }) | undefined = factory;
+  let currentName = initialName;
+  let built: BuiltSheetData | undefined;
+  let build: (() => BuiltSheetData) | undefined = factory;
   const ensure = () => {
     if (!built) {
       built = build!();
+      built.model.name = currentName;
       build = undefined;
     }
     return built;
   };
   return {
-    name,
+    get name() {
+      return currentName;
+    },
+    set name(next: string) {
+      currentName = next;
+      if (built) {
+        built.model.name = next;
+      }
+    },
     date1904,
     get model() {
       return ensure().model;
     },
     get numFmts() {
       return ensure().numFmts;
+    },
+    get scalars() {
+      return ensure().scalars;
     },
   };
 }
@@ -463,7 +532,7 @@ async function loadWithExcelJs(bytes: Uint8Array): Promise<LoadedWorkbook> {
 
 // ---------------------------------------------------------------- SheetJS
 
-function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet): { model: SheetModel; numFmts: Map<string, string> } {
+function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet): BuiltSheetData {
   const data = ((ws as unknown as Record<string, unknown>)['!data'] ?? []) as (XLSX.CellObject | undefined)[][];
   let usedCols = 0;
   const rows: Cell[][] = [];
@@ -502,7 +571,7 @@ function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet): { model: SheetMode
   if (cols?.some((col) => col?.wpx)) {
     model.colWidths = Array.from({ length: model.colCount }, (_, c) => cols[c]?.wpx ?? null);
   }
-  return { model, numFmts: new Map() };
+  return { model, numFmts: new Map(), scalars: new Map() };
 }
 
 function loadWithSheetJs(bytes: Uint8Array): LoadedWorkbook {

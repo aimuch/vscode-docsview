@@ -4,6 +4,13 @@ import { describe, expect, it } from 'vitest';
 import type { CellObject } from '../../src/common/protocol';
 import { parseCellInput } from '../../src/host/excel/cellInput';
 import { ExcelSession } from '../../src/host/excel/excelSession';
+import {
+  evaluateFormula,
+  expandSharedFormula,
+  FormulaError,
+  renameSheetInFormula,
+  shiftFormulaReferences,
+} from '../../src/host/excel/formula';
 import { dateToSerial, formatNumber, loadWorkbook } from '../../src/host/excel/reader';
 import { patchXlsx } from '../../src/host/excel/xlsxPatcher';
 
@@ -249,5 +256,143 @@ describe('ExcelSession', () => {
     const wb = await read(second.export());
     expect(wb.getWorksheet('Data')!.getCell('B3').value).toBe(99);
     expect(wb.getWorksheet('Other')!.getCell('B1').value).toBe('note');
+  });
+
+  it('evaluates typed formulas and recalculates dependent cells live, including cross-sheet refs', async () => {
+    const session = await ExcelSession.open(await makeWorkbook(), 'book.xlsx');
+    const data = session.sheet(0)!;
+    // Editing B2 from 4 -> 8 automatically updates dependent C2 (=B2*2.5) from 10 -> 20!
+    const editRes = session.edit(0, [{ r: 1, c: 1, text: '8' }])!;
+    expect(data.rows[1][2]).toMatchObject({ v: '20', raw: '=B2*2.5', n: true });
+    expect(editRes.message).toMatchObject({
+      type: 'cells',
+      index: 0,
+      cells: expect.arrayContaining([
+        expect.objectContaining({ r: 1, c: 1 }),
+        expect.objectContaining({ r: 1, c: 2, cell: expect.objectContaining({ v: '20' }) }),
+      ]),
+    });
+
+    // Type a new SUM formula in C4 and a cross-sheet formula in Other!A2
+    session.edit(0, [{ r: 3, c: 2, text: '=SUM(C2:C3)' }]);
+    expect(data.rows[3][2]).toMatchObject({ v: '45', raw: '=SUM(C2:C3)', n: true });
+
+    session.sheet(1);
+    session.edit(1, [{ r: 1, c: 0, text: '=IF(Data!C4>40, "HIGH", "LOW")' }]);
+    expect(session.sheet(1)!.rows[1][0]).toMatchObject({ v: 'HIGH', raw: '=IF(Data!C4>40, "HIGH", "LOW")' });
+
+    editRes.undo();
+    expect(data.rows[1][2]).toMatchObject({ v: '10', raw: '=B2*2.5', n: true });
+    expect(data.rows[3][2]).toMatchObject({ v: '35', raw: '=SUM(C2:C3)', n: true });
+    expect(session.sheet(1)!.rows[1][0]).toMatchObject({ v: 'LOW' });
+  });
+
+  it('inserts and deletes rows and columns, shifting merges and formulas and roundtripping to xlsx', async () => {
+    const session = await ExcelSession.open(await makeWorkbook(), 'book.xlsx');
+    const model = session.sheet(0)!;
+
+    // Insert 1 row before row index 1 (Excel row 2): B2*2.5 moves to row index 2 as =B3*2.5, merge A5:C5 -> A6:C6
+    const ins = session.structure(0, 'insertRow', 1, 1)!;
+    expect(model.rows[2][2]).toMatchObject({ v: '10', raw: '=B3*2.5' });
+    expect(model.merges).toEqual([{ r: 5, c: 0, rs: 1, cs: 3 }]);
+
+    // Insert 1 column before col index 1 (col B -> col C): formula =B3*2.5 becomes =C3*2.5
+    session.structure(0, 'insertCol', 1, 1);
+    expect(model.rows[2][3]).toMatchObject({ v: '10', raw: '=C3*2.5' });
+    expect(model.merges).toEqual([{ r: 5, c: 0, rs: 1, cs: 4 }]);
+
+    const wb = await read(session.export());
+    const ws = wb.getWorksheet('Data')!;
+    expect(ws.getCell('C3').value).toBe(4);
+    expect(ws.getCell('D3').value).toMatchObject({ formula: 'C3*2.5' });
+    expect(ws.getCell('A6').isMerged).toBe(true);
+
+    // Undo column insert and row insert
+    session.structure(0, 'deleteCols', 1, 1);
+    expect(session.sheet(0)!.rows[2][2]).toMatchObject({ v: '10', raw: '=B3*2.5' });
+    ins.undo(); // Note: undo restores snapshot before insertRow
+    expect(session.sheet(0)!.rows[1][2]).toMatchObject({ v: '10', raw: '=B2*2.5' });
+  });
+
+  it('adds, renames and deletes worksheets with undo/redo and xlsx persistence', async () => {
+    const session = await ExcelSession.open(await makeWorkbook(), 'book.xlsx');
+    session.sheet(1);
+    session.edit(1, [{ r: 0, c: 1, text: '=Data!B2+5' }]);
+    expect(session.sheet(1)!.rows[0][1]).toMatchObject({ v: '9', raw: '=Data!B2+5' });
+
+    // Rename 'Data' -> 'Sales Data': cross-sheet formula in 'Other' updates automatically!
+    const ren = session.renameSheet(0, 'Sales Data')!;
+    expect(session.info.sheets.map((s) => s.name)).toEqual(['Sales Data', 'Other']);
+    expect(session.sheet(1)!.rows[0][1]).toMatchObject({ v: '9', raw: "='Sales Data'!B2+5" });
+
+    // Create a new sheet and write a formula in it
+    const added = session.addSheet('Summary')!;
+    expect(session.info.sheets.map((s) => s.name)).toEqual(['Sales Data', 'Other', 'Summary']);
+    session.edit(2, [{ r: 0, c: 0, text: "='Sales Data'!C2+100" }]);
+    expect(session.sheet(2)!.rows[0][0]).toMatchObject({ v: '110' });
+
+    // Delete 'Other'
+    const del = session.deleteSheet(1)!;
+    expect(session.info.sheets.map((s) => s.name)).toEqual(['Sales Data', 'Summary']);
+
+    const exported = await read(session.export());
+    expect(exported.worksheets.map((w) => w.name)).toEqual(['Sales Data', 'Summary']);
+    expect(exported.getWorksheet('Summary')!.getCell('A1').value).toMatchObject({
+      formula: "'Sales Data'!C2+100",
+      result: 110,
+    });
+
+    // Undo delete, add, and rename
+    del.undo();
+    expect(session.info.sheets.map((s) => s.name)).toEqual(['Sales Data', 'Other', 'Summary']);
+    added.undo();
+    expect(session.info.sheets.map((s) => s.name)).toEqual(['Sales Data', 'Other']);
+    ren.undo();
+    expect(session.info.sheets.map((s) => s.name)).toEqual(['Data', 'Other']);
+  });
+});
+
+describe('formula engine', () => {
+  const ctx = {
+    currentSheet: 0,
+    sheetIndexByName: (n: string) => (n.toLowerCase() === 's1' ? 0 : n.toLowerCase() === 's2' ? 1 : -1),
+    getCellValue: (s: number, r: number, c: number) => {
+      if (s === 0 && r === 0) return [10, 20, 30][c] ?? null;
+      if (s === 0 && r === 1) return ['apple', 'banana', 'apple'][c] ?? null;
+      if (s === 1 && r === 0 && c === 0) return 5;
+      return null;
+    },
+    getRangeValues: (s: number, r0: number, c0: number, r1: number, c1: number) => {
+      const rows = [];
+      for (let r = r0; r <= r1; r++) {
+        const row = [];
+        for (let c = c0; c <= c1; c++) {
+          row.push(ctx.getCellValue(s, r, c));
+        }
+        rows.push(row);
+      }
+      return rows;
+    },
+  };
+
+  it('evaluates math, logic, conditionals, lookups and text functions', () => {
+    expect(evaluateFormula('SUM(A1:C1) * S2!A1', ctx)).toBe(300);
+    expect(evaluateFormula('AVERAGE(A1:C1)', ctx)).toBe(20);
+    expect(evaluateFormula('COUNTIF(A2:C2, "apple")', ctx)).toBe(2);
+    expect(evaluateFormula('SUMIF(A2:C2, "apple", A1:C1)', ctx)).toBe(40);
+    expect(evaluateFormula('IF(B1>=20, UPPER(B2), "no")', ctx)).toBe('BANANA');
+    expect(evaluateFormula('XLOOKUP("banana", A2:C2, A1:C1)', ctx)).toBe(20);
+    expect(evaluateFormula('ROUND(10/3, 2)', ctx)).toBe(3.33);
+    expect(evaluateFormula('10/0', ctx)).toEqual(new FormulaError('#DIV/0!'));
+    expect(evaluateFormula('IFERROR(10/0, 99)', ctx)).toBe(99);
+  });
+
+  it('shifts references, expands shared formulas and renames sheets accurately', () => {
+    expect(shiftFormulaReferences('SUM($B$2:B5)+D2+"B2"', 'Data', 'Data', 'insertRow', 1, 2)).toBe(
+      'SUM($B$4:B7)+D4+"B2"',
+    );
+    expect(shiftFormulaReferences('B3*2', 'Data', 'Data', 'deleteRows', 2, 1)).toBe('#REF!*2');
+    expect(expandSharedFormula('$A2*B$1', 1, 1, 3, 2)).toBe('$A4*C$1');
+    expect(renameSheetInFormula('Data!A1 + Other!B2', 'Data', 'Q1 Report')).toBe("'Q1 Report'!A1 + Other!B2");
   });
 });

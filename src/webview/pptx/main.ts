@@ -4,10 +4,10 @@ import '../shared/base.css';
 import './pptx.css';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
-import { customToolbar, segmented } from '../shared/ui';
+import { customToolbar, noticeBanner, segmented } from '../shared/ui';
 import { createPager, createZoom } from '../shared/zoom';
 
-const notice = el('div', { class: 'dv-notice', text: t('pptxNotice') });
+const notice = noticeBanner(t('pptxNotice'));
 const stage = el('div', { class: 'dv-stage' });
 const host = el('div', { class: 'pptx-host' });
 stage.append(host);
@@ -49,8 +49,8 @@ app.append(
       { id: 'zoom', nodes: zoom.nodes },
     ],
   }).node,
-  notice,
-  el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [stage])]),
+  notice.node,
+  el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, stage])]),
 );
 showStatus(host, t('loading'));
 

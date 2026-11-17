@@ -17,7 +17,7 @@ const scroller = el('div', { class: 'md-scroll' });
 const article = el('article', { class: 'markdown-body' });
 scroller.append(article);
 
-const sidebar = new Sidebar(t('toc'));
+const sidebar = new Sidebar(t('toc'), undefined, { defaultOpen: true });
 const outline = new Outline((id) => scrollToAnchor(`#${id}`));
 sidebar.panel().append(outline.node);
 
@@ -300,7 +300,7 @@ const topBar = customToolbar({
 scroller.tabIndex = -1;
 app.append(
   topBar.node,
-  el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [scroller])]),
+  el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, scroller])]),
 );
 setEditMode(readState().mdEdit === true);
 setRtl(rtl);

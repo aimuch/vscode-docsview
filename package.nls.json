@@ -1,16 +1,19 @@
 {
   "displayName": "DocsView",
-  "description": "Preview Markdown, Excel, Word, CSV, PDF and PowerPoint files inside VS Code. Edit CSV and xlsx cells in place. No other extensions required.",
+  "description": "Preview Markdown, Excel, Word, CSV, PDF, PowerPoint and Image files inside VS Code. Edit Excel & CSV with live formula calculation, and inspect image pixels, RGB/HEX colours and BBoxes.",
   "editor.markdown": "DocsView Markdown Preview",
   "editor.csv": "DocsView Table (CSV/TSV)",
   "editor.excel": "DocsView Spreadsheet",
   "editor.word": "DocsView Word Preview",
   "editor.pdf": "DocsView PDF Preview",
   "editor.pptx": "DocsView Slides Preview",
+  "editor.image": "DocsView Image & BBox Inspector",
   "command.showPreview": "DocsView: Open Preview",
   "command.showPreviewToSide": "DocsView: Open Preview to the Side",
   "command.showSource": "DocsView: Show Source",
   "config.markdown.scrollSync": "Synchronize scrolling between the Markdown editor and its preview.",
+  "config.markdown.contentWidth": "Content width of the Markdown preview: centered fixed reading width or adaptive full-pane width.",
+  "config.markdown.splitPosition": "Which side the source editor and preview appear on when opening side-by-side split view.",
   "config.csv.delimiter": "Delimiter used for CSV files. \"auto\" detects it from the file content.",
   "config.appearance.theme": "Preview theme for Markdown and table views. \"editor\" uses the colours of the current VS Code theme.",
   "config.appearance.colorScheme": "Light or dark appearance of DocsView editors. \"auto\" follows the VS Code theme.",
@@ -18,6 +21,7 @@
   "config.language": "Language of the DocsView interface. \"auto\" follows the VS Code display language.",
   "config.highlightRowColumn": "Highlight the row and column of the selected cell in CSV and Excel views, and of the hovered cell in Markdown tables.",
   "config.table.lockEditing": "Lock cell editing in CSV and Excel views until it is unlocked from the toolbar.",
+  "config.showNotices": "Show informational notice banners (such as the Excel formula recalculation note) at the top of previews.",
   "config.toolbar": "Items shown on the left and right sides of the DocsView top toolbar, and their display order.",
   "command.showHistory": "DocsView: Show Version History"
 }
