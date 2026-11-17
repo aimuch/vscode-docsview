@@ -1,6 +1,7 @@
 // Actions on the file behind a view: default editor association and saving converted /
 // exported copies next to it.
 import * as vscode from 'vscode';
+import type { ImageExportFormat } from '../common/protocol';
 import type { ConvertFormat } from './convert';
 import { parentUri, t } from './webviewHtml';
 
@@ -82,5 +83,25 @@ export async function saveConverted(source: vscode.Uri, format: ConvertFormat, b
   } else {
     await vscode.commands.executeCommand('vscode.openWith', target, 'docsview.csv');
   }
+  void vscode.window.showInformationMessage(t('converted', target.fsPath));
+}
+
+/** Saves a converted or cropped image copy and opens it in the DocsView image inspector. */
+export async function saveConvertedImage(
+  source: vscode.Uri,
+  format: ImageExportFormat,
+  bytes: Uint8Array,
+  suffix = '',
+): Promise<void> {
+  const base = source.path.slice(source.path.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+  const target = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.joinPath(parentUri(source), `${base}${suffix}.${format}`),
+    filters: { [format.toUpperCase()]: [format] },
+  });
+  if (!target) {
+    return;
+  }
+  await vscode.workspace.fs.writeFile(target, bytes);
+  await vscode.commands.executeCommand('vscode.openWith', target, 'docsview.image');
   void vscode.window.showInformationMessage(t('converted', target.fsPath));
 }

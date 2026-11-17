@@ -414,4 +414,38 @@ export async function runEditingChecks(api: Api, samples: string, work: string, 
     }
     return `saved ISO 32000 PDF annotation; undo/redo & history verified; reopened as ${reopened.detail}`;
   });
+
+  // ------------------------------------------------------------ image: crop in place, undo, redo, save & history
+
+  await check(results, 'image: crop SVG in place, undo, redo, save, reopen', 'docsview.image', async () => {
+    const path = join(work, 'logo.svg');
+    copyFileSync(join(samples, 'assets/logo.svg'), path);
+    const uri = vscode.Uri.file(path);
+    await open(api, uri, 'docsview.image');
+    const dirty = () => tabs(uri).custom[0]?.isDirty === true;
+
+    const croppedSvg = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="110" height="32" viewBox="55 16 110 32"><rect width="220" height="64" fill="#2f6feb"/></svg>',
+      'utf8',
+    );
+    send(api, uri, { type: 'imageReplace', bytes: new Uint8Array(croppedSvg), label: 'Crop SVG' }, 'image');
+    await waitFor('image marked dirty after crop', dirty);
+    await vscode.commands.executeCommand('undo');
+    await waitFor('image undo clears dirty', () => !dirty());
+    await vscode.commands.executeCommand('redo');
+    await waitFor('image redo restores dirty', dirty);
+
+    await vscode.commands.executeCommand('workbench.action.files.save');
+    await waitFor('image saved', () => !dirty());
+    const versions = await api.testing.listVersions(uri);
+    if (versions.length !== 1) {
+      throw new Error(`expected 1 image history version, got ${versions.length}`);
+    }
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    const reopened = await open(api, uri, 'docsview.image');
+    if (!reopened.ok || reopened.detail !== '110x32') {
+      throw new Error(`reopen cropped image: ${reopened.detail}`);
+    }
+    return `saved cropped image (110x32); undo/redo & history verified`;
+  });
 }

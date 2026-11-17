@@ -11,7 +11,23 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
 const ORPHAN_TTL_MS = 7 * 24 * 3600 * 1000;
 const TEXT_EXTENSIONS = new Set(['md', 'markdown', 'csv', 'tsv']);
-const HISTORY_EXTENSIONS = new Set([...TEXT_EXTENSIONS, 'xlsx', 'xlsm', 'docx', 'pptx', 'pdf']);
+const HISTORY_EXTENSIONS = new Set([
+  ...TEXT_EXTENSIONS,
+  'xlsx',
+  'xlsm',
+  'docx',
+  'pptx',
+  'pdf',
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'gif',
+  'bmp',
+  'svg',
+  'ico',
+  'avif',
+]);
 
 let root: vscode.Uri | undefined;
 

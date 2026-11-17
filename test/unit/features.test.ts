@@ -196,30 +196,75 @@ describe('markdown export', () => {
     });
   });
 
-  it('formats pixel RGB/HEX colours and converts/parses BBoxes in px and 0–1000 scales', async () => {
-    const { bboxDimensions, formatBBoxTuple, formatRgb, parseBBoxInput, rgbToHex } = await import(
-      '../../src/webview/image/bbox'
-    );
+  it('formats pixel RGB/HEX colours, parses pixel BBoxes, crops RGBA/SVG and encodes BMP & ICO', async () => {
+    const {
+      bboxDimensions,
+      cropRgba,
+      cropSvgMarkup,
+      encodeBmp,
+      encodeIcoFromPng,
+      formatBBoxTuple,
+      formatRgb,
+      parseBBoxInput,
+      rgbToHex,
+    } = await import('../../src/webview/image/bbox');
+    expect(rgbToHex(7, 7, 8)).toBe('#070708');
     expect(rgbToHex(59, 130, 246)).toBe('#3B82F6');
     expect(formatRgb(59, 130, 246, 255)).toBe('rgb(59, 130, 246)');
     expect(formatRgb(59, 130, 246, 128)).toBe('rgba(59, 130, 246, 0.50)');
 
     const box = { x1: 200, y1: 100, x2: 600, y2: 400 };
     expect(bboxDimensions(box)).toEqual({ w: 400, h: 300 });
-    expect(formatBBoxTuple(box, 1000, 500, 'px')).toEqual([200, 100, 600, 400]);
-    expect(formatBBoxTuple(box, 1000, 500, 'norm')).toEqual([200, 200, 600, 800]);
+    expect(formatBBoxTuple(box)).toEqual([200, 100, 600, 400]);
 
-    expect(parseBBoxInput('[200, 200, 600, 800]', 1000, 500, 'norm')).toEqual({
+    expect(parseBBoxInput('[200, 100, 600, 400]', 1000, 500)).toEqual({
       x1: 200,
       y1: 100,
       x2: 600,
       y2: 400,
     });
-    expect(parseBBoxInput('{"bbox": [50, 40, 180, 120]}', 800, 600, 'px')).toEqual({
+    expect(parseBBoxInput('{"bbox": [50, 40, 180, 120]}', 800, 600)).toEqual({
       x1: 50,
       y1: 40,
       x2: 180,
       y2: 120,
     });
+
+    // Pure RGBA cropping (2x2 -> bottom-right 1x1 pixel)
+    const src = new Uint8ClampedArray([
+      10, 20, 30, 255, 40, 50, 60, 255,
+      70, 80, 90, 255, 11, 22, 33, 255,
+    ]);
+    const cropped = cropRgba(src, 2, 2, { x1: 1, y1: 1, x2: 2, y2: 2 });
+    expect([cropped.width, cropped.height, ...cropped.data]).toEqual([1, 1, 11, 22, 33, 255]);
+
+    // 24-bit opaque BMP & 32-bit translucent BMP headers + BGR order
+    const bmp24 = encodeBmp(cropped.data, 1, 1);
+    expect([bmp24[0], bmp24[1]]).toEqual([0x42, 0x4d]); // 'BM'
+    expect(new DataView(bmp24.buffer).getUint16(28, true)).toBe(24);
+    expect([bmp24[54], bmp24[55], bmp24[56]]).toEqual([33, 22, 11]); // BGR
+
+    const alphaPx = new Uint8ClampedArray([100, 150, 200, 128]);
+    const bmp32 = encodeBmp(alphaPx, 1, 1);
+    expect(new DataView(bmp32.buffer).getUint16(28, true)).toBe(32);
+    expect([bmp32[54], bmp32[55], bmp32[56], bmp32[57]]).toEqual([200, 150, 100, 128]); // BGRA
+
+    // ICO wrapper around PNG payload
+    const fakePng = new Uint8Array([137, 80, 78, 71]);
+    const ico = encodeIcoFromPng(fakePng, 256, 64);
+    expect([ico[2], ico[4], ico[6], ico[7]]).toEqual([1, 1, 0, 64]); // 256 encoded as 0 per ICO spec
+    expect([...ico.slice(22)]).toEqual([137, 80, 78, 71]);
+
+    // Vector SVG viewBox crop
+    const svgBytes = cropSvgMarkup(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100"><rect width="200" height="100"/></svg>',
+      200,
+      100,
+      { x1: 50, y1: 20, x2: 150, y2: 70 },
+    );
+    const svgOut = new TextDecoder().decode(svgBytes);
+    expect(svgOut).toContain('viewBox="50 20 100 50"');
+    expect(svgOut).toContain('width="100"');
+    expect(svgOut).toContain('height="50"');
   });
 });

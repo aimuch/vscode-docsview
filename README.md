@@ -16,7 +16,7 @@ Preview common document formats inside VS Code and edit spreadsheets in place. *
 | Word（旧版） | `.doc` | 单击即预览 | **仅文字**，无版式（支持一键调用本地 Office/WPS 打开） |
 | PDF | `.pdf` | 单击即预览 | 翻页、缩放、适应宽度、搜索、文字选择、ISO 32000 标准框选/图钉批注（与 Acrobat/WPS/预览双向互通） |
 | PowerPoint | `.pptx` | 单击即预览 | 原生画幅比例（`4:3` / `16:10` / `16:9`）、双击文本框就地改字、标准幻灯片批注（与 PowerPoint/WPS 互通） |
-| 图片与像素标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览 | 实时像素坐标、11×11 十字准星放大镜取色（支持跟随指针/固定位置、`C` 复制、`Shift` 切换 RGB/HEX）、BBox 画框测距 |
+| 图片编辑与像素标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览 | 15×11 十字准星放大镜取色（跟随指针 / 固定可拖拽、`C` 复制、`Shift` 切换 RGB/HEX）、纯像素坐标与 BBox 画框测距、交互式图像裁剪（支持撤销/保存/另存）、PNG/JPG/WebP/BMP/ICO 格式互转 |
 
 Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一致：点编辑器右上角的预览图标，或在命令面板运行 **DocsView：在侧边打开预览**。想让 CSV 默认用表格打开，可在设置里加：
 
@@ -153,7 +153,7 @@ npm run package     # 生成 .vsix
 | Word (legacy) | `.doc` | on click | **text only** (plus one-click open in system app) |
 | PDF | `.pdf` | on click | paging, zoom, fit width, search, text selection, ISO 32000 box & pin annotations |
 | PowerPoint | `.pptx` | on click | native slide aspect ratio (`4:3` / `16:9`), double-click shape text editing, interoperable OOXML slide comments |
-| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click | live pixel coordinates, 11×11 crosshair magnifier loupe (follow/fixed), RGB/HEX picker, interactive BBox drawing & measurement |
+| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click | 15×11 crosshair magnifier loupe (follow cursor or fixed & draggable), RGB/HEX picker, pixel BBox measurement, interactive image cropping (with undo/save), PNG/JPG/WebP/BMP/ICO format conversion |
 
 Markdown and CSV keep opening as text; use the preview icon in the editor title or **DocsView: Open Preview to the Side**. Use **Reopen Editor With…** to switch any file between DocsView and the text editor.
 

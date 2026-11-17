@@ -39,7 +39,7 @@ export function activate(context: vscode.ExtensionContext): {
     ...BinaryPreviewProvider.viewTypes.map((viewType) =>
       vscode.window.registerCustomEditorProvider(viewType, binary, {
         webviewOptions,
-        supportsMultipleEditorsPerDocument: true,
+        supportsMultipleEditorsPerDocument: false,
       }),
     ),
     ...OfficeEditorProvider.viewTypes.map((viewType) =>

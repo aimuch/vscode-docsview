@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -202,7 +202,7 @@
         },
         {
           "command": "docsview.showHistory",
-          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|xlsx|xlsm|docx|pptx|pdf)$/i"
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|xlsx|xlsm|docx|pptx|pdf|png|jpg|jpeg|webp|gif|bmp|svg|ico|avif)$/i"
         }
       ]
     },

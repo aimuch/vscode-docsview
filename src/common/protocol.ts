@@ -4,6 +4,7 @@
 import type { StringKey } from './strings';
 
 export type ViewerKind = 'markdown' | 'sheet' | 'docx' | 'pdf' | 'pptx' | 'text' | 'image';
+export type ImageExportFormat = 'png' | 'jpg' | 'webp' | 'bmp' | 'ico';
 
 // ---------------------------------------------------------------- spreadsheet model
 
@@ -329,6 +330,10 @@ export type WebviewMessage =
   | { type: 'editBlock'; start: number; end: number; text: string; expected: string }
   /** Sheets: save a copy of sheet `index` in another format. */
   | { type: 'convert'; index: number; format: 'csv' | 'tsv' | 'xlsx' }
+  /** Image: replace current image bytes in-place (e.g. crop), backed by VS Code undo/redo & save. */
+  | { type: 'imageReplace'; bytes: Uint8Array; label?: string }
+  /** Image: save a converted or cropped copy to a user-chosen path. */
+  | { type: 'saveImageAs'; format: ImageExportFormat; bytes: Uint8Array; suffix?: string }
   /** Sent once per load: the document is on screen, or could not be rendered. */
   | { type: 'status'; ok: boolean; detail?: string };
 

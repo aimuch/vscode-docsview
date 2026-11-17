@@ -1,24 +1,41 @@
-// Image viewer with WeChat/Snipaste-style 11x11 pixel magnifier loupe (follow cursor or fixed),
-// RGB/HEX switching & one-key copy, and interactive bounding-box (BBox) drawing & measurement.
+// Image editor & inspector:
+// - 15x11 WeChat/Snipaste-style pixel magnifier loupe (follow cursor or fixed & draggable)
+// - RGB / HEX switching (Shift) & one-key copy (C), pure integer pixel coordinates
+// - Interactive BBox drawing, editing & JSON export
+// - Interactive Image Cropping (with aspect ratios, 8 handles, in-place Undo/Save & Save-As)
+// - Format Conversion (PNG / JPG / WebP / BMP / ICO)
 import '../shared/base.css';
 import './image.css';
-import type { LoupePosition } from '../../common/protocol';
+import type { ImageExportFormat, LoupePosition } from '../../common/protocol';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { getAppearance, onAppearanceChange, updateAppearance } from '../shared/appearance';
+import { getFileState } from '../shared/fileState';
 import { icons } from '../shared/icons';
 import { readState, Sidebar, writeState } from '../shared/sidebar';
-import { customToolbar, iconButton, segmented } from '../shared/ui';
+import {
+  customToolbar,
+  iconButton,
+  moreMenu,
+  noticeBanner,
+  openExternalButton,
+  openExternalMenuItem,
+  segmented,
+  type MenuItem,
+} from '../shared/ui';
 import {
   BBOX_PALETTE,
   bboxDimensions,
   clamp,
+  cropRgba,
+  cropSvgMarkup,
+  encodeBmp,
+  encodeIcoFromPng,
   formatBBoxTuple,
   formatRgb,
   parseBBoxInput,
   rgbToHex,
-  toScaledPoint,
   type BBox,
-  type CoordScale,
+  type PixelRect,
 } from './bbox';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -43,42 +60,56 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32];
-const LOUPE_CELLS = 11; // 11x11 neighbourhood (radius 5 around cursor)
-const LOUPE_HALF = 5;
-const LOUPE_PX = 11; // 11 screen px per magnified pixel -> 121x121 canvas
-const LOUPE_SIZE = LOUPE_CELLS * LOUPE_PX;
+const LOUPE_COLS = 15; // 15x11 landscape pixel grid matching WeChat/Snipaste screenshot loupe
+const LOUPE_ROWS = 11;
+const LOUPE_HALF_X = 7;
+const LOUPE_HALF_Y = 5;
+const LOUPE_PX = 10; // 150x110 canvas
+const LOUPE_W = LOUPE_COLS * LOUPE_PX;
+const LOUPE_H = LOUPE_ROWS * LOUPE_PX;
+
+type ToolMode = 'inspect' | 'bbox' | 'crop';
+type AspectPreset = 'free' | '1:1' | '16:9' | '4:3';
+type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
 // ---------------------------------------------------------------- state
 
 let fileName = '';
+let rawFileBytes: Uint8Array | undefined;
 let naturalW = 0;
 let naturalH = 0;
 let zoom = 1;
 let blobUrl: string | undefined;
+let sourceCanvas: HTMLCanvasElement | undefined;
+let sampleCtx: CanvasRenderingContext2D | undefined;
 /** Full RGBA pixel buffer when naturalW * naturalH <= 36M, else sampled via 2D context. */
 let pixelBuffer: Uint8ClampedArray | undefined;
-let sampleCtx: CanvasRenderingContext2D | undefined;
 
-let toolMode: 'inspect' | 'bbox' = readState().imgMode === 'bbox' ? 'bbox' : 'inspect';
-let coordScale: CoordScale = readState().imgScale === 'norm' ? 'norm' : 'px';
-/** Active colour readout mode inside the loupe: RGB tuple (`7, 7, 8`) or `#HEX` (`#070708`), toggled via Shift. */
+const savedMode = readState().imgMode;
+let toolMode: ToolMode = savedMode === 'bbox' || savedMode === 'crop' ? savedMode : 'inspect';
 let colorMode: 'rgb' | 'hex' = readState().imgColorMode === 'hex' ? 'hex' : 'rgb';
 let showGrid = readState().imgGrid !== false;
 let checkerboard = readState().imgChecker !== false;
+let fixedLoupeOffset = readState().loupeFixedPos as { x: number; y: number } | undefined;
 
 let boxes: BBox[] = [];
 let nextBoxId = 1;
 let selectedBoxId: number | undefined;
+
+let cropRect: PixelRect = { x1: 0, y1: 0, x2: 1, y2: 1 };
+let cropAspect: AspectPreset = 'free';
+
 let hoverPx: { x: number; y: number } | undefined;
+let lastSampledPx: { x: number; y: number } = { x: 0, y: 0 };
 let lastPointerClient: { x: number; y: number } | undefined;
-let currentColorValues: { rgbShort: string; rgbCss: string; hex: string } | undefined;
+let currentColorValues: { rgbDisplay: string; rgbCopy: string; hex: string } | undefined;
 let spaceHeld = false;
-/** True when a bare Shift press started with no drag or other key yet (toggles RGB/HEX on keyup). */
 let pureShiftTap = false;
 
 // ---------------------------------------------------------------- DOM elements
 
-const stage = el('div', { class: 'img-stage img-mode-inspect' });
+const notice = noticeBanner();
+const stage = el('div', { class: 'img-stage' });
 const scrollPad = el('div', { class: 'img-scroll-pad' });
 const canvasWrap = el('div', { class: 'img-canvas-wrap' });
 const imgEl = el('img', { class: 'img-el' });
@@ -93,22 +124,62 @@ scrollPad.append(canvasWrap);
 stage.append(scrollPad);
 canvasWrap.hidden = true;
 
-// WeChat / Snipaste style 11x11 Pixel Magnifier Loupe
+// 15x11 WeChat / Snipaste style Pixel Magnifier Loupe
 const loupeCanvas = el('canvas', { class: 'img-loupe-canvas' });
-loupeCanvas.width = LOUPE_SIZE;
-loupeCanvas.height = LOUPE_SIZE;
+loupeCanvas.width = LOUPE_W;
+loupeCanvas.height = LOUPE_H;
 const loupeCtx = loupeCanvas.getContext('2d')!;
 const loupeCoord = el('div', { class: 'img-loupe-coord' });
-const loupeSwatch = el('span', { class: 'img-loupe-swatch' });
+const loupeSwatch = el('span', { class: 'img-loupe-swatch' }, [el('span', { class: 'img-loupe-swatch-dot' })]);
 const loupeColorText = el('span');
+const loupeColorRow = el('div', { class: 'img-loupe-color-row' }, [loupeSwatch, loupeColorText]);
+const loupeDragHintEl = el('div', { class: 'img-loupe-hint img-loupe-drag-hint', text: t('loupeDragHint') });
 const loupeCard = el('div', { class: 'img-loupe-card' }, [
   loupeCoord,
-  el('div', { class: 'img-loupe-color-row' }, [loupeSwatch, loupeColorText]),
+  loupeColorRow,
   el('div', { class: 'img-loupe-hint', text: t('loupeCopyHint') }),
   el('div', { class: 'img-loupe-hint', text: t('loupeSwitchHint') }),
+  loupeDragHintEl,
 ]);
 const loupe = el('div', { class: 'img-loupe' }, [loupeCanvas, loupeCard]);
 loupe.hidden = true;
+
+// Allow dragging the loupe when in Fixed Position mode, and clicking to copy/toggle!
+loupe.addEventListener('mousedown', (e) => {
+  if (getAppearance().loupePosition !== 'fixed' || e.button !== 0) {
+    return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  const rect = loupe.getBoundingClientRect();
+  const startX = e.clientX;
+  const startY = e.clientY;
+  let moved = false;
+  const move = (ev: MouseEvent) => {
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      moved = true;
+    }
+    const nx = clamp(rect.left + dx, 8, Math.max(8, window.innerWidth - rect.width - 8));
+    const ny = clamp(rect.top + dy, 40, Math.max(40, window.innerHeight - rect.height - 34));
+    fixedLoupeOffset = { x: nx, y: ny };
+    positionLoupe();
+  };
+  const up = (ev: MouseEvent) => {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+    if (moved) {
+      writeState({ loupeFixedPos: fixedLoupeOffset });
+    } else if ((ev.target as HTMLElement | null)?.closest('.img-loupe-coord')) {
+      copyText(`${lastSampledPx.x}, ${lastSampledPx.y}`);
+    } else if ((ev.target as HTMLElement | null)?.closest('.img-loupe-color-row')) {
+      copyActiveColor();
+    }
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+});
 
 // Status bar
 const metaLabel = el('span', { class: 'dv-label' });
@@ -152,18 +223,313 @@ function copyActiveColor() {
   if (!currentColorValues) {
     return;
   }
-  copyText(colorMode === 'hex' ? currentColorValues.hex : currentColorValues.rgbShort);
+  copyText(colorMode === 'hex' ? currentColorValues.hex : currentColorValues.rgbCopy);
 }
 
 coordPill.addEventListener('click', () => {
-  if (!hoverPx) {
+  if (!naturalW) {
     return;
   }
-  const [sx, sy] = toScaledPoint(hoverPx.x, hoverPx.y, naturalW, naturalH, coordScale);
-  copyText(`${sx}, ${sy}`);
+  const pt = hoverPx ?? lastSampledPx;
+  copyText(`${pt.x}, ${pt.y}`);
 });
 hexPill.addEventListener('click', () => copyText(currentColorValues?.hex ?? ''));
-rgbPill.addEventListener('click', () => copyText(currentColorValues?.rgbShort ?? ''));
+rgbPill.addEventListener('click', () => copyText(currentColorValues?.rgbCopy ?? ''));
+
+// ---------------------------------------------------------------- Crop bar
+
+function makeCropNumInput(label: string, onChange: (val: number) => void): { wrap: HTMLElement; input: HTMLInputElement } {
+  const input = el('input', { class: 'dv-input img-crop-num' });
+  input.type = 'number';
+  input.min = '0';
+  input.step = '1';
+  input.addEventListener('change', () => {
+    const v = Number(input.value);
+    if (Number.isFinite(v)) {
+      onChange(Math.round(v));
+    }
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      input.blur();
+      void applyCropInPlace();
+    }
+    e.stopPropagation();
+  });
+  const wrap = el('label', { class: 'img-crop-field' }, [el('span', { text: label }), input]);
+  return { wrap, input };
+}
+
+const cropXField = makeCropNumInput('X', (v) => {
+  const w = cropRect.x2 - cropRect.x1;
+  cropRect.x1 = clamp(v, 0, Math.max(0, naturalW - 1));
+  cropRect.x2 = clamp(cropRect.x1 + w, cropRect.x1 + 1, naturalW);
+  syncCropUi();
+});
+const cropYField = makeCropNumInput('Y', (v) => {
+  const h = cropRect.y2 - cropRect.y1;
+  cropRect.y1 = clamp(v, 0, Math.max(0, naturalH - 1));
+  cropRect.y2 = clamp(cropRect.y1 + h, cropRect.y1 + 1, naturalH);
+  syncCropUi();
+});
+const cropWField = makeCropNumInput('W', (v) => {
+  const w = clamp(v, 1, Math.max(1, naturalW - cropRect.x1));
+  cropRect.x2 = cropRect.x1 + w;
+  if (cropAspect !== 'free') {
+    const ratio = aspectValue(cropAspect)!;
+    cropRect.y2 = clamp(cropRect.y1 + Math.max(1, Math.round(w / ratio)), cropRect.y1 + 1, naturalH);
+  }
+  syncCropUi();
+});
+const cropHField = makeCropNumInput('H', (v) => {
+  const h = clamp(v, 1, Math.max(1, naturalH - cropRect.y1));
+  cropRect.y2 = cropRect.y1 + h;
+  if (cropAspect !== 'free') {
+    const ratio = aspectValue(cropAspect)!;
+    cropRect.x2 = clamp(cropRect.x1 + Math.max(1, Math.round(h * ratio)), cropRect.x1 + 1, naturalW);
+  }
+  syncCropUi();
+});
+
+function aspectValue(preset: AspectPreset): number | undefined {
+  switch (preset) {
+    case '1:1':
+      return 1;
+    case '16:9':
+      return 16 / 9;
+    case '4:3':
+      return 4 / 3;
+    default:
+      return undefined;
+  }
+}
+
+const aspectSeg = segmented<AspectPreset>(
+  'Aspect ratio',
+  [
+    ['free', t('imgRatioFree')],
+    ['1:1', '1:1'],
+    ['16:9', '16:9'],
+    ['4:3', '4:3'],
+  ],
+  cropAspect,
+  (next) => {
+    cropAspect = next;
+    const ratio = aspectValue(next);
+    if (ratio && naturalW && naturalH) {
+      let w = cropRect.x2 - cropRect.x1;
+      let h = Math.max(1, Math.round(w / ratio));
+      if (cropRect.y1 + h > naturalH) {
+        h = naturalH - cropRect.y1;
+        w = Math.max(1, Math.round(h * ratio));
+      }
+      cropRect.x2 = clamp(cropRect.x1 + w, cropRect.x1 + 1, naturalW);
+      cropRect.y2 = clamp(cropRect.y1 + h, cropRect.y1 + 1, naturalH);
+      syncCropUi();
+    }
+  },
+);
+
+const applyCropBtn = el('button', { class: 'dv-btn dv-cm-primary', text: t('imgApplyCrop') });
+applyCropBtn.type = 'button';
+applyCropBtn.addEventListener('click', () => void applyCropInPlace());
+
+const saveCropAsBtn = el('button', { class: 'dv-btn', text: t('imgSaveCropAs') });
+saveCropAsBtn.type = 'button';
+saveCropAsBtn.addEventListener('click', () => void saveCropCopy());
+
+const cancelCropBtn = el('button', { class: 'dv-btn', text: t('cancel') });
+cancelCropBtn.type = 'button';
+cancelCropBtn.addEventListener('click', () => setToolMode('inspect'));
+
+const cropBar = el('div', { class: 'img-crop-bar' }, [
+  cropXField.wrap,
+  cropYField.wrap,
+  cropWField.wrap,
+  cropHField.wrap,
+  aspectSeg.node,
+  el('div', { class: 'dv-spacer' }),
+  cancelCropBtn,
+  saveCropAsBtn,
+  applyCropBtn,
+]);
+cropBar.hidden = true;
+
+function initDefaultCropRect(fromBox?: PixelRect) {
+  if (!naturalW || !naturalH) {
+    return;
+  }
+  if (fromBox) {
+    cropRect = {
+      x1: clamp(Math.round(fromBox.x1), 0, naturalW - 1),
+      y1: clamp(Math.round(fromBox.y1), 0, naturalH - 1),
+      x2: clamp(Math.round(fromBox.x2), 1, naturalW),
+      y2: clamp(Math.round(fromBox.y2), 1, naturalH),
+    };
+  } else {
+    const mx = naturalW >= 20 ? Math.round(naturalW * 0.1) : 0;
+    const my = naturalH >= 20 ? Math.round(naturalH * 0.1) : 0;
+    cropRect = {
+      x1: mx,
+      y1: my,
+      x2: Math.max(mx + 1, naturalW - mx),
+      y2: Math.max(my + 1, naturalH - my),
+    };
+  }
+  syncCropUi();
+}
+
+function syncCropUi() {
+  cropXField.input.value = String(cropRect.x1);
+  cropYField.input.value = String(cropRect.y1);
+  cropWField.input.value = String(Math.max(1, cropRect.x2 - cropRect.x1));
+  cropHField.input.value = String(Math.max(1, cropRect.y2 - cropRect.y1));
+  renderOverlay();
+}
+
+// ---------------------------------------------------------------- encoding & conversion
+
+function currentExt(): string {
+  const dot = fileName.lastIndexOf('.');
+  return dot >= 0 ? fileName.slice(dot + 1).toLowerCase() : 'png';
+}
+
+function canvasToBytes(canvas: HTMLCanvasElement, mime: string, quality?: number): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      async (blob) => {
+        if (!blob) {
+          reject(new Error(`Failed to encode ${mime}`));
+          return;
+        }
+        resolve(new Uint8Array(await blob.arrayBuffer()));
+      },
+      mime,
+      quality,
+    );
+  });
+}
+
+async function encodeRegion(rect: PixelRect, format: ImageExportFormat): Promise<Uint8Array> {
+  if (!sourceCanvas || !sampleCtx) {
+    throw new Error('Image is not ready');
+  }
+  const w = Math.max(1, Math.round(rect.x2 - rect.x1));
+  const h = Math.max(1, Math.round(rect.y2 - rect.y1));
+
+  if (format === 'bmp') {
+    const imgData =
+      rect.x1 === 0 && rect.y1 === 0 && w === naturalW && h === naturalH && pixelBuffer
+        ? { data: pixelBuffer, width: naturalW, height: naturalH }
+        : pixelBuffer
+          ? cropRgba(pixelBuffer, naturalW, naturalH, rect)
+          : sampleCtx.getImageData(rect.x1, rect.y1, w, h);
+    return encodeBmp(imgData.data, imgData.width, imgData.height);
+  }
+
+  if (format === 'ico') {
+    const maxSide = 256;
+    const scale = Math.min(1, maxSide / Math.max(w, h));
+    const iw = Math.max(1, Math.round(w * scale));
+    const ih = Math.max(1, Math.round(h * scale));
+    const iconCanvas = document.createElement('canvas');
+    iconCanvas.width = iw;
+    iconCanvas.height = ih;
+    const ctx = iconCanvas.getContext('2d')!;
+    ctx.drawImage(sourceCanvas, rect.x1, rect.y1, w, h, 0, 0, iw, ih);
+    const pngBytes = await canvasToBytes(iconCanvas, 'image/png');
+    return encodeIcoFromPng(pngBytes, iw, ih);
+  }
+
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = w;
+  outCanvas.height = h;
+  const ctx = outCanvas.getContext('2d')!;
+  if (format === 'jpg') {
+    // Composite transparent pixels over white so PNG -> JPG never turns transparent areas black.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+  }
+  ctx.drawImage(sourceCanvas, rect.x1, rect.y1, w, h, 0, 0, w, h);
+
+  if (format === 'jpg') {
+    return canvasToBytes(outCanvas, 'image/jpeg', 0.92);
+  }
+  if (format === 'webp') {
+    return canvasToBytes(outCanvas, 'image/webp', 0.92);
+  }
+  return canvasToBytes(outCanvas, 'image/png');
+}
+
+function fullRect(): PixelRect {
+  return { x1: 0, y1: 0, x2: naturalW, y2: naturalH };
+}
+
+async function convertCurrentImageTo(format: ImageExportFormat): Promise<void> {
+  if (!naturalW || !naturalH) {
+    return;
+  }
+  const bytes = await encodeRegion(fullRect(), format);
+  post({ type: 'saveImageAs', format, bytes });
+}
+
+async function saveCropCopy(): Promise<void> {
+  if (!naturalW || !naturalH) {
+    return;
+  }
+  const ext = currentExt();
+  const fmt: ImageExportFormat =
+    ext === 'jpg' || ext === 'jpeg'
+      ? 'jpg'
+      : ext === 'webp'
+        ? 'webp'
+        : ext === 'bmp'
+          ? 'bmp'
+          : ext === 'ico'
+            ? 'ico'
+            : 'png';
+  const bytes = await encodeRegion(cropRect, fmt);
+  post({ type: 'saveImageAs', format: fmt, bytes, suffix: '-crop' });
+}
+
+async function applyCropInPlace(): Promise<void> {
+  if (!naturalW || !naturalH) {
+    return;
+  }
+  const w = cropRect.x2 - cropRect.x1;
+  const h = cropRect.y2 - cropRect.y1;
+  if (w <= 0 || h <= 0 || (w === naturalW && h === naturalH)) {
+    setToolMode('inspect');
+    return;
+  }
+  const ext = currentExt();
+  if (ext === 'svg' && rawFileBytes) {
+    const svgText = new TextDecoder().decode(rawFileBytes);
+    const nextSvg = cropSvgMarkup(svgText, naturalW, naturalH, cropRect);
+    setToolMode('inspect');
+    post({ type: 'imageReplace', bytes: nextSvg, label: 'Crop SVG' });
+    return;
+  }
+  if (ext === 'gif' || ext === 'avif') {
+    notice.flash(t('imgCropReadonlyFmt'), 4200);
+    await saveCropCopy();
+    return;
+  }
+  const fmt: ImageExportFormat =
+    ext === 'jpg' || ext === 'jpeg'
+      ? 'jpg'
+      : ext === 'webp'
+        ? 'webp'
+        : ext === 'bmp'
+          ? 'bmp'
+          : ext === 'ico'
+            ? 'ico'
+            : 'png';
+  const bytes = await encodeRegion(cropRect, fmt);
+  setToolMode('inspect');
+  post({ type: 'imageReplace', bytes, label: 'Crop image' });
+}
 
 // ---------------------------------------------------------------- BBox sidebar
 
@@ -172,7 +538,7 @@ const sideTitleEl = sidebar.node.querySelector('.dv-side-title');
 
 const boxInput = el('input', { class: 'dv-input' });
 boxInput.type = 'text';
-boxInput.placeholder = '[x1, y1, x2, y2]';
+boxInput.placeholder = '[x1, y1, x2, y2] (px)';
 boxInput.setAttribute('aria-label', '[x1, y1, x2, y2]');
 const addBoxBtn = iconButton('plus', t('imgModeBbox'), () => addBoxFromInput());
 const boxList = el('div', { class: 'img-box-list' });
@@ -184,7 +550,7 @@ sidebar.panel().append(
 );
 
 function addBoxFromInput() {
-  const parsed = parseBBoxInput(boxInput.value, naturalW, naturalH, coordScale);
+  const parsed = parseBBoxInput(boxInput.value, naturalW, naturalH);
   if (!parsed) {
     return;
   }
@@ -209,39 +575,36 @@ boxInput.addEventListener('keydown', (e) => {
 
 // ---------------------------------------------------------------- toolbar
 
-const modeSeg = segmented<'inspect' | 'bbox'>(
+const modeSeg = segmented<ToolMode>(
   t('view'),
   [
     ['inspect', t('imgModePan')],
     ['bbox', t('imgModeBbox')],
+    ['crop', t('imgModeCrop')],
   ],
   toolMode,
-  (mode) => {
-    toolMode = mode;
-    writeState({ imgMode: mode });
-    stage.classList.toggle('img-mode-inspect', mode === 'inspect');
-    stage.classList.toggle('img-mode-bbox', mode === 'bbox');
-  },
+  (mode) => setToolMode(mode),
 );
-stage.classList.toggle('img-mode-inspect', toolMode === 'inspect');
-stage.classList.toggle('img-mode-bbox', toolMode === 'bbox');
 
-const scaleSeg = segmented<'px' | 'norm'>(
-  'Coordinate scale',
-  [
-    ['px', t('imgCoordPx')],
-    ['norm', t('imgCoordNorm')],
-  ],
-  coordScale,
-  (s) => {
-    coordScale = s;
-    writeState({ imgScale: s });
-    if (hoverPx) {
-      updatePixelReadout(hoverPx.x, hoverPx.y);
+function setToolMode(mode: ToolMode, seedCrop?: PixelRect) {
+  toolMode = mode;
+  modeSeg.set(mode);
+  writeState({ imgMode: mode });
+  stage.classList.toggle('img-mode-inspect', mode === 'inspect');
+  stage.classList.toggle('img-mode-bbox', mode === 'bbox');
+  stage.classList.toggle('img-mode-crop', mode === 'crop');
+  cropBar.hidden = mode !== 'crop';
+  if (mode === 'crop') {
+    const activeBox = seedCrop ?? boxes.find((b) => b.id === selectedBoxId);
+    initDefaultCropRect(activeBox);
+    if (getAppearance().loupePosition === 'follow') {
+      loupe.hidden = true;
     }
-    renderBoxes();
-  },
-);
+  } else {
+    syncLoupeVisibility();
+    renderOverlay();
+  }
+}
 
 const loupePosSeg = segmented<LoupePosition>(
   t('loupePosition'),
@@ -252,13 +615,13 @@ const loupePosSeg = segmented<LoupePosition>(
   getAppearance().loupePosition,
   (pos) => {
     updateAppearance({ loupePosition: pos });
-    positionLoupe();
+    syncLoupeVisibility();
   },
 );
 
 onAppearanceChange((a) => {
   loupePosSeg.set(a.loupePosition);
-  positionLoupe();
+  syncLoupeVisibility();
 });
 
 const zoomLabel = el('button', { class: 'dv-btn dv-label dv-zoom-label', text: '100%', title: t('zoomReset') });
@@ -271,6 +634,23 @@ const zoomGroup = el('div', { class: 'dv-zoom' }, [
   iconButton('plus', t('zoomIn'), () => stepZoom(1)),
   iconButton('fitWidth', t('fitWidth'), () => fitToStage()),
 ]);
+
+const IMAGE_CONVERT_FORMATS: ImageExportFormat[] = ['png', 'jpg', 'webp', 'bmp', 'ico'];
+
+function convertMenuItems(): MenuItem[] {
+  return IMAGE_CONVERT_FORMATS.map((fmt) => ({
+    icon: 'export' as const,
+    label: () => t('convertTo', fmt.toUpperCase()),
+    visible: () => {
+      const ext = currentExt();
+      const normExt = ext === 'jpeg' ? 'jpg' : ext;
+      return normExt !== fmt;
+    },
+    onClick: () => void convertCurrentImageTo(fmt),
+  }));
+}
+
+const convertDropdown = moreMenu(t('convertMenu'), convertMenuItems(), 'export');
 
 const clearBtn = el('button', { class: 'dv-btn', text: t('imgClearBoxes') });
 clearBtn.type = 'button';
@@ -287,12 +667,14 @@ copyJsonBtn.addEventListener('click', () => {
     return;
   }
   const payload = boxes.map((b) => {
-    const [x1, y1, x2, y2] = formatBBoxTuple(b, naturalW, naturalH, coordScale);
+    const [x1, y1, x2, y2] = formatBBoxTuple(b);
     const { w, h } = bboxDimensions(b);
-    return { id: b.id, bbox: [x1, y1, x2, y2], width: w, height: h, scale: coordScale };
+    return { id: b.id, bbox: [x1, y1, x2, y2], width: w, height: h };
   });
   copyText(JSON.stringify(payload));
 });
+
+const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
 const topBar = customToolbar({
   subtitle: () => (fileName ? fileName : 'IMAGE'),
@@ -300,7 +682,14 @@ const topBar = customToolbar({
     { id: 'nav', nodes: [sidebar.toggle] },
     { id: 'view', nodes: [modeSeg.node] },
     { id: 'zoom', nodes: [zoomGroup] },
-    { id: 'bbox', nodes: [loupePosSeg.node, scaleSeg.node, copyJsonBtn, clearBtn] },
+    { id: 'bbox', nodes: [loupePosSeg.node, convertDropdown, copyJsonBtn, clearBtn] },
+    { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
+    { id: 'openApp', nodes: [openExternalButton()] },
+  ],
+  documentActions: [
+    openExternalMenuItem(),
+    ...convertMenuItems(),
+    { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
   documentOptions: [
     {
@@ -328,6 +717,8 @@ canvasWrap.classList.toggle('img-checker', checkerboard);
 
 app.append(
   topBar.node,
+  cropBar,
+  notice.node,
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, stage])]),
   loupe,
   toast,
@@ -417,7 +808,7 @@ stage.addEventListener(
   { passive: false },
 );
 
-// ---------------------------------------------------------------- pixel sampling & 11x11 loupe
+// ---------------------------------------------------------------- pixel sampling & 15x11 loupe
 
 function samplePixel(x: number, y: number): [number, number, number, number] {
   const px = clamp(x, 0, naturalW - 1);
@@ -433,20 +824,59 @@ function samplePixel(x: number, y: number): [number, number, number, number] {
   return [0, 0, 0, 255];
 }
 
+function syncLoupeVisibility() {
+  if (!naturalW || !naturalH || canvasWrap.hidden) {
+    loupe.hidden = true;
+    return;
+  }
+  const fixed = getAppearance().loupePosition === 'fixed';
+  loupe.classList.toggle('img-loupe-fixed', fixed);
+  loupeDragHintEl.hidden = !fixed;
+  if (fixed) {
+    const pt = hoverPx ?? lastSampledPx;
+    updatePixelReadout(pt.x, pt.y);
+    loupe.hidden = false;
+    positionLoupe();
+  } else {
+    loupe.style.right = '';
+    loupe.style.bottom = '';
+    if (hoverPx && toolMode !== 'crop') {
+      loupe.hidden = false;
+      positionLoupe();
+    } else {
+      loupe.hidden = true;
+    }
+  }
+}
+
 function positionLoupe() {
   const fixed = getAppearance().loupePosition === 'fixed';
   loupe.classList.toggle('img-loupe-fixed', fixed);
+  loupeDragHintEl.hidden = !fixed;
   if (fixed) {
-    loupe.style.left = '';
-    loupe.style.top = '';
+    if (fixedLoupeOffset) {
+      const w = loupe.offsetWidth || 160;
+      const h = loupe.offsetHeight || 215;
+      loupe.style.left = `${clamp(fixedLoupeOffset.x, 8, Math.max(8, window.innerWidth - w - 8))}px`;
+      loupe.style.top = `${clamp(fixedLoupeOffset.y, 40, Math.max(40, window.innerHeight - h - 34))}px`;
+      loupe.style.right = 'auto';
+      loupe.style.bottom = 'auto';
+    } else {
+      loupe.style.left = '';
+      loupe.style.top = '';
+      loupe.style.right = '18px';
+      loupe.style.bottom = '42px';
+    }
     return;
   }
+  loupe.style.right = '';
+  loupe.style.bottom = '';
   if (!lastPointerClient || loupe.hidden) {
     return;
   }
   const offset = 20;
-  const w = loupe.offsetWidth || 138;
-  const h = loupe.offsetHeight || 215;
+  const w = loupe.offsetWidth || 160;
+  const h = loupe.offsetHeight || 210;
   let left = lastPointerClient.x + offset;
   let top = lastPointerClient.y + offset;
   if (left + w + 8 > window.innerWidth) {
@@ -460,17 +890,17 @@ function positionLoupe() {
 }
 
 function paintLoupe(cx: number, cy: number) {
-  loupeCtx.clearRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
+  loupeCtx.clearRect(0, 0, LOUPE_W, LOUPE_H);
 
-  // 1. Draw magnified 11x11 pixel cells
-  for (let dy = -LOUPE_HALF; dy <= LOUPE_HALF; dy++) {
-    for (let dx = -LOUPE_HALF; dx <= LOUPE_HALF; dx++) {
+  // 1. Draw magnified 15x11 pixel cells
+  for (let dy = -LOUPE_HALF_Y; dy <= LOUPE_HALF_Y; dy++) {
+    for (let dx = -LOUPE_HALF_X; dx <= LOUPE_HALF_X; dx++) {
       const x = cx + dx;
       const y = cy + dy;
-      const px = (dx + LOUPE_HALF) * LOUPE_PX;
-      const py = (dy + LOUPE_HALF) * LOUPE_PX;
+      const px = (dx + LOUPE_HALF_X) * LOUPE_PX;
+      const py = (dy + LOUPE_HALF_Y) * LOUPE_PX;
       if (x < 0 || y < 0 || x >= naturalW || y >= naturalH) {
-        loupeCtx.fillStyle = '#1c1c1e';
+        loupeCtx.fillStyle = '#18181b';
       } else {
         const [r, g, b, a] = samplePixel(x, y);
         if (a >= 255) {
@@ -485,69 +915,73 @@ function paintLoupe(cx: number, cy: number) {
     }
   }
 
-  // 2. Blue translucent crosshair row & column bands (leaving center pixel true-colour!)
-  const cStart = LOUPE_HALF * LOUPE_PX;
-  loupeCtx.fillStyle = 'rgba(59, 130, 246, 0.42)';
-  // Horizontal arms (left and right of center cell)
-  loupeCtx.fillRect(0, cStart, cStart, LOUPE_PX);
-  loupeCtx.fillRect(cStart + LOUPE_PX, cStart, LOUPE_SIZE - (cStart + LOUPE_PX), LOUPE_PX);
-  // Vertical arms (above and below center cell)
-  loupeCtx.fillRect(cStart, 0, LOUPE_PX, cStart);
-  loupeCtx.fillRect(cStart, cStart + LOUPE_PX, LOUPE_PX, LOUPE_SIZE - (cStart + LOUPE_PX));
+  // 2. Royal-blue translucent crosshair bands (leaving center pixel true-colour)
+  const cxPx = LOUPE_HALF_X * LOUPE_PX;
+  const cyPx = LOUPE_HALF_Y * LOUPE_PX;
+  loupeCtx.fillStyle = 'rgba(37, 99, 235, 0.52)';
+  loupeCtx.fillRect(0, cyPx, cxPx, LOUPE_PX);
+  loupeCtx.fillRect(cxPx + LOUPE_PX, cyPx, LOUPE_W - (cxPx + LOUPE_PX), LOUPE_PX);
+  loupeCtx.fillRect(cxPx, 0, LOUPE_PX, cyPx);
+  loupeCtx.fillRect(cxPx, cyPx + LOUPE_PX, LOUPE_PX, LOUPE_H - (cyPx + LOUPE_PX));
 
   // 3. Crisp 1px pixel grid lines
   loupeCtx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
   loupeCtx.lineWidth = 1;
   loupeCtx.beginPath();
-  for (let i = 1; i < LOUPE_CELLS; i++) {
+  for (let i = 1; i < LOUPE_COLS; i++) {
     const pos = i * LOUPE_PX + 0.5;
     loupeCtx.moveTo(pos, 0);
-    loupeCtx.lineTo(pos, LOUPE_SIZE);
+    loupeCtx.lineTo(pos, LOUPE_H);
+  }
+  for (let j = 1; j < LOUPE_ROWS; j++) {
+    const pos = j * LOUPE_PX + 0.5;
     loupeCtx.moveTo(0, pos);
-    loupeCtx.lineTo(LOUPE_SIZE, pos);
+    loupeCtx.lineTo(LOUPE_W, pos);
   }
   loupeCtx.stroke();
 
-  // 4. Dual-contrast reticle around the exact center pixel
-  loupeCtx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+  // 4. Center pixel [·] reticle matching reference screenshot
+  loupeCtx.strokeStyle = 'rgba(0, 0, 0, 0.78)';
   loupeCtx.lineWidth = 1;
-  loupeCtx.strokeRect(cStart - 0.5, cStart - 0.5, LOUPE_PX + 1, LOUPE_PX + 1);
+  loupeCtx.strokeRect(cxPx - 0.5, cyPx - 0.5, LOUPE_PX + 1, LOUPE_PX + 1);
   loupeCtx.strokeStyle = '#ffffff';
-  loupeCtx.lineWidth = 1.5;
-  loupeCtx.strokeRect(cStart + 0.5, cStart + 0.5, LOUPE_PX - 1, LOUPE_PX - 1);
+  loupeCtx.lineWidth = 1.6;
+  loupeCtx.strokeRect(cxPx + 0.5, cyPx + 0.5, LOUPE_PX - 1, LOUPE_PX - 1);
 }
 
 function refreshLoupeColorLabel() {
   if (!currentColorValues) {
     return;
   }
-  loupeColorText.textContent = colorMode === 'hex' ? currentColorValues.hex : currentColorValues.rgbShort;
+  loupeColorText.textContent = colorMode === 'hex' ? currentColorValues.hex : currentColorValues.rgbDisplay;
 }
 
 function updatePixelReadout(x: number, y: number) {
+  lastSampledPx = { x, y };
   const [r, g, b, a] = samplePixel(x, y);
   const hex = rgbToHex(r, g, b);
-  const rgbShort = a >= 255 ? `${r},  ${g},  ${b}` : `${r}, ${g}, ${b}, ${(a / 255).toFixed(2)}`;
-  const rgbCss = formatRgb(r, g, b, a);
-  currentColorValues = { rgbShort: a >= 255 ? `${r}, ${g}, ${b}` : rgbCss, rgbCss, hex };
+  const rgbDisplay = a >= 255 ? `${r},  ${g},  ${b}` : `${r}, ${g}, ${b}, ${(a / 255).toFixed(2)}`;
+  const rgbCopy = a >= 255 ? `${r}, ${g}, ${b}` : formatRgb(r, g, b, a);
+  currentColorValues = { rgbDisplay, rgbCopy, hex };
 
-  const [sx, sy] = toScaledPoint(x, y, naturalW, naturalH, coordScale);
-  const coordStr = coordScale === 'norm' ? `(${sx}, ${sy}) · px (${x}, ${y})` : `(${x}, ${y})`;
-
-  coordPill.textContent = coordStr;
+  const coordStr = `(${x} ,  ${y})`;
+  coordPill.textContent = `(${x}, ${y})`;
   swatchDot.style.background = hex;
   hexText.textContent = hex;
-  rgbPill.textContent = currentColorValues.rgbShort;
+  rgbPill.textContent = rgbCopy;
 
   loupeCoord.textContent = coordStr;
   loupeSwatch.style.background = hex;
-  loupeColorText.textContent = colorMode === 'hex' ? hex : rgbShort;
+  loupeColorText.textContent = colorMode === 'hex' ? hex : rgbDisplay;
   paintLoupe(x, y);
-  loupe.hidden = false;
-  positionLoupe();
+
+  if (getAppearance().loupePosition === 'fixed' || toolMode !== 'crop') {
+    loupe.hidden = false;
+    positionLoupe();
+  }
 }
 
-// ---------------------------------------------------------------- overlay & BBox rendering
+// ---------------------------------------------------------------- overlay (BBox & Crop) rendering
 
 let draftBox: { x1: number; y1: number; x2: number; y2: number; color: string } | undefined;
 
@@ -569,6 +1003,95 @@ function renderOverlay() {
   const dispH = Math.max(1, Math.round(naturalH * zoom));
   const svgNodes: SVGElement[] = [];
   const badgeNodes: HTMLElement[] = [];
+
+  if (toolMode === 'crop') {
+    const cx1 = cropRect.x1 * zoom;
+    const cy1 = cropRect.y1 * zoom;
+    const cw = Math.max(1, (cropRect.x2 - cropRect.x1) * zoom);
+    const ch = Math.max(1, (cropRect.y2 - cropRect.y1) * zoom);
+    const cx2 = cx1 + cw;
+    const cy2 = cy1 + ch;
+
+    // 4 dark outside masks
+    const masks: [number, number, number, number][] = [
+      [0, 0, dispW, cy1],
+      [0, cy2, dispW, Math.max(0, dispH - cy2)],
+      [0, cy1, cx1, ch],
+      [cx2, cy1, Math.max(0, dispW - cx2), ch],
+    ];
+    for (const [mx, my, mw, mh] of masks) {
+      if (mw > 0 && mh > 0) {
+        svgNodes.push(
+          svgEl('rect', {
+            class: 'img-crop-mask',
+            x: String(mx),
+            y: String(my),
+            width: String(mw),
+            height: String(mh),
+          }),
+        );
+      }
+    }
+
+    const g = svgEl('g', { class: 'img-crop-group' });
+    const bodyRect = svgEl('rect', {
+      class: 'img-crop-rect',
+      x: String(cx1),
+      y: String(cy1),
+      width: String(cw),
+      height: String(ch),
+    });
+    bodyRect.dataset.cropMove = '1';
+    g.append(bodyRect);
+
+    // Rule of thirds (3x3 guide lines)
+    for (const frac of [1 / 3, 2 / 3]) {
+      const gx = cx1 + cw * frac;
+      const gy = cy1 + ch * frac;
+      g.append(
+        svgEl('line', { class: 'img-crop-guide', x1: String(gx), y1: String(cy1), x2: String(gx), y2: String(cy2) }),
+        svgEl('line', { class: 'img-crop-guide', x1: String(cx1), y1: String(gy), x2: String(cx2), y2: String(gy) }),
+      );
+    }
+
+    const handles: [ResizeHandle, number, number, string][] = [
+      ['nw', cx1, cy1, 'nwse-resize'],
+      ['n', cx1 + cw / 2, cy1, 'ns-resize'],
+      ['ne', cx2, cy1, 'nesw-resize'],
+      ['e', cx2, cy1 + ch / 2, 'ew-resize'],
+      ['se', cx2, cy2, 'nwse-resize'],
+      ['s', cx1 + cw / 2, cy2, 'ns-resize'],
+      ['sw', cx1, cy2, 'nesw-resize'],
+      ['w', cx1, cy1 + ch / 2, 'ew-resize'],
+    ];
+    for (const [kind, hx, hy, cursor] of handles) {
+      const hNode = svgEl('rect', {
+        class: 'img-crop-handle',
+        x: String(hx - 4.5),
+        y: String(hy - 4.5),
+        width: '9',
+        height: '9',
+        rx: '1.5',
+        style: `cursor:${cursor}`,
+      });
+      hNode.dataset.cropHandle = kind;
+      g.append(hNode);
+    }
+    svgNodes.push(g);
+
+    const { w, h } = bboxDimensions(cropRect);
+    const cropBadge = el('div', {
+      class: 'img-bbox-badge img-crop-badge',
+      text: `${w} × ${h} px  (${cropRect.x1}, ${cropRect.y1})`,
+    });
+    cropBadge.style.left = `${cx1}px`;
+    cropBadge.style.top = `${cy1 >= 24 ? cy1 - 24 : cy1 + 4}px`;
+    badgeNodes.push(cropBadge);
+
+    overlaySvg.replaceChildren(...svgNodes);
+    badgesLayer.replaceChildren(...badgeNodes);
+    return;
+  }
 
   // Crosshair & hovered pixel frame
   if (hoverPx) {
@@ -640,7 +1163,7 @@ function renderOverlay() {
     }
     svgNodes.push(g);
 
-    const tuple = formatBBoxTuple(b, naturalW, naturalH, coordScale);
+    const tuple = formatBBoxTuple(b);
     const { w, h } = bboxDimensions(b);
     const tupleText = `[${tuple.join(', ')}]`;
     const prefix = b.id !== undefined ? `#${b.id} ` : '';
@@ -687,12 +1210,18 @@ function renderBoxes() {
   } else {
     boxList.replaceChildren(
       ...boxes.map((b) => {
-        const tuple = formatBBoxTuple(b, naturalW, naturalH, coordScale);
+        const tuple = formatBBoxTuple(b);
         const tupleStr = `[${tuple.join(', ')}]`;
         const { w, h } = bboxDimensions(b);
 
         const dot = el('span', { class: 'img-color-dot' });
         dot.style.background = b.color;
+
+        const cropToBtn = iconButton('crop', t('imgCropToBox'), () => {
+          setToolMode('crop', b);
+        });
+        cropToBtn.classList.add('img-box-mini');
+        cropToBtn.addEventListener('click', (e) => e.stopPropagation());
 
         const copyBtn = iconButton('check', t('copy'), () => copyText(tupleStr));
         copyBtn.innerHTML = icons.export;
@@ -717,7 +1246,7 @@ function renderBoxes() {
               dot,
               el('span', { text: `#${b.id}` }),
               el('span', { class: 'img-box-dim', text: `${w} × ${h} px` }),
-              el('span', { class: 'img-box-actions' }, [copyBtn, delBtn]),
+              el('span', { class: 'img-box-actions' }, [cropToBtn, copyBtn, delBtn]),
             ]),
             el('div', { class: 'img-box-coords', text: tupleStr }),
           ],
@@ -747,21 +1276,31 @@ stage.addEventListener('mousemove', (e) => {
     if (!hoverPx || hoverPx.x !== ix || hoverPx.y !== iy) {
       hoverPx = { x: ix, y: iy };
       updatePixelReadout(ix, iy);
-      renderOverlay();
-    } else {
+      if (toolMode !== 'crop') {
+        renderOverlay();
+      }
+    } else if (getAppearance().loupePosition === 'follow' && toolMode !== 'crop') {
       positionLoupe();
     }
   } else if (hoverPx) {
     hoverPx = undefined;
-    loupe.hidden = true;
-    renderOverlay();
+    if (getAppearance().loupePosition === 'follow') {
+      loupe.hidden = true;
+    }
+    if (toolMode !== 'crop') {
+      renderOverlay();
+    }
   }
 });
 
 stage.addEventListener('mouseleave', () => {
   hoverPx = undefined;
-  loupe.hidden = true;
-  renderOverlay();
+  if (getAppearance().loupePosition === 'follow') {
+    loupe.hidden = true;
+  }
+  if (toolMode !== 'crop') {
+    renderOverlay();
+  }
 });
 
 stage.addEventListener('mousedown', (e) => {
@@ -773,6 +1312,106 @@ stage.addEventListener('mousedown', (e) => {
     return;
   }
   const target = e.target as Element | null;
+
+  // --- Crop Mode interactions (8-handle resize, move inside, or drag new crop rect) ---
+  if (toolMode === 'crop' && e.button === 0 && !spaceHeld) {
+    const cropHandle = target?.getAttribute('data-crop-handle') as ResizeHandle | null;
+    if (cropHandle) {
+      e.preventDefault();
+      const orig = { ...cropRect };
+      const ratio = aspectValue(cropAspect);
+      const move = (ev: MouseEvent) => {
+        const p = clientToImageFloat(ev.clientX, ev.clientY);
+        const px = clamp(Math.round(p.x), 0, naturalW);
+        const py = clamp(Math.round(p.y), 0, naturalH);
+        let { x1, y1, x2, y2 } = orig;
+        if (cropHandle.includes('w')) x1 = clamp(px, 0, orig.x2 - 1);
+        if (cropHandle.includes('e')) x2 = clamp(px, orig.x1 + 1, naturalW);
+        if (cropHandle.includes('n')) y1 = clamp(py, 0, orig.y2 - 1);
+        if (cropHandle.includes('s')) y2 = clamp(py, orig.y1 + 1, naturalH);
+        if (ratio) {
+          const w = x2 - x1;
+          const desiredH = Math.max(1, Math.round(w / ratio));
+          if (cropHandle.includes('n')) {
+            y1 = clamp(y2 - desiredH, 0, y2 - 1);
+          } else {
+            y2 = clamp(y1 + desiredH, y1 + 1, naturalH);
+          }
+        }
+        cropRect = { x1, y1, x2, y2 };
+        syncCropUi();
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      return;
+    }
+
+    if (target?.getAttribute('data-crop-move')) {
+      e.preventDefault();
+      const startPt = clientToImageFloat(e.clientX, e.clientY);
+      const orig = { ...cropRect };
+      const w = orig.x2 - orig.x1;
+      const h = orig.y2 - orig.y1;
+      const move = (ev: MouseEvent) => {
+        const cur = clientToImageFloat(ev.clientX, ev.clientY);
+        const dx = Math.round(cur.x - startPt.x);
+        const dy = Math.round(cur.y - startPt.y);
+        const x1 = clamp(orig.x1 + dx, 0, naturalW - w);
+        const y1 = clamp(orig.y1 + dy, 0, naturalH - h);
+        cropRect = { x1, y1, x2: x1 + w, y2: y1 + h };
+        syncCropUi();
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      return;
+    }
+
+    // Drag outside current crop box -> draw a brand-new crop box
+    const start = clientToImageFloat(e.clientX, e.clientY);
+    if (start.x >= 0 && start.y >= 0 && start.x <= naturalW && start.y <= naturalH) {
+      e.preventDefault();
+      const sx = clamp(Math.round(start.x), 0, naturalW - 1);
+      const sy = clamp(Math.round(start.y), 0, naturalH - 1);
+      const ratio = aspectValue(cropAspect);
+      const move = (ev: MouseEvent) => {
+        const cur = clientToImageFloat(ev.clientX, ev.clientY);
+        const ex = clamp(Math.round(cur.x), 0, naturalW);
+        const ey = clamp(Math.round(cur.y), 0, naturalH);
+        const x1 = clamp(Math.min(sx, ex), 0, naturalW - 1);
+        let x2 = clamp(Math.max(x1 + 1, Math.max(sx, ex)), 1, naturalW);
+        let y1 = clamp(Math.min(sy, ey), 0, naturalH - 1);
+        let y2 = clamp(Math.max(y1 + 1, Math.max(sy, ey)), 1, naturalH);
+        if (ratio) {
+          const w = x2 - x1;
+          const h = Math.max(1, Math.round(w / ratio));
+          if (ey >= sy) {
+            y2 = clamp(y1 + h, y1 + 1, naturalH);
+            x2 = clamp(x1 + Math.max(1, Math.round((y2 - y1) * ratio)), x1 + 1, naturalW);
+          } else {
+            y1 = clamp(y2 - h, 0, y2 - 1);
+          }
+        }
+        cropRect = { x1, y1, x2, y2 };
+        syncCropUi();
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      return;
+    }
+  }
+
   const handleBoxId = Number(target?.getAttribute('data-box-id') ?? '0');
   const handleKind = target?.getAttribute('data-handle') as 'nw' | 'ne' | 'sw' | 'se' | null;
 
@@ -788,14 +1427,10 @@ stage.addEventListener('mousedown', (e) => {
         const py = clamp(Math.round(p.y), 0, naturalH);
         const ax = handleKind.includes('w') ? orig.x2 : orig.x1;
         const ay = handleKind.includes('n') ? orig.y2 : orig.y1;
-        box.x1 = Math.min(px, ax - 1);
-        box.x2 = Math.max(px, ax + 1);
-        box.y1 = Math.min(py, ay - 1);
-        box.y2 = Math.max(py, ay + 1);
-        box.x1 = clamp(box.x1, 0, naturalW - 1);
-        box.y1 = clamp(box.y1, 0, naturalH - 1);
-        box.x2 = clamp(Math.max(box.x1 + 1, box.x2), 1, naturalW);
-        box.y2 = clamp(Math.max(box.y1 + 1, box.y2), 1, naturalH);
+        box.x1 = clamp(Math.min(px, ax - 1), 0, naturalW - 1);
+        box.y1 = clamp(Math.min(py, ay - 1), 0, naturalH - 1);
+        box.x2 = clamp(Math.max(box.x1 + 1, Math.max(px, ax + 1)), 1, naturalW);
+        box.y2 = clamp(Math.max(box.y1 + 1, Math.max(py, ay + 1)), 1, naturalH);
         renderBoxes();
       };
       const up = () => {
@@ -840,7 +1475,7 @@ stage.addEventListener('mousedown', (e) => {
   }
 
   // 3. Draw new BBox (in 'bbox' mode or when holding Shift in 'inspect' mode)
-  const wantBbox = e.button === 0 && !spaceHeld && (toolMode === 'bbox' || e.shiftKey);
+  const wantBbox = e.button === 0 && !spaceHeld && (toolMode === 'bbox' || (toolMode === 'inspect' && e.shiftKey));
   if (wantBbox) {
     const start = clientToImageFloat(e.clientX, e.clientY);
     if (start.x < 0 || start.y < 0 || start.x > naturalW || start.y > naturalH) {
@@ -901,7 +1536,7 @@ stage.addEventListener('mousedown', (e) => {
     stage.classList.remove('img-panning');
     window.removeEventListener('mousemove', move);
     window.removeEventListener('mouseup', up);
-    if (!moved && e.button === 0 && hoverPx) {
+    if (!moved && e.button === 0 && toolMode === 'inspect' && hoverPx) {
       copyActiveColor();
     }
   };
@@ -922,13 +1557,18 @@ window.addEventListener('keydown', (e) => {
 
   if (e.key === ' ') {
     spaceHeld = true;
+  } else if (toolMode === 'crop' && e.key === 'Enter') {
+    e.preventDefault();
+    void applyCropInPlace();
+  } else if (toolMode === 'crop' && e.key === 'Escape') {
+    e.preventDefault();
+    setToolMode('inspect');
   } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'c') {
-    // Press C to copy active colour value (WeChat / Snipaste shortcut)
-    if (hoverPx) {
+    if (hoverPx || getAppearance().loupePosition === 'fixed') {
       e.preventDefault();
       copyActiveColor();
     }
-  } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBoxId !== undefined) {
+  } else if ((e.key === 'Delete' || e.key === 'Backspace') && toolMode !== 'crop' && selectedBoxId !== undefined) {
     e.preventDefault();
     boxes = boxes.filter((b) => b.id !== selectedBoxId);
     selectedBoxId = boxes[boxes.length - 1]?.id;
@@ -961,8 +1601,9 @@ showStatus(statusHost, t('loading'));
 
 async function loadImage(name: string, bytes: Uint8Array) {
   fileName = name;
+  rawFileBytes = bytes;
   topBar.refresh();
-  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+  const ext = currentExt();
   const mime = MIME_BY_EXT[ext] ?? 'image/png';
   if (blobUrl) {
     URL.revokeObjectURL(blobUrl);
@@ -984,10 +1625,10 @@ async function loadImage(name: string, bytes: Uint8Array) {
       throw new Error('Zero-sized image');
     }
 
-    // Rasterise onto an offscreen canvas for O(1) pixel RGB/HEX sampling.
     const offscreen = document.createElement('canvas');
     offscreen.width = naturalW;
     offscreen.height = naturalH;
+    sourceCanvas = offscreen;
     sampleCtx = offscreen.getContext('2d', { willReadFrequently: true }) ?? undefined;
     pixelBuffer = undefined;
     if (sampleCtx) {
@@ -997,11 +1638,25 @@ async function loadImage(name: string, bytes: Uint8Array) {
       }
     }
 
+    // Clamp or discard out-of-bounds BBoxes after a crop/reload
+    boxes = boxes
+      .map((b) => ({
+        ...b,
+        x1: clamp(b.x1, 0, Math.max(0, naturalW - 1)),
+        y1: clamp(b.y1, 0, Math.max(0, naturalH - 1)),
+        x2: clamp(b.x2, 1, naturalW),
+        y2: clamp(b.y2, 1, naturalH),
+      }))
+      .filter((b) => b.x2 > b.x1 && b.y2 > b.y1);
+
+    lastSampledPx = { x: Math.floor(naturalW / 2), y: Math.floor(naturalH / 2) };
     statusHost.hidden = true;
     canvasWrap.hidden = false;
     updateMetaLabel();
     fitToStage();
+    setToolMode(toolMode);
     renderBoxes();
+    syncLoupeVisibility();
     post({ type: 'status', ok: true, detail: `${naturalW}x${naturalH}` });
   } catch (err) {
     canvasWrap.hidden = true;
@@ -1022,5 +1677,6 @@ onMessage((message) => {
   }
 });
 
+setToolMode(toolMode);
 renderBoxes();
 post({ type: 'ready' });

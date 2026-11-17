@@ -301,15 +301,69 @@ function createSession(file: string): Session {
     };
   }
 
+  if (engine === 'binary') {
+    let currentBytes: Uint8Array = bytes();
+    const undoStack: Uint8Array[] = [];
+    const redoStack: Uint8Array[] = [];
+    return {
+      async handle(message) {
+        switch (message.type) {
+          case 'ready':
+            currentBytes = bytes();
+            return [{ type: 'load', name, bytes: currentBytes, editable: true }];
+          case 'imageReplace': {
+            const next = message.bytes instanceof Uint8Array
+              ? message.bytes
+              : Buffer.from((message.bytes as unknown as { __u8?: string }).__u8 ?? '', 'base64');
+            undoStack.push(currentBytes);
+            redoStack.length = 0;
+            currentBytes = new Uint8Array(next);
+            return [{ type: 'load', name, bytes: currentBytes, editable: true }];
+          }
+          case 'saveImageAs': {
+            mkdirSync(savedDir, { recursive: true });
+            const stem = name.replace(/\.[^.]+$/, '');
+            const raw = message.bytes instanceof Uint8Array
+              ? message.bytes
+              : Buffer.from((message.bytes as unknown as { __u8?: string }).__u8 ?? '', 'base64');
+            writeFileSync(join(savedDir, `${stem}${message.suffix ?? ''}.${message.format}`), raw);
+            return [];
+          }
+          case 'dev-undo': {
+            const prev = undoStack.pop();
+            if (!prev) {
+              return [];
+            }
+            redoStack.push(currentBytes);
+            currentBytes = prev;
+            return [{ type: 'load', name, bytes: currentBytes, editable: true }];
+          }
+          case 'dev-redo': {
+            const next = redoStack.pop();
+            if (!next) {
+              return [];
+            }
+            undoStack.push(currentBytes);
+            currentBytes = next;
+            return [{ type: 'load', name, bytes: currentBytes, editable: true }];
+          }
+          case 'dev-save':
+            mkdirSync(savedDir, { recursive: true });
+            writeFileSync(join(savedDir, name), currentBytes);
+            return [];
+          default:
+            return [];
+        }
+      },
+    };
+  }
+
   return {
     async handle(message) {
       if (message.type !== 'ready') {
         return [];
       }
-      if (engine === 'doc') {
-        return [{ type: 'text', name, body: await extractDocText(bytes()) }];
-      }
-      return [{ type: 'load', name, bytes: bytes() }];
+      return [{ type: 'text', name, body: await extractDocText(bytes()) }];
     },
   };
 }
