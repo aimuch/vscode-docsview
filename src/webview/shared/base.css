@@ -569,6 +569,26 @@ body {
   display: flex;
 }
 
+body[data-sidebar-pos='right'] .dv-body {
+  flex-direction: row-reverse;
+}
+
+body[data-sidebar-pos='right'] .dv-side {
+  border-right: 0;
+  border-left: 1px solid var(--dv-border);
+}
+
+body[data-sidebar-pos='right'] .dv-side-expand {
+  left: auto;
+  right: 8px;
+}
+
+body[data-sidebar-pos='right'] .dv-side-collapse svg,
+body[data-sidebar-pos='right'] .dv-side-expand svg,
+body[data-sidebar-pos='right'] .dv-slot[data-slot='nav'] svg {
+  transform: scaleX(-1);
+}
+
 .dv-main {
   flex: 1;
   min-width: 0;

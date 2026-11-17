@@ -202,6 +202,14 @@ const en = {
   imgNoBoxes: 'Switch to "Draw BBox" (or hold Shift + drag) to draw boxes and inspect [x1, y1, x2, y2] & W×H.',
   imgCopyJson: 'Copy JSON',
   slotBbox: 'Image BBox & pixel tools',
+  loupePosition: 'Pixel loupe',
+  loupeFollow: 'Follow cursor',
+  loupeFixed: 'Fixed position',
+  loupeCopyHint: 'Press C to copy colour',
+  loupeSwitchHint: 'Press Shift to switch RGB/HEX',
+  sidebarPosition: 'Outline sidebar',
+  sidebarLeft: 'Left',
+  sidebarRight: 'Right',
 };
 
 const zh: typeof en = {
@@ -404,6 +412,14 @@ const zh: typeof en = {
   imgNoBoxes: '切换到“画框 (BBox)”（或按住 Shift 拖拽）即可在图上框选并测量坐标与宽高。',
   imgCopyJson: '复制 JSON',
   slotBbox: '图片画框与像素工具',
+  loupePosition: '取色框位置',
+  loupeFollow: '跟随指针',
+  loupeFixed: '固定位置',
+  loupeCopyHint: '按 C 复制颜色值',
+  loupeSwitchHint: '按 Shift 切换 RGB/HEX',
+  sidebarPosition: '导航栏位置',
+  sidebarLeft: '左侧',
+  sidebarRight: '右侧',
 };
 
 export type StringKey = keyof typeof en;

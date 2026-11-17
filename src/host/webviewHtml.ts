@@ -4,8 +4,10 @@ import {
   type Appearance,
   type HostMessage,
   type LanguageSetting,
+  type LoupePosition,
   type MarkdownWidth,
   type SchemeSetting,
+  type SidebarPosition,
   type SplitPosition,
   type ThemeId,
   type ToolbarConfig,
@@ -25,6 +27,8 @@ const SCHEMES: readonly SchemeSetting[] = ['auto', 'light', 'dark'];
 const LANGUAGES: readonly LanguageSetting[] = ['auto', 'zh-cn', 'en'];
 const MD_WIDTHS: readonly MarkdownWidth[] = ['fixed', 'fluid'];
 const SPLIT_POSITIONS: readonly SplitPosition[] = ['sourceLeft', 'previewLeft'];
+const LOUPE_POSITIONS: readonly LoupePosition[] = ['follow', 'fixed'];
+const SIDEBAR_POSITIONS: readonly SidebarPosition[] = ['left', 'right'];
 
 /** Setting key for each Appearance field, relative to the "docsview" section. */
 const SETTING_KEYS: Record<keyof Appearance, string> = {
@@ -37,6 +41,8 @@ const SETTING_KEYS: Record<keyof Appearance, string> = {
   mdWidth: 'markdown.contentWidth',
   splitPosition: 'markdown.splitPosition',
   showNotices: 'showNotices',
+  loupePosition: 'image.loupePosition',
+  sidebarPosition: 'sidebarPosition',
 };
 
 export function readAppearance(): Appearance {
@@ -55,6 +61,8 @@ export function readAppearance(): Appearance {
     mdWidth: pick(SETTING_KEYS.mdWidth, MD_WIDTHS),
     splitPosition: pick(SETTING_KEYS.splitPosition, SPLIT_POSITIONS),
     showNotices: config.get<boolean>(SETTING_KEYS.showNotices, true),
+    loupePosition: pick(SETTING_KEYS.loupePosition, LOUPE_POSITIONS),
+    sidebarPosition: pick(SETTING_KEYS.sidebarPosition, SIDEBAR_POSITIONS),
   };
 }
 
@@ -362,7 +370,9 @@ export function watchViews(): vscode.Disposable[] {
         !e.affectsConfiguration('docsview.table.lockEditing') &&
         !e.affectsConfiguration('docsview.markdown.contentWidth') &&
         !e.affectsConfiguration('docsview.markdown.splitPosition') &&
-        !e.affectsConfiguration('docsview.showNotices')
+        !e.affectsConfiguration('docsview.showNotices') &&
+        !e.affectsConfiguration('docsview.image.loupePosition') &&
+        !e.affectsConfiguration('docsview.sidebarPosition')
       ) {
         return;
       }

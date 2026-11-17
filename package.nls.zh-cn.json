@@ -22,6 +22,8 @@
   "config.highlightRowColumn": "在 CSV 与 Excel 视图中高亮选中单元格所在的行和列，在 Markdown 表格中高亮鼠标所在的行和列。",
   "config.table.lockEditing": "锁定 CSV 与 Excel 视图的单元格编辑，需在工具栏解锁后才能修改。",
   "config.showNotices": "在 Excel、PPT、旧版 Word 等预览顶部显示说明提示条（如公式重算提示）。",
+  "config.image.loupePosition": "图片预览中像素放大取色框的位置：跟随鼠标指针或固定在右下角。",
+  "config.sidebarPosition": "目录与导航侧栏在预览窗口中的位置（左侧或右侧）。",
   "config.toolbar": "DocsView 顶部工具栏左侧与右侧显示的项目及其排列顺序。",
   "command.showHistory": "DocsView：查看版本历史"
 }

@@ -1,8 +1,10 @@
-// Image viewer with live pixel coordinates, 9x9 magnifier loupe, RGB/HEX extraction,
-// and interactive bounding-box (BBox) drawing & measurement (px and 0–1000 normalised).
+// Image viewer with WeChat/Snipaste-style 11x11 pixel magnifier loupe (follow cursor or fixed),
+// RGB/HEX switching & one-key copy, and interactive bounding-box (BBox) drawing & measurement.
 import '../shared/base.css';
 import './image.css';
+import type { LoupePosition } from '../../common/protocol';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
+import { getAppearance, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { icons } from '../shared/icons';
 import { readState, Sidebar, writeState } from '../shared/sidebar';
 import { customToolbar, iconButton, segmented } from '../shared/ui';
@@ -41,6 +43,10 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32];
+const LOUPE_CELLS = 11; // 11x11 neighbourhood (radius 5 around cursor)
+const LOUPE_HALF = 5;
+const LOUPE_PX = 11; // 11 screen px per magnified pixel -> 121x121 canvas
+const LOUPE_SIZE = LOUPE_CELLS * LOUPE_PX;
 
 // ---------------------------------------------------------------- state
 
@@ -55,6 +61,8 @@ let sampleCtx: CanvasRenderingContext2D | undefined;
 
 let toolMode: 'inspect' | 'bbox' = readState().imgMode === 'bbox' ? 'bbox' : 'inspect';
 let coordScale: CoordScale = readState().imgScale === 'norm' ? 'norm' : 'px';
+/** Active colour readout mode inside the loupe: RGB tuple (`7, 7, 8`) or `#HEX` (`#070708`), toggled via Shift. */
+let colorMode: 'rgb' | 'hex' = readState().imgColorMode === 'hex' ? 'hex' : 'rgb';
 let showGrid = readState().imgGrid !== false;
 let checkerboard = readState().imgChecker !== false;
 
@@ -62,7 +70,11 @@ let boxes: BBox[] = [];
 let nextBoxId = 1;
 let selectedBoxId: number | undefined;
 let hoverPx: { x: number; y: number } | undefined;
+let lastPointerClient: { x: number; y: number } | undefined;
+let currentColorValues: { rgbShort: string; rgbCss: string; hex: string } | undefined;
 let spaceHeld = false;
+/** True when a bare Shift press started with no drag or other key yet (toggles RGB/HEX on keyup). */
+let pureShiftTap = false;
 
 // ---------------------------------------------------------------- DOM elements
 
@@ -81,34 +93,32 @@ scrollPad.append(canvasWrap);
 stage.append(scrollPad);
 canvasWrap.hidden = true;
 
-// Loupe magnifier (9x9 pixels)
+// WeChat / Snipaste style 11x11 Pixel Magnifier Loupe
 const loupeCanvas = el('canvas', { class: 'img-loupe-canvas' });
-loupeCanvas.width = 9;
-loupeCanvas.height = 9;
+loupeCanvas.width = LOUPE_SIZE;
+loupeCanvas.height = LOUPE_SIZE;
 const loupeCtx = loupeCanvas.getContext('2d')!;
-const loupeDot = el('span', { class: 'img-color-dot' });
-const loupeHex = el('span');
-const loupeCoord = el('span');
-const loupeRgb = el('span');
-const loupe = el('div', { class: 'img-loupe' }, [
-  loupeCanvas,
-  el('div', { class: 'img-loupe-meta' }, [
-    el('span', { class: 'img-loupe-hex-row' }, [loupeDot, loupeHex]),
-    loupeRgb,
-    loupeCoord,
-  ]),
+const loupeCoord = el('div', { class: 'img-loupe-coord' });
+const loupeSwatch = el('span', { class: 'img-loupe-swatch' });
+const loupeColorText = el('span');
+const loupeCard = el('div', { class: 'img-loupe-card' }, [
+  loupeCoord,
+  el('div', { class: 'img-loupe-color-row' }, [loupeSwatch, loupeColorText]),
+  el('div', { class: 'img-loupe-hint', text: t('loupeCopyHint') }),
+  el('div', { class: 'img-loupe-hint', text: t('loupeSwitchHint') }),
 ]);
+const loupe = el('div', { class: 'img-loupe' }, [loupeCanvas, loupeCard]);
 loupe.hidden = true;
 
 // Status bar
 const metaLabel = el('span', { class: 'dv-label' });
-const coordPill = el('button', { class: 'img-pill', text: 'XY: —' });
+const coordPill = el('button', { class: 'img-pill', text: '(—, —)' });
 coordPill.type = 'button';
 const swatchDot = el('span', { class: 'img-color-dot' });
 const hexText = el('span', { text: '#------' });
 const hexPill = el('button', { class: 'img-pill' }, [swatchDot, hexText]);
 hexPill.type = 'button';
-const rgbPill = el('button', { class: 'img-pill', text: 'rgb(—, —, —)' });
+const rgbPill = el('button', { class: 'img-pill', text: '—, —, —' });
 rgbPill.type = 'button';
 const statusBar = el('div', { class: 'img-statusbar' }, [
   metaLabel,
@@ -138,6 +148,13 @@ function copyText(value: string) {
   void navigator.clipboard?.writeText(value).then(() => flashToast(value));
 }
 
+function copyActiveColor() {
+  if (!currentColorValues) {
+    return;
+  }
+  copyText(colorMode === 'hex' ? currentColorValues.hex : currentColorValues.rgbShort);
+}
+
 coordPill.addEventListener('click', () => {
   if (!hoverPx) {
     return;
@@ -145,8 +162,8 @@ coordPill.addEventListener('click', () => {
   const [sx, sy] = toScaledPoint(hoverPx.x, hoverPx.y, naturalW, naturalH, coordScale);
   copyText(`${sx}, ${sy}`);
 });
-hexPill.addEventListener('click', () => copyText(hexText.textContent ?? ''));
-rgbPill.addEventListener('click', () => copyText(rgbPill.textContent ?? ''));
+hexPill.addEventListener('click', () => copyText(currentColorValues?.hex ?? ''));
+rgbPill.addEventListener('click', () => copyText(currentColorValues?.rgbShort ?? ''));
 
 // ---------------------------------------------------------------- BBox sidebar
 
@@ -174,7 +191,7 @@ function addBoxFromInput() {
   const box: BBox = {
     id: nextBoxId++,
     ...parsed,
-    color: BBOX_PALETTE[(boxes.length) % BBOX_PALETTE.length],
+    color: BBOX_PALETTE[boxes.length % BBOX_PALETTE.length],
   };
   boxes.push(box);
   selectedBoxId = box.id;
@@ -226,6 +243,24 @@ const scaleSeg = segmented<'px' | 'norm'>(
   },
 );
 
+const loupePosSeg = segmented<LoupePosition>(
+  t('loupePosition'),
+  [
+    ['follow', t('loupeFollow')],
+    ['fixed', t('loupeFixed')],
+  ],
+  getAppearance().loupePosition,
+  (pos) => {
+    updateAppearance({ loupePosition: pos });
+    positionLoupe();
+  },
+);
+
+onAppearanceChange((a) => {
+  loupePosSeg.set(a.loupePosition);
+  positionLoupe();
+});
+
 const zoomLabel = el('button', { class: 'dv-btn dv-label dv-zoom-label', text: '100%', title: t('zoomReset') });
 zoomLabel.type = 'button';
 zoomLabel.addEventListener('click', () => setZoom(1));
@@ -265,7 +300,7 @@ const topBar = customToolbar({
     { id: 'nav', nodes: [sidebar.toggle] },
     { id: 'view', nodes: [modeSeg.node] },
     { id: 'zoom', nodes: [zoomGroup] },
-    { id: 'bbox', nodes: [scaleSeg.node, copyJsonBtn, clearBtn] },
+    { id: 'bbox', nodes: [loupePosSeg.node, scaleSeg.node, copyJsonBtn, clearBtn] },
   ],
   documentOptions: [
     {
@@ -338,8 +373,8 @@ function setZoom(next: number, focalClientX?: number, focalClientY?: number) {
   }
   const prevZoom = zoom;
   const rect = canvasWrap.getBoundingClientRect();
-  const fx = focalClientX !== undefined ? (focalClientX - rect.left) / prevZoom : (stage.clientWidth / 2) / prevZoom;
-  const fy = focalClientY !== undefined ? (focalClientY - rect.top) / prevZoom : (stage.clientHeight / 2) / prevZoom;
+  const fx = focalClientX !== undefined ? (focalClientX - rect.left) / prevZoom : stage.clientWidth / 2 / prevZoom;
+  const fy = focalClientY !== undefined ? (focalClientY - rect.top) / prevZoom : stage.clientHeight / 2 / prevZoom;
 
   zoom = clamped;
   applyZoomLayout();
@@ -382,7 +417,7 @@ stage.addEventListener(
   { passive: false },
 );
 
-// ---------------------------------------------------------------- pixel sampling & loupe
+// ---------------------------------------------------------------- pixel sampling & 11x11 loupe
 
 function samplePixel(x: number, y: number): [number, number, number, number] {
   const px = clamp(x, 0, naturalW - 1);
@@ -398,57 +433,118 @@ function samplePixel(x: number, y: number): [number, number, number, number] {
   return [0, 0, 0, 255];
 }
 
+function positionLoupe() {
+  const fixed = getAppearance().loupePosition === 'fixed';
+  loupe.classList.toggle('img-loupe-fixed', fixed);
+  if (fixed) {
+    loupe.style.left = '';
+    loupe.style.top = '';
+    return;
+  }
+  if (!lastPointerClient || loupe.hidden) {
+    return;
+  }
+  const offset = 20;
+  const w = loupe.offsetWidth || 138;
+  const h = loupe.offsetHeight || 215;
+  let left = lastPointerClient.x + offset;
+  let top = lastPointerClient.y + offset;
+  if (left + w + 8 > window.innerWidth) {
+    left = Math.max(8, lastPointerClient.x - w - offset);
+  }
+  if (top + h + 32 > window.innerHeight) {
+    top = Math.max(8, lastPointerClient.y - h - offset);
+  }
+  loupe.style.left = `${left}px`;
+  loupe.style.top = `${top}px`;
+}
+
 function paintLoupe(cx: number, cy: number) {
-  const imgData = loupeCtx.createImageData(9, 9);
-  const out = imgData.data;
-  for (let dy = -4; dy <= 4; dy++) {
-    for (let dx = -4; dx <= 4; dx++) {
+  loupeCtx.clearRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
+
+  // 1. Draw magnified 11x11 pixel cells
+  for (let dy = -LOUPE_HALF; dy <= LOUPE_HALF; dy++) {
+    for (let dx = -LOUPE_HALF; dx <= LOUPE_HALF; dx++) {
       const x = cx + dx;
       const y = cy + dy;
-      const off = ((dy + 4) * 9 + (dx + 4)) * 4;
+      const px = (dx + LOUPE_HALF) * LOUPE_PX;
+      const py = (dy + LOUPE_HALF) * LOUPE_PX;
       if (x < 0 || y < 0 || x >= naturalW || y >= naturalH) {
-        out[off] = 40;
-        out[off + 1] = 40;
-        out[off + 2] = 40;
-        out[off + 3] = 255;
+        loupeCtx.fillStyle = '#1c1c1e';
       } else {
         const [r, g, b, a] = samplePixel(x, y);
-        // Blend alpha over subtle checker so transparent pixels remain legible in the loupe.
-        const bg = (x + y) % 2 === 0 ? 220 : 170;
-        const alpha = a / 255;
-        out[off] = Math.round(r * alpha + bg * (1 - alpha));
-        out[off + 1] = Math.round(g * alpha + bg * (1 - alpha));
-        out[off + 2] = Math.round(b * alpha + bg * (1 - alpha));
-        out[off + 3] = 255;
+        if (a >= 255) {
+          loupeCtx.fillStyle = `rgb(${r},${g},${b})`;
+        } else {
+          const bg = (x + y) % 2 === 0 ? 220 : 170;
+          const alpha = a / 255;
+          loupeCtx.fillStyle = `rgb(${Math.round(r * alpha + bg * (1 - alpha))},${Math.round(g * alpha + bg * (1 - alpha))},${Math.round(b * alpha + bg * (1 - alpha))})`;
+        }
       }
+      loupeCtx.fillRect(px, py, LOUPE_PX, LOUPE_PX);
     }
   }
-  loupeCtx.putImageData(imgData, 0, 0);
-  // Highlight center pixel (4, 4)
-  loupeCtx.strokeStyle = 'rgba(255,255,255,0.95)';
-  loupeCtx.lineWidth = 0.22;
-  loupeCtx.strokeRect(4.05, 4.05, 0.9, 0.9);
+
+  // 2. Blue translucent crosshair row & column bands (leaving center pixel true-colour!)
+  const cStart = LOUPE_HALF * LOUPE_PX;
+  loupeCtx.fillStyle = 'rgba(59, 130, 246, 0.42)';
+  // Horizontal arms (left and right of center cell)
+  loupeCtx.fillRect(0, cStart, cStart, LOUPE_PX);
+  loupeCtx.fillRect(cStart + LOUPE_PX, cStart, LOUPE_SIZE - (cStart + LOUPE_PX), LOUPE_PX);
+  // Vertical arms (above and below center cell)
+  loupeCtx.fillRect(cStart, 0, LOUPE_PX, cStart);
+  loupeCtx.fillRect(cStart, cStart + LOUPE_PX, LOUPE_PX, LOUPE_SIZE - (cStart + LOUPE_PX));
+
+  // 3. Crisp 1px pixel grid lines
+  loupeCtx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+  loupeCtx.lineWidth = 1;
+  loupeCtx.beginPath();
+  for (let i = 1; i < LOUPE_CELLS; i++) {
+    const pos = i * LOUPE_PX + 0.5;
+    loupeCtx.moveTo(pos, 0);
+    loupeCtx.lineTo(pos, LOUPE_SIZE);
+    loupeCtx.moveTo(0, pos);
+    loupeCtx.lineTo(LOUPE_SIZE, pos);
+  }
+  loupeCtx.stroke();
+
+  // 4. Dual-contrast reticle around the exact center pixel
+  loupeCtx.strokeStyle = 'rgba(0, 0, 0, 0.75)';
+  loupeCtx.lineWidth = 1;
+  loupeCtx.strokeRect(cStart - 0.5, cStart - 0.5, LOUPE_PX + 1, LOUPE_PX + 1);
+  loupeCtx.strokeStyle = '#ffffff';
+  loupeCtx.lineWidth = 1.5;
+  loupeCtx.strokeRect(cStart + 0.5, cStart + 0.5, LOUPE_PX - 1, LOUPE_PX - 1);
+}
+
+function refreshLoupeColorLabel() {
+  if (!currentColorValues) {
+    return;
+  }
+  loupeColorText.textContent = colorMode === 'hex' ? currentColorValues.hex : currentColorValues.rgbShort;
 }
 
 function updatePixelReadout(x: number, y: number) {
   const [r, g, b, a] = samplePixel(x, y);
   const hex = rgbToHex(r, g, b);
-  const rgb = formatRgb(r, g, b, a);
+  const rgbShort = a >= 255 ? `${r},  ${g},  ${b}` : `${r}, ${g}, ${b}, ${(a / 255).toFixed(2)}`;
+  const rgbCss = formatRgb(r, g, b, a);
+  currentColorValues = { rgbShort: a >= 255 ? `${r}, ${g}, ${b}` : rgbCss, rgbCss, hex };
+
   const [sx, sy] = toScaledPoint(x, y, naturalW, naturalH, coordScale);
-  const coordStr =
-    coordScale === 'norm' ? `Norm: (${sx}, ${sy}) · px: (${x}, ${y})` : `XY: (${x}, ${y})`;
+  const coordStr = coordScale === 'norm' ? `(${sx}, ${sy}) · px (${x}, ${y})` : `(${x}, ${y})`;
 
   coordPill.textContent = coordStr;
   swatchDot.style.background = hex;
   hexText.textContent = hex;
-  rgbPill.textContent = rgb;
+  rgbPill.textContent = currentColorValues.rgbShort;
 
-  loupeDot.style.background = hex;
-  loupeHex.textContent = hex;
-  loupeRgb.textContent = rgb;
-  loupeCoord.textContent = `(${x}, ${y}) px`;
+  loupeCoord.textContent = coordStr;
+  loupeSwatch.style.background = hex;
+  loupeColorText.textContent = colorMode === 'hex' ? hex : rgbShort;
   paintLoupe(x, y);
   loupe.hidden = false;
+  positionLoupe();
 }
 
 // ---------------------------------------------------------------- overlay & BBox rendering
@@ -522,20 +618,19 @@ function renderOverlay() {
     g.append(rect);
 
     if (b.id !== undefined && selected) {
-      const hs = 7;
       for (const [corner, cx, cy, cursor] of [
         ['nw', rx, ry, 'nwse-resize'],
         ['ne', rx + rw, ry, 'nesw-resize'],
         ['sw', rx, ry + rh, 'nesw-resize'],
         ['se', rx + rw, ry + rh, 'nwse-resize'],
       ] as const) {
-        const h = svgEl('rect', {
+        const h = svgEl('circle', {
           class: 'img-bbox-handle',
-          x: String(cx - hs / 2),
-          y: String(cy - hs / 2),
-          width: String(hs),
-          height: String(hs),
-          fill: b.color,
+          cx: String(cx),
+          cy: String(cy),
+          r: '4',
+          fill: '#ffffff',
+          stroke: b.color,
           style: `cursor:${cursor}`,
         });
         h.dataset.boxId = String(b.id);
@@ -644,6 +739,7 @@ stage.addEventListener('mousemove', (e) => {
   if (!naturalW || !naturalH || canvasWrap.hidden) {
     return;
   }
+  lastPointerClient = { x: e.clientX, y: e.clientY };
   const pt = clientToImageFloat(e.clientX, e.clientY);
   if (pt.x >= 0 && pt.y >= 0 && pt.x < naturalW && pt.y < naturalH) {
     const ix = Math.floor(pt.x);
@@ -652,6 +748,8 @@ stage.addEventListener('mousemove', (e) => {
       hoverPx = { x: ix, y: iy };
       updatePixelReadout(ix, iy);
       renderOverlay();
+    } else {
+      positionLoupe();
     }
   } else if (hoverPx) {
     hoverPx = undefined;
@@ -670,6 +768,7 @@ stage.addEventListener('mousedown', (e) => {
   if (e.button !== 0 && e.button !== 1) {
     return;
   }
+  pureShiftTap = false;
   if (!naturalW || !naturalH || canvasWrap.hidden) {
     return;
   }
@@ -781,7 +880,7 @@ stage.addEventListener('mousedown', (e) => {
     return;
   }
 
-  // 4. Pan stage (or single-click to copy pixel HEX in inspect mode)
+  // 4. Pan stage (or single-click to copy active colour value in inspect mode)
   e.preventDefault();
   const startX = e.clientX;
   const startY = e.clientY;
@@ -803,7 +902,7 @@ stage.addEventListener('mousedown', (e) => {
     window.removeEventListener('mousemove', move);
     window.removeEventListener('mouseup', up);
     if (!moved && e.button === 0 && hoverPx) {
-      copyText(hexText.textContent ?? '');
+      copyActiveColor();
     }
   };
   window.addEventListener('mousemove', move);
@@ -815,8 +914,20 @@ window.addEventListener('keydown', (e) => {
   if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') {
     return;
   }
+  if (e.key === 'Shift' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    pureShiftTap = true;
+    return;
+  }
+  pureShiftTap = false;
+
   if (e.key === ' ') {
     spaceHeld = true;
+  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'c') {
+    // Press C to copy active colour value (WeChat / Snipaste shortcut)
+    if (hoverPx) {
+      e.preventDefault();
+      copyActiveColor();
+    }
   } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBoxId !== undefined) {
     e.preventDefault();
     boxes = boxes.filter((b) => b.id !== selectedBoxId);
@@ -828,6 +939,17 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
   if (e.key === ' ') {
     spaceHeld = false;
+  } else if (e.key === 'Shift') {
+    if (pureShiftTap) {
+      pureShiftTap = false;
+      colorMode = colorMode === 'rgb' ? 'hex' : 'rgb';
+      writeState({ imgColorMode: colorMode });
+      if (hoverPx) {
+        updatePixelReadout(hoverPx.x, hoverPx.y);
+      } else {
+        refreshLoupeColorLabel();
+      }
+    }
   }
 });
 

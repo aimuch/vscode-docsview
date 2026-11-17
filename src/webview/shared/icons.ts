@@ -29,7 +29,8 @@ export const icons = {
   sortUp: svg('<path d="M5 12V4M2.5 6.5L5 4l2.5 2.5M9 5h4.5M9 8h3.5M9 11h2"/>'),
   sortDown: svg('<path d="M5 4v8M2.5 9.5L5 12l2.5-2.5M9 5h2M9 8h3.5M9 11h4.5"/>'),
   filter: svg('<path d="M2.5 3.5h11l-4.2 5v4l-2.6 1.5v-5.5z"/>'),
-  crosshair: svg('<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M2.5 6.5h11M2.5 9.5h11M6.5 2.5v11M9.5 2.5v11"/>'),
+  // WPS-style row & column spotlight cross: horizontal row bar + vertical column bar intersecting at the active cell.
+  crosshair: svg('<rect x="2" y="6" width="12" height="4" rx="0.8"/><rect x="6" y="2" width="4" height="12" rx="0.8"/>'),
   gear: svg(
     '<circle cx="8" cy="8" r="2"/><path d="M6.65 3.29L6.74 1.52A6.6 6.6 0 0 1 9.26 1.52L9.35 3.29A4.9 4.9 0 0 1 11.4 4.48L12.98 3.67A6.6 6.6 0 0 1 14.24 5.85L12.75 6.81A4.9 4.9 0 0 1 12.75 9.19L14.24 10.15A6.6 6.6 0 0 1 12.98 12.33L11.4 11.52A4.9 4.9 0 0 1 9.35 12.71L9.26 14.48A6.6 6.6 0 0 1 6.74 14.48L6.65 12.71A4.9 4.9 0 0 1 4.6 11.52L3.02 12.33A6.6 6.6 0 0 1 1.76 10.15L3.25 9.19A4.9 4.9 0 0 1 3.25 6.81L1.76 5.85A6.6 6.6 0 0 1 3.02 3.67L4.6 4.48A4.9 4.9 0 0 1 6.65 3.29Z"/>',
   ),

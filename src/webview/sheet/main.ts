@@ -8,6 +8,7 @@ import { getFileState } from '../shared/fileState';
 import { icons } from '../shared/icons';
 import { readState, writeState } from '../shared/sidebar';
 import { customToolbar, iconButton, moreMenu, noticeBanner, segmented, toggleButton, type MenuItem } from '../shared/ui';
+import { createZoom } from '../shared/zoom';
 import './sheet.css';
 import { emptyView, isActive, viewRows, type SheetView } from './view';
 
@@ -417,11 +418,18 @@ const historyBtn = iconButton('history', t('slotHistory'), () => post({ type: 'h
 const lock = lockToggle();
 lock.hidden = true;
 
+let sheetZoom = 1;
+const zoom = createZoom((value) => {
+  sheetZoom = value;
+  grid?.setZoom(value);
+}, gridHost);
+
 const topBar = customToolbar({
   subtitle: () => (getFileState().ext ? getFileState().ext.toUpperCase() : 'SHEET'),
   extraLeft: [filterChip],
   slots: [
     { id: 'view', nodes: [csvView.node, excelView.node] },
+    { id: 'zoom', nodes: zoom.nodes },
     { id: 'cellBar', nodes: [address, formulaBar] },
     { id: 'find', nodes: [findToggle, findBox, findStatus] },
     { id: 'edit', label: t('lockEdits'), nodes: [lock] },
@@ -795,6 +803,7 @@ function ensureGrid(): Grid {
       onContextMenu: (_area, _r, _c, x, y) => openGridContextMenu(x, y),
     });
     grid.setRtl(rtl);
+    grid.setZoom(sheetZoom);
   }
   return grid;
 }
@@ -999,15 +1008,23 @@ onMessage((message) => {
       if (!model) {
         break;
       }
+      const sizeChanged = model.rowCount !== message.rowCount || model.colCount !== message.colCount;
       for (const { r, cells } of message.rows) {
         model.rows[r] = cells;
+      }
+      if (message.rowCount < model.rows.length) {
+        model.rows.length = message.rowCount;
       }
       model.rowCount = message.rowCount;
       model.colCount = message.colCount;
       if (message.index === active && grid) {
-        // Rows stay where the current sort put them until it is applied again.
-        findDataEpoch++;
-        grid.invalidate();
+        if (sizeChanged) {
+          show(active, true);
+        } else {
+          // Rows stay where the current sort put them until it is applied again.
+          findDataEpoch++;
+          grid.invalidate();
+        }
         onSelection(grid.selection);
       }
       break;

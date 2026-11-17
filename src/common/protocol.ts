@@ -102,6 +102,8 @@ export type SchemeSetting = 'auto' | 'light' | 'dark';
 export type LanguageSetting = 'auto' | 'zh-cn' | 'en';
 export type MarkdownWidth = 'fixed' | 'fluid';
 export type SplitPosition = 'sourceLeft' | 'previewLeft';
+export type LoupePosition = 'follow' | 'fixed';
+export type SidebarPosition = 'left' | 'right';
 
 /** User preferences shared by every DocsView editor (stored in VS Code settings). */
 export interface Appearance {
@@ -120,6 +122,10 @@ export interface Appearance {
   splitPosition: SplitPosition;
   /** Show informational banners at the top of Excel, PPTX and legacy DOC previews. */
   showNotices: boolean;
+  /** Image pixel magnifier loupe placement: follow mouse pointer or stay docked in the corner. */
+  loupePosition: LoupePosition;
+  /** Navigation / outline sidebar placement: left or right side of the preview. */
+  sidebarPosition: SidebarPosition;
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -132,6 +138,8 @@ export const DEFAULT_APPEARANCE: Appearance = {
   mdWidth: 'fixed',
   splitPosition: 'sourceLeft',
   showNotices: true,
+  loupePosition: 'follow',
+  sidebarPosition: 'left',
 };
 
 // ---------------------------------------------------------------- toolbar layout

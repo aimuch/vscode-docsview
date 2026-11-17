@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
 import { saveConverted } from '../fileActions';
-import { configureWebview, debounce, handleCommonMessage, t, onWebviewMessage } from '../webviewHtml';
+import { configureWebview, debounce, handleCommonMessage, parentUri, t, onWebviewMessage } from '../webviewHtml';
 import type { TextEdit } from './csvParser';
 import { CsvSession } from './csvSession';
 
@@ -39,7 +39,23 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
         post(message);
       }
     };
-    const scheduleSync = debounce(sync, 60);
+    const scheduleSync = debounce(sync, 50);
+    const scheduleDiskSync = debounce(async () => {
+      if (!webviewReady || document.isDirty) {
+        return;
+      }
+      try {
+        const diskText = new TextDecoder().decode(await vscode.workspace.fs.readFile(document.uri));
+        if (diskText !== session.currentText) {
+          post(session.setText(diskText, eol()));
+        }
+      } catch {
+        // ignore transient read errors
+      }
+    }, 120);
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(parentUri(document.uri), name),
+    );
 
     const apply = async (edits: TextEdit[]) => {
       if (!edits.length) {
@@ -58,6 +74,9 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
     };
 
     const disposables: vscode.Disposable[] = [
+      watcher,
+      watcher.onDidChange(scheduleDiskSync),
+      watcher.onDidCreate(scheduleDiskSync),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (e.document.uri.toString() === key && e.contentChanges.length) {
           scheduleSync();

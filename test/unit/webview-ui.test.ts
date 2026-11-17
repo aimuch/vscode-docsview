@@ -28,6 +28,8 @@ const initial: Appearance = {
   mdWidth: 'fixed',
   splitPosition: 'sourceLeft',
   showNotices: true,
+  loupePosition: 'follow',
+  sidebarPosition: 'left',
 };
 
 beforeAll(async () => {
@@ -361,6 +363,9 @@ describe('appearance', () => {
     [...drawer.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="分栏布局"] button')]
       .find((b) => b.textContent === '预览在左')!
       .click();
+    [...drawer.querySelectorAll<HTMLButtonElement>('[role="group"][aria-label="导航栏位置"] button')]
+      .find((b) => b.textContent === '右侧')!
+      .click();
     [...drawer.querySelectorAll<HTMLButtonElement>('.dv-st-choice')]
       .find((b) => b.textContent === 'English')!
       .click();
@@ -371,10 +376,12 @@ describe('appearance', () => {
     drawer.querySelector<HTMLButtonElement>('.dv-st-link')!.click();
 
     expect(body.dataset.mdWidth).toBe('fluid');
+    expect(body.dataset.sidebarPos).toBe('right');
     expect(posted).toEqual([
       { type: 'setAppearance', patch: { scheme: 'dark' } },
       { type: 'setAppearance', patch: { mdWidth: 'fluid' } },
       { type: 'setAppearance', patch: { splitPosition: 'previewLeft' } },
+      { type: 'setAppearance', patch: { sidebarPosition: 'right' } },
       { type: 'setAppearance', patch: { language: 'en' } },
       { type: 'setAppearance', patch: { theme: 'github' } },
       { type: 'setAppearance', patch: { invertPages: true } },

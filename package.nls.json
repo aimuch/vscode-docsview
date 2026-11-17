@@ -22,6 +22,8 @@
   "config.highlightRowColumn": "Highlight the row and column of the selected cell in CSV and Excel views, and of the hovered cell in Markdown tables.",
   "config.table.lockEditing": "Lock cell editing in CSV and Excel views until it is unlocked from the toolbar.",
   "config.showNotices": "Show informational notice banners (such as the Excel formula recalculation note) at the top of previews.",
+  "config.image.loupePosition": "Placement of the pixel magnifier loupe in image previews: follow the mouse cursor or stay at a fixed corner.",
+  "config.sidebarPosition": "Which side of the preview the navigation / outline sidebar appears on.",
   "config.toolbar": "Items shown on the left and right sides of the DocsView top toolbar, and their display order.",
   "command.showHistory": "DocsView: Show Version History"
 }

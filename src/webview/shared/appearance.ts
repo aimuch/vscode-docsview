@@ -47,6 +47,7 @@ function apply(): void {
   }
   body.dataset.theme = current.theme;
   body.dataset.mdWidth = current.mdWidth;
+  body.dataset.sidebarPos = current.sidebarPosition;
   const dark = effectiveDark();
   setClass('dv-dark', dark);
   setClass('dv-invert-pages', dark && current.invertPages);
@@ -401,12 +402,52 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
     ...(config.kind !== 'markdown' ? [el('span', { class: 'dv-st-muted', text: t('themeMarkdownHint') })] : []),
   ]);
 
+  const loupeRow =
+    config.kind === 'image'
+      ? el('div', { class: 'dv-st-row' }, [
+          el('span', { class: 'dv-st-label', text: t('loupePosition') }),
+          group(t('loupePosition'), [
+            segButton(
+              t('loupeFollow'),
+              () => current.loupePosition === 'follow',
+              () => updateAppearance({ loupePosition: 'follow' }),
+            ),
+            segButton(
+              t('loupeFixed'),
+              () => current.loupePosition === 'fixed',
+              () => updateAppearance({ loupePosition: 'fixed' }),
+            ),
+          ]),
+        ])
+      : undefined;
+
+  const sidebarPosRow =
+    config.kind !== 'sheet' && config.kind !== 'text'
+      ? el('div', { class: 'dv-st-row' }, [
+          el('span', { class: 'dv-st-label', text: t('sidebarPosition') }),
+          group(t('sidebarPosition'), [
+            segButton(
+              t('sidebarLeft'),
+              () => current.sidebarPosition === 'left',
+              () => updateAppearance({ sidebarPosition: 'left' }),
+            ),
+            segButton(
+              t('sidebarRight'),
+              () => current.sidebarPosition === 'right',
+              () => updateAppearance({ sidebarPosition: 'right' }),
+            ),
+          ]),
+        ])
+      : undefined;
+
   const appearanceSection = el('section', { class: 'dv-st-section' }, [
     el('h3', { class: 'dv-st-heading', text: t('appearanceAll') }),
     themeHeader,
     el('div', { class: 'dv-theme-grid' }, themeCards),
     mdWidthRow,
     splitRow,
+    ...(sidebarPosRow ? [sidebarPosRow] : []),
+    ...(loupeRow ? [loupeRow] : []),
     schemeRow,
     el('label', { class: 'dv-check' }, [invert, el('span', { text: t('invertPages') })]),
     el('label', { class: 'dv-check' }, [notices, el('span', { text: t('showNotices') })]),

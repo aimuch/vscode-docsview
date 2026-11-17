@@ -120,6 +120,8 @@ export class Grid {
   private colX = new Float64Array(1);
   private rowY = new Float64Array(1);
   private headerW = 44;
+  private headerH = HEADER_HEIGHT;
+  private zoom = 1;
   private frozenRows = 0;
   private frozenCols = 0;
   /** Merge lookup by anchor "r,c" and sorted by top row for fast viewport/hit queries. */
@@ -173,7 +175,7 @@ export class Grid {
         const rect = this.viewport.getBoundingClientRect();
         const vx = e.clientX - rect.left;
         const vy = e.clientY - rect.top;
-        if (vy >= 0 && vy < HEADER_HEIGHT && vx >= this.headerW && vx < this.viewport.clientWidth) {
+        if (vy >= 0 && vy < this.headerH && vx >= this.headerW && vx < this.viewport.clientWidth) {
           overEdge = this.resizeTargetFromVx(vx) !== undefined;
         }
       }
@@ -287,6 +289,21 @@ export class Grid {
     this.root.classList.toggle('grid-rtl', on);
   }
 
+  /** Scales row heights, column widths and typography crisply without CSS transform blur. */
+  setZoom(scale: number): void {
+    const next = clamp(scale, 0.25, 4);
+    if (next === this.zoom) {
+      return;
+    }
+    this.commitEdit();
+    this.zoom = next;
+    this.root.style.fontSize = `${Math.max(8, Math.round(13 * next))}px`;
+    if (this.source.rowCount > 0 && this.source.colCount > 0) {
+      this.measure();
+      this.invalidate();
+    }
+  }
+
   /** Selects a cell and scrolls it into view. */
   goTo(r: number, c: number): void {
     this.commitEdit();
@@ -299,25 +316,29 @@ export class Grid {
 
   private measure(): void {
     const { rowCount, colCount, colWidths, rowHeights } = this.source;
+    const z = this.zoom;
+    const rowH = Math.max(10, Math.round(ROW_HEIGHT * z));
+    this.headerH = Math.max(14, Math.round(HEADER_HEIGHT * z));
     this.colX = new Float64Array(colCount + 1);
     for (let c = 0; c < colCount; c++) {
-      this.colX[c + 1] = this.colX[c] + Math.max(0, colWidths[c] ?? 80);
+      this.colX[c + 1] = this.colX[c] + Math.max(0, Math.round((colWidths[c] ?? 80) * z));
     }
     this.rowY = new Float64Array(rowCount + 1);
     if (rowHeights && Object.keys(rowHeights).length) {
       for (let r = 0; r < rowCount; r++) {
-        this.rowY[r + 1] = this.rowY[r] + (rowHeights[r] ?? ROW_HEIGHT);
+        const h = rowHeights[r];
+        this.rowY[r + 1] = this.rowY[r] + (h !== undefined ? Math.max(8, Math.round(h * z)) : rowH);
       }
     } else {
       for (let r = 0; r <= rowCount; r++) {
-        this.rowY[r] = r * ROW_HEIGHT;
+        this.rowY[r] = r * rowH;
       }
     }
-    this.headerW = Math.max(40, 18 + String(rowCount).length * 8);
+    this.headerW = Math.max(Math.round(36 * z), Math.round((18 + String(rowCount).length * 8) * z));
     this.content.style.width = `${this.headerW + this.colX[colCount]}px`;
-    this.content.style.height = `${HEADER_HEIGHT + this.rowY[rowCount]}px`;
+    this.content.style.height = `${this.headerH + this.rowY[rowCount]}px`;
     this.cornerBox.style.width = `${this.headerW}px`;
-    this.cornerBox.style.height = `${HEADER_HEIGHT}px`;
+    this.cornerBox.style.height = `${this.headerH}px`;
   }
 
   private clampCell(cell: { r: number; c: number }): { r: number; c: number } {
@@ -363,7 +384,7 @@ export class Grid {
       const r0 = Math.max(fr, locate(this.rowY, rowCount, scrollTop + frozenH) - OVERSCAN_ROWS);
       const r1 = Math.min(
         rowCount - 1,
-        locate(this.rowY, rowCount, scrollTop + clientHeight - HEADER_HEIGHT) + OVERSCAN_ROWS,
+        locate(this.rowY, rowCount, scrollTop + clientHeight - this.headerH) + OVERSCAN_ROWS,
       );
 
       // Each region: [layer, row range, col range].
@@ -453,7 +474,7 @@ export class Grid {
     const cs = merge?.cs ?? 1;
     const s = node.style;
     s.left = `${this.headerW + this.colX[c]}px`;
-    s.top = `${HEADER_HEIGHT + this.rowY[r]}px`;
+    s.top = `${this.headerH + this.rowY[r]}px`;
     s.width = `${this.colX[Math.min(this.source.colCount, c + cs)] - this.colX[c]}px`;
     s.height = `${this.rowY[Math.min(this.source.rowCount, r + rs)] - this.rowY[r]}px`;
     if (merge) {
@@ -497,7 +518,7 @@ export class Grid {
       s.backgroundColor = style.bg;
     }
     if (style.fontSize) {
-      s.fontSize = `${style.fontSize}px`;
+      s.fontSize = `${Math.max(8, Math.round(style.fontSize * this.zoom))}px`;
     }
     if (style.align) {
       s.justifyContent = style.align === 'center' ? 'center' : style.align === 'right' ? 'flex-end' : 'flex-start';
@@ -565,11 +586,11 @@ export class Grid {
       s.left = `${this.headerW + this.colX[index]}px`;
       s.top = '0px';
       s.width = `${this.colX[index + 1] - this.colX[index]}px`;
-      s.height = `${HEADER_HEIGHT}px`;
+      s.height = `${this.headerH}px`;
     } else {
       node.textContent = this.source.rowLabel?.(index) ?? String(index + 1);
       s.left = '0px';
-      s.top = `${HEADER_HEIGHT + this.rowY[index]}px`;
+      s.top = `${this.headerH + this.rowY[index]}px`;
       s.width = `${this.headerW}px`;
       s.height = `${this.rowY[index + 1] - this.rowY[index]}px`;
     }
@@ -651,11 +672,11 @@ export class Grid {
     }
     if (r >= this.frozenRows) {
       const min = v.scrollTop + this.rowY[this.frozenRows];
-      const max = v.scrollTop + v.clientHeight - HEADER_HEIGHT;
+      const max = v.scrollTop + v.clientHeight - this.headerH;
       if (this.rowY[r] < min) {
         v.scrollTop = this.rowY[r] - this.rowY[this.frozenRows];
       } else if (this.rowY[r + 1] > max) {
-        v.scrollTop = Math.min(this.rowY[r] - this.rowY[this.frozenRows], this.rowY[r + 1] - (v.clientHeight - HEADER_HEIGHT));
+        v.scrollTop = Math.min(this.rowY[r] - this.rowY[this.frozenRows], this.rowY[r + 1] - (v.clientHeight - this.headerH));
       }
     }
   }
@@ -665,13 +686,13 @@ export class Grid {
     const vx = clientX - rect.left;
     const vy = clientY - rect.top;
     const x = vx - this.headerW;
-    const y = vy - HEADER_HEIGHT;
+    const y = vy - this.headerH;
     // Frozen panes do not scroll, everything else is offset by the scroll position.
     const cx = x < this.colX[this.frozenCols] ? x : x + this.viewport.scrollLeft;
     const cy = y < this.rowY[this.frozenRows] ? y : y + this.viewport.scrollTop;
     const c = locate(this.colX, this.source.colCount, Math.max(0, cx));
     const r = locate(this.rowY, this.source.rowCount, Math.max(0, cy));
-    const area = vy < HEADER_HEIGHT ? (vx < this.headerW ? 'corner' : 'col') : vx < this.headerW ? 'row' : 'cell';
+    const area = vy < this.headerH ? (vx < this.headerW ? 'corner' : 'col') : vx < this.headerW ? 'row' : 'cell';
     return { r, c, area };
   }
 
@@ -820,7 +841,7 @@ export class Grid {
       this.render();
     };
     const move = (ev: MouseEvent) => {
-      const nextWidth = Math.max(MIN_COL_WIDTH, startWidth + ev.clientX - startX);
+      const nextWidth = Math.max(MIN_COL_WIDTH, Math.round(startWidth + (ev.clientX - startX) / this.zoom));
       if (this.source.colWidths[col] === nextWidth) {
         return;
       }
@@ -1052,7 +1073,7 @@ export class Grid {
     input.value = initial ?? cellRaw(cell);
     const s = input.style;
     s.left = `${this.headerW + this.colX[c]}px`;
-    s.top = `${HEADER_HEIGHT + this.rowY[r]}px`;
+    s.top = `${this.headerH + this.rowY[r]}px`;
     s.width = `${Math.max(60, this.colX[Math.min(this.source.colCount, c + (merge?.cs ?? 1))] - this.colX[c])}px`;
     s.height = `${this.rowY[Math.min(this.source.rowCount, r + (merge?.rs ?? 1))] - this.rowY[r]}px`;
     this.layers[this.layerOf(r, c)].append(input);

@@ -28,15 +28,32 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
     const key = document.uri.toString();
     let disposed = false;
 
-    const update = async () => {
+    const baseName = document.uri.path.slice(document.uri.path.lastIndexOf('/') + 1);
+    let lastRenderedSource = '';
+    const update = async (fromDisk = false) => {
       const renderer = await this.getRenderer();
       if (disposed) {
         return;
       }
-      const source = document.getText();
+      let source = document.getText();
+      if (fromDisk && !document.isDirty) {
+        try {
+          source = new TextDecoder().decode(await vscode.workspace.fs.readFile(document.uri));
+        } catch {
+          // fall back to document.getText()
+        }
+      }
+      if (fromDisk && source === lastRenderedSource) {
+        return;
+      }
+      lastRenderedSource = source;
       post({ type: 'render', ...renderer.render(source), source });
     };
-    const scheduleUpdate = debounce(() => void update(), 120);
+    const scheduleUpdate = debounce(() => void update(false), 60);
+    const scheduleDiskUpdate = debounce(() => void update(true), 120);
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(parentUri(document.uri), baseName),
+    );
 
     // Each side ignores scroll events for a moment after it was scrolled programmatically,
     // otherwise the two views chase each other.
@@ -45,6 +62,9 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
       vscode.workspace.getConfiguration('docsview', document.uri).get<boolean>('markdown.scrollSync', true);
 
     const disposables: vscode.Disposable[] = [
+      watcher,
+      watcher.onDidChange(scheduleDiskUpdate),
+      watcher.onDidCreate(scheduleDiskUpdate),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (e.document.uri.toString() === key && e.contentChanges.length) {
           scheduleUpdate();

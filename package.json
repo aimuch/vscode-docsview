@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.2.0",
+  "version": "0.2.4",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -320,6 +320,32 @@
           "type": "boolean",
           "default": true,
           "description": "%config.showNotices%"
+        },
+        "docsview.image.loupePosition": {
+          "type": "string",
+          "enum": [
+            "follow",
+            "fixed"
+          ],
+          "enumItemLabels": [
+            "Follow Cursor",
+            "Fixed Position"
+          ],
+          "default": "follow",
+          "description": "%config.image.loupePosition%"
+        },
+        "docsview.sidebarPosition": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "enumItemLabels": [
+            "Left",
+            "Right"
+          ],
+          "default": "left",
+          "description": "%config.sidebarPosition%"
         },
         "docsview.toolbar": {
           "type": "object",
