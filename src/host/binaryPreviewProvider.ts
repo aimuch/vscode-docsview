@@ -17,6 +17,9 @@ function plainU8(bytes: Uint8Array): Uint8Array {
   return out;
 }
 
+const MAX_IMAGE_HISTORY_STEPS = 10;
+const MAX_IMAGE_HISTORY_BYTES = 128 * 1024 * 1024;
+
 interface ImageStep {
   before: Uint8Array;
   after: Uint8Array;
@@ -131,6 +134,19 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
             document.history.push(step);
             document.cursor = document.history.length;
             document.currentBytes = after;
+            // Bound retained history byte size so repeated 4K image edits never bloat extension host RAM.
+            let totalBytes = document.history.reduce((s, x) => s + x.before.byteLength + x.after.byteLength, 0);
+            while (
+              document.history.length > 1 &&
+              (document.history.length > MAX_IMAGE_HISTORY_STEPS || totalBytes > MAX_IMAGE_HISTORY_BYTES)
+            ) {
+              const dropped = document.history.shift()!;
+              totalBytes -= dropped.before.byteLength + dropped.after.byteLength;
+              document.cursor = Math.max(0, document.cursor - 1);
+              if (document.savedCursor >= 0) {
+                document.savedCursor--;
+              }
+            }
             this.sendCurrent(document, post);
             this.changeEmitter.fire({
               document,
@@ -185,7 +201,10 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
       disposables.forEach((d) => d.dispose());
       document.post = () => undefined;
     });
-    configureWebview(panel, this.context.extensionUri, 'image', { documentUri: document.uri });
+    configureWebview(panel, this.context.extensionUri, 'image', {
+      documentUri: document.uri,
+      tracksSource: document.uri.path.toLowerCase().endsWith('.svg'),
+    });
   }
 
   async saveCustomDocument(document: ImageDocument, cancellation: vscode.CancellationToken): Promise<void> {

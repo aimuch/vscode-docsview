@@ -1,11 +1,14 @@
 // Stateful editing & annotation session for .docx, .pptx and .pdf documents.
-// Pure module (no vscode imports): manages undo/redo, hot-exit backup/restore, and byte export.
+// Pure module (no vscode imports): manages memory-bounded undo/redo, hot-exit backup/restore, and byte export.
 import type { DocComment, DocMutation, HostMessage } from '../../common/protocol';
 import { applyDocxMutations, inspectDocx } from './docxPatcher';
 import { applyPdfMutations, inspectPdf } from './pdfAnnotator';
 import { applyPptxMutations, inspectPptx } from './pptxPatcher';
 
 export type OfficeFormat = 'docx' | 'pptx' | 'pdf';
+
+/** Maximum number of full byte snapshots retained in RAM; older steps replay from `initialBytes` on demand. */
+const MAX_CACHED_STEPS = 6;
 
 interface DocSnapshot {
   bytes: Uint8Array;
@@ -17,14 +20,14 @@ interface DocSnapshot {
 
 interface OfficeStep {
   mutation: DocMutation;
-  before: DocSnapshot;
-  after: DocSnapshot;
+  before?: DocSnapshot;
+  after?: DocSnapshot;
 }
 
 export interface OfficeEditResult {
   message: HostMessage;
-  undo(): HostMessage;
-  redo(): HostMessage;
+  undo(): HostMessage | Promise<HostMessage>;
+  redo(): HostMessage | Promise<HostMessage>;
 }
 
 /** Ensures a plain Uint8Array (not a Node Buffer) so webview.postMessage sends binary bytes. */
@@ -37,43 +40,40 @@ function plainU8(input: Uint8Array): Uint8Array {
   return copy;
 }
 
-async function inspectByFormat(format: OfficeFormat, bytes: Uint8Array): Promise<DocSnapshot> {
+function inspectSyncFormat(format: 'docx' | 'pptx', bytes: Uint8Array): DocSnapshot {
   const clean = plainU8(bytes);
   if (format === 'docx') {
     const info = inspectDocx(clean);
-    return {
-      bytes: clean,
-      comments: info.comments,
-      docxParagraphs: info.paragraphs,
-    };
+    return { bytes: clean, comments: info.comments, docxParagraphs: info.paragraphs };
   }
-  if (format === 'pptx') {
-    const info = inspectPptx(clean);
-    return {
-      bytes: clean,
-      comments: info.comments,
-      pptxShapes: info.shapes,
-      slideAspect: info.slideAspect,
-    };
-  }
-  const comments = await inspectPdf(clean);
-  return {
-    bytes: clean,
-    comments,
-  };
+  const info = inspectPptx(clean);
+  return { bytes: clean, comments: info.comments, pptxShapes: info.shapes, slideAspect: info.slideAspect };
 }
 
-async function mutateOnce(format: OfficeFormat, bytes: Uint8Array, mutation: DocMutation): Promise<Uint8Array> {
+async function inspectByFormat(format: OfficeFormat, bytes: Uint8Array): Promise<DocSnapshot> {
+  if (format === 'docx' || format === 'pptx') {
+    return inspectSyncFormat(format, bytes);
+  }
+  const clean = plainU8(bytes);
+  const comments = await inspectPdf(clean);
+  return { bytes: clean, comments };
+}
+
+async function mutateMany(format: OfficeFormat, bytes: Uint8Array, mutations: readonly DocMutation[]): Promise<Uint8Array> {
+  if (!mutations.length) {
+    return bytes;
+  }
   if (format === 'docx') {
-    return applyDocxMutations(bytes, [mutation]);
+    return applyDocxMutations(bytes, mutations);
   }
   if (format === 'pptx') {
-    return applyPptxMutations(bytes, [mutation]);
+    return applyPptxMutations(bytes, mutations);
   }
-  return applyPdfMutations(bytes, [mutation]);
+  return applyPdfMutations(bytes, mutations);
 }
 
 export class OfficeSession {
+  private initialBytes!: Uint8Array;
   private current!: DocSnapshot;
   private history: OfficeStep[] = [];
   private cursor = 0;
@@ -91,7 +91,9 @@ export class OfficeSession {
   }
 
   async load(bytes: Uint8Array): Promise<void> {
-    this.current = await inspectByFormat(this.format, bytes);
+    const clean = plainU8(bytes);
+    this.initialBytes = clean;
+    this.current = await inspectByFormat(this.format, clean);
     this.history = [];
     this.cursor = 0;
     this.savedCursor = 0;
@@ -127,6 +129,26 @@ export class OfficeSession {
     return this.loadMessage();
   }
 
+  /** Releases full byte buffers on steps far behind `cursor`, keeping RAM bounded on large PDFs/PPTs. */
+  private evictOldSnapshots(): void {
+    const keepFrom = Math.max(0, this.cursor - MAX_CACHED_STEPS);
+    for (let i = 0; i < keepFrom; i++) {
+      this.history[i].before = undefined;
+      this.history[i].after = undefined;
+    }
+  }
+
+  private rebuildAt(targetCursor: number): DocSnapshot | Promise<DocSnapshot> {
+    const muts = this.history.slice(0, targetCursor).map((s) => s.mutation);
+    if (this.format === 'docx') {
+      return inspectSyncFormat('docx', applyDocxMutations(this.initialBytes, muts));
+    }
+    if (this.format === 'pptx') {
+      return inspectSyncFormat('pptx', applyPptxMutations(this.initialBytes, muts));
+    }
+    return mutateMany('pdf', this.initialBytes, muts).then((b) => inspectByFormat('pdf', b));
+  }
+
   async apply(mutation: DocMutation): Promise<OfficeEditResult | undefined> {
     if (mutation.kind === 'editDocxParagraph') {
       if (this.format !== 'docx') {
@@ -159,7 +181,7 @@ export class OfficeSession {
     }
 
     const before = this.current;
-    const nextBytes = await mutateOnce(this.format, before.bytes, mutation);
+    const nextBytes = await mutateMany(this.format, before.bytes, [mutation]);
     const after = await inspectByFormat(this.format, nextBytes);
 
     if (this.cursor < this.history.length) {
@@ -172,6 +194,7 @@ export class OfficeSession {
     this.history.push(step);
     this.cursor = this.history.length;
     this.current = after;
+    this.evictOldSnapshots();
 
     return {
       message: this.messageForTransition(mutation),
@@ -179,14 +202,40 @@ export class OfficeSession {
         if (this.cursor > 0 && this.history[this.cursor - 1] === step) {
           this.cursor--;
         }
-        this.current = step.before;
+        if (step.before) {
+          this.current = step.before;
+          return this.messageForTransition(mutation);
+        }
+        const rebuilt = this.rebuildAt(this.cursor);
+        if (rebuilt instanceof Promise) {
+          return rebuilt.then((snap) => {
+            step.before = snap;
+            this.current = snap;
+            return this.messageForTransition(mutation);
+          });
+        }
+        step.before = rebuilt;
+        this.current = rebuilt;
         return this.messageForTransition(mutation);
       },
       redo: () => {
         if (this.history[this.cursor] === step) {
           this.cursor++;
         }
-        this.current = step.after;
+        if (step.after) {
+          this.current = step.after;
+          return this.messageForTransition(mutation);
+        }
+        const rebuilt = this.rebuildAt(this.cursor);
+        if (rebuilt instanceof Promise) {
+          return rebuilt.then((snap) => {
+            step.after = snap;
+            this.current = snap;
+            return this.messageForTransition(mutation);
+          });
+        }
+        step.after = rebuilt;
+        this.current = rebuilt;
         return this.messageForTransition(mutation);
       },
     };

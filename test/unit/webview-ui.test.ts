@@ -588,6 +588,36 @@ describe("preview find", () => {
     expect(find.total).toBe(0);
     scroller.remove();
   });
+
+  it("supports includeHidden + onReveal for multi-slide search and skips comment pills", async () => {
+    const { PreviewFind } = await import("../../src/webview/shared/find");
+    const scroller = document.createElement("div");
+    const root = document.createElement("div");
+    root.innerHTML =
+      '<div class="slide" data-slide="0"><p>Slide alpha <span class="docx-cm-pill">alpha</span></p></div>' +
+      '<div class="slide" data-slide="1" hidden><p>Hidden alpha match</p></div>';
+    scroller.append(root);
+    document.body.append(scroller);
+
+    const revealed: string[] = [];
+    const find = new PreviewFind(root, scroller, {
+      includeHidden: true,
+      onReveal: (range) => {
+        const slide = range.startContainer.parentElement?.closest<HTMLElement>(".slide");
+        if (slide) {
+          slide.hidden = false;
+          revealed.push(slide.dataset.slide!);
+        }
+      },
+    });
+    find.search("alpha");
+    // Comment pill text is skipped; both visible slide 0 and hidden slide 1 match!
+    expect(find.total).toBe(2);
+    expect(revealed).toEqual(["0"]);
+    find.next();
+    expect(revealed).toEqual(["0", "1"]);
+    scroller.remove();
+  });
 });
 
 describe("more menu", () => {

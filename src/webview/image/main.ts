@@ -26,15 +26,16 @@ import {
   BBOX_PALETTE,
   bboxDimensions,
   clamp,
-  cropRgba,
   cropSvgMarkup,
   encodeBmp,
   encodeIcoFromPng,
   formatBBoxTuple,
   formatRgb,
   parseBBoxInput,
+  resizeSvgMarkup,
   rgbToHex,
   type BBox,
+  type ImageTransformOp,
   type PixelRect,
 } from './bbox';
 
@@ -82,8 +83,6 @@ let zoom = 1;
 let blobUrl: string | undefined;
 let sourceCanvas: HTMLCanvasElement | undefined;
 let sampleCtx: CanvasRenderingContext2D | undefined;
-/** Full RGBA pixel buffer when naturalW * naturalH <= 36M, else sampled via 2D context. */
-let pixelBuffer: Uint8ClampedArray | undefined;
 
 const savedMode = readState().imgMode;
 let toolMode: ToolMode = savedMode === 'bbox' || savedMode === 'crop' ? savedMode : 'inspect';
@@ -395,6 +394,15 @@ function currentExt(): string {
   return dot >= 0 ? fileName.slice(dot + 1).toLowerCase() : 'png';
 }
 
+function currentNativeFormat(): ImageExportFormat {
+  const ext = currentExt();
+  if (ext === 'jpg' || ext === 'jpeg') return 'jpg';
+  if (ext === 'webp') return 'webp';
+  if (ext === 'bmp') return 'bmp';
+  if (ext === 'ico') return 'ico';
+  return 'png';
+}
+
 function canvasToBytes(canvas: HTMLCanvasElement, mime: string, quality?: number): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
@@ -411,23 +419,14 @@ function canvasToBytes(canvas: HTMLCanvasElement, mime: string, quality?: number
   });
 }
 
-async function encodeRegion(rect: PixelRect, format: ImageExportFormat): Promise<Uint8Array> {
-  if (!sourceCanvas || !sampleCtx) {
-    throw new Error('Image is not ready');
-  }
-  const w = Math.max(1, Math.round(rect.x2 - rect.x1));
-  const h = Math.max(1, Math.round(rect.y2 - rect.y1));
-
+async function encodeCanvas(canvas: HTMLCanvasElement, format: ImageExportFormat): Promise<Uint8Array> {
+  const w = canvas.width;
+  const h = canvas.height;
   if (format === 'bmp') {
-    const imgData =
-      rect.x1 === 0 && rect.y1 === 0 && w === naturalW && h === naturalH && pixelBuffer
-        ? { data: pixelBuffer, width: naturalW, height: naturalH }
-        : pixelBuffer
-          ? cropRgba(pixelBuffer, naturalW, naturalH, rect)
-          : sampleCtx.getImageData(rect.x1, rect.y1, w, h);
+    const ctx = canvas.getContext('2d')!;
+    const imgData = ctx.getImageData(0, 0, w, h);
     return encodeBmp(imgData.data, imgData.width, imgData.height);
   }
-
   if (format === 'ico') {
     const maxSide = 256;
     const scale = Math.min(1, maxSide / Math.max(w, h));
@@ -436,30 +435,43 @@ async function encodeRegion(rect: PixelRect, format: ImageExportFormat): Promise
     const iconCanvas = document.createElement('canvas');
     iconCanvas.width = iw;
     iconCanvas.height = ih;
-    const ctx = iconCanvas.getContext('2d')!;
-    ctx.drawImage(sourceCanvas, rect.x1, rect.y1, w, h, 0, 0, iw, ih);
+    iconCanvas.getContext('2d')!.drawImage(canvas, 0, 0, w, h, 0, 0, iw, ih);
     const pngBytes = await canvasToBytes(iconCanvas, 'image/png');
     return encodeIcoFromPng(pngBytes, iw, ih);
+  }
+  if (format === 'jpg') {
+    const jpgCanvas = document.createElement('canvas');
+    jpgCanvas.width = w;
+    jpgCanvas.height = h;
+    const ctx = jpgCanvas.getContext('2d')!;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(canvas, 0, 0);
+    return canvasToBytes(jpgCanvas, 'image/jpeg', 0.92);
+  }
+  if (format === 'webp') {
+    return canvasToBytes(canvas, 'image/webp', 0.92);
+  }
+  return canvasToBytes(canvas, 'image/png');
+}
+
+async function encodeRegion(rect: PixelRect, format: ImageExportFormat): Promise<Uint8Array> {
+  if (!sourceCanvas || !sampleCtx) {
+    throw new Error('Image is not ready');
+  }
+  const w = Math.max(1, Math.round(rect.x2 - rect.x1));
+  const h = Math.max(1, Math.round(rect.y2 - rect.y1));
+
+  if (format === 'bmp') {
+    const imgData = sampleCtx.getImageData(rect.x1, rect.y1, w, h);
+    return encodeBmp(imgData.data, imgData.width, imgData.height);
   }
 
   const outCanvas = document.createElement('canvas');
   outCanvas.width = w;
   outCanvas.height = h;
-  const ctx = outCanvas.getContext('2d')!;
-  if (format === 'jpg') {
-    // Composite transparent pixels over white so PNG -> JPG never turns transparent areas black.
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, w, h);
-  }
-  ctx.drawImage(sourceCanvas, rect.x1, rect.y1, w, h, 0, 0, w, h);
-
-  if (format === 'jpg') {
-    return canvasToBytes(outCanvas, 'image/jpeg', 0.92);
-  }
-  if (format === 'webp') {
-    return canvasToBytes(outCanvas, 'image/webp', 0.92);
-  }
-  return canvasToBytes(outCanvas, 'image/png');
+  outCanvas.getContext('2d')!.drawImage(sourceCanvas, rect.x1, rect.y1, w, h, 0, 0, w, h);
+  return encodeCanvas(outCanvas, format);
 }
 
 function fullRect(): PixelRect {
@@ -478,17 +490,7 @@ async function saveCropCopy(): Promise<void> {
   if (!naturalW || !naturalH) {
     return;
   }
-  const ext = currentExt();
-  const fmt: ImageExportFormat =
-    ext === 'jpg' || ext === 'jpeg'
-      ? 'jpg'
-      : ext === 'webp'
-        ? 'webp'
-        : ext === 'bmp'
-          ? 'bmp'
-          : ext === 'ico'
-            ? 'ico'
-            : 'png';
+  const fmt = currentNativeFormat();
   const bytes = await encodeRegion(cropRect, fmt);
   post({ type: 'saveImageAs', format: fmt, bytes, suffix: '-crop' });
 }
@@ -516,19 +518,224 @@ async function applyCropInPlace(): Promise<void> {
     await saveCropCopy();
     return;
   }
-  const fmt: ImageExportFormat =
-    ext === 'jpg' || ext === 'jpeg'
-      ? 'jpg'
-      : ext === 'webp'
-        ? 'webp'
-        : ext === 'bmp'
-          ? 'bmp'
-          : ext === 'ico'
-            ? 'ico'
-            : 'png';
-  const bytes = await encodeRegion(cropRect, fmt);
+  const bytes = await encodeRegion(cropRect, currentNativeFormat());
   setToolMode('inspect');
   post({ type: 'imageReplace', bytes, label: 'Crop image' });
+}
+
+// ---------------------------------------------------------------- Rotate, Flip & Resize
+
+async function applyTransform(op: ImageTransformOp): Promise<void> {
+  if (!sourceCanvas || !naturalW || !naturalH) {
+    return;
+  }
+  const outW = op === 'rotCW' || op === 'rotCCW' ? naturalH : naturalW;
+  const outH = op === 'rotCW' || op === 'rotCCW' ? naturalW : naturalH;
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = outW;
+  outCanvas.height = outH;
+  const ctx = outCanvas.getContext('2d')!;
+  ctx.save();
+  if (op === 'rotCW') {
+    ctx.translate(outW, 0);
+    ctx.rotate(Math.PI / 2);
+  } else if (op === 'rotCCW') {
+    ctx.translate(0, outH);
+    ctx.rotate(-Math.PI / 2);
+  } else if (op === 'flipH') {
+    ctx.translate(outW, 0);
+    ctx.scale(-1, 1);
+  } else if (op === 'flipV') {
+    ctx.translate(0, outH);
+    ctx.scale(1, -1);
+  }
+  ctx.drawImage(sourceCanvas, 0, 0);
+  ctx.restore();
+
+  const ext = currentExt();
+  if (ext === 'gif' || ext === 'avif' || ext === 'svg') {
+    notice.flash(t('imgCropReadonlyFmt'), 4200);
+    const pngBytes = await encodeCanvas(outCanvas, 'png');
+    post({ type: 'saveImageAs', format: 'png', bytes: pngBytes, suffix: `-${op}` });
+    return;
+  }
+
+  // Keep existing BBoxes aligned with the rotated/flipped image!
+  if (boxes.length > 0) {
+    boxes = boxes.map((b) => {
+      if (op === 'rotCW') {
+        return { ...b, x1: naturalH - b.y2, y1: b.x1, x2: naturalH - b.y1, y2: b.x2 };
+      }
+      if (op === 'rotCCW') {
+        return { ...b, x1: b.y1, y1: naturalW - b.x2, x2: b.y2, y2: naturalW - b.x1 };
+      }
+      if (op === 'flipH') {
+        return { ...b, x1: naturalW - b.x2, x2: naturalW - b.x1 };
+      }
+      return { ...b, y1: naturalH - b.y2, y2: naturalH - b.y1 };
+    });
+  }
+
+  const labelKey =
+    op === 'rotCCW' ? 'imgRotateCCW' : op === 'rotCW' ? 'imgRotateCW' : op === 'flipH' ? 'imgFlipH' : 'imgFlipV';
+  const bytes = await encodeCanvas(outCanvas, currentNativeFormat());
+  post({ type: 'imageReplace', bytes, label: t(labelKey) });
+}
+
+let resizeOpen = false;
+let lockResizeRatio = true;
+
+const resizeWInput = el('input', { class: 'dv-input img-crop-num' });
+resizeWInput.type = 'number';
+resizeWInput.min = '1';
+resizeWInput.max = '16384';
+resizeWInput.step = '1';
+
+const resizeHInput = el('input', { class: 'dv-input img-crop-num' });
+resizeHInput.type = 'number';
+resizeHInput.min = '1';
+resizeHInput.max = '16384';
+resizeHInput.step = '1';
+
+resizeWInput.addEventListener('input', () => {
+  const w = Number(resizeWInput.value);
+  if (lockResizeRatio && naturalW > 0 && naturalH > 0 && Number.isFinite(w) && w > 0) {
+    resizeHInput.value = String(Math.max(1, Math.round((w * naturalH) / naturalW)));
+  }
+});
+
+resizeHInput.addEventListener('input', () => {
+  const h = Number(resizeHInput.value);
+  if (lockResizeRatio && naturalW > 0 && naturalH > 0 && Number.isFinite(h) && h > 0) {
+    resizeWInput.value = String(Math.max(1, Math.round((h * naturalW) / naturalH)));
+  }
+});
+
+for (const inp of [resizeWInput, resizeHInput]) {
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      inp.blur();
+      void applyResizeInPlace();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setResizeOpen(false);
+    }
+    e.stopPropagation();
+  });
+}
+
+const lockRatioChk = el('input');
+lockRatioChk.type = 'checkbox';
+lockRatioChk.checked = true;
+lockRatioChk.addEventListener('change', () => {
+  lockResizeRatio = lockRatioChk.checked;
+  if (lockResizeRatio && naturalW > 0 && naturalH > 0) {
+    const w = Number(resizeWInput.value);
+    if (Number.isFinite(w) && w > 0) {
+      resizeHInput.value = String(Math.max(1, Math.round((w * naturalH) / naturalW)));
+    }
+  }
+});
+
+function makeResizeScaleBtn(pct: number): HTMLButtonElement {
+  const btn = el('button', { class: 'dv-btn', text: `${pct}%` });
+  btn.type = 'button';
+  btn.addEventListener('click', () => {
+    if (!naturalW || !naturalH) return;
+    resizeWInput.value = String(Math.max(1, Math.round((naturalW * pct) / 100)));
+    resizeHInput.value = String(Math.max(1, Math.round((naturalH * pct) / 100)));
+  });
+  return btn;
+}
+
+const cancelResizeBtn = el('button', { class: 'dv-btn', text: t('cancel') });
+cancelResizeBtn.type = 'button';
+cancelResizeBtn.addEventListener('click', () => setResizeOpen(false));
+
+const applyResizeBtn = el('button', { class: 'dv-btn dv-cm-primary', text: t('imgApplyResize') });
+applyResizeBtn.type = 'button';
+applyResizeBtn.addEventListener('click', () => void applyResizeInPlace());
+
+const resizeBar = el('div', { class: 'img-crop-bar img-resize-bar' }, [
+  el('label', { class: 'img-crop-field' }, [el('span', { text: 'W' }), resizeWInput]),
+  el('span', { class: 'dv-label', text: '×' }),
+  el('label', { class: 'img-crop-field' }, [el('span', { text: 'H' }), resizeHInput]),
+  el('span', { class: 'dv-label', text: 'px' }),
+  el('label', { class: 'img-lock-ratio' }, [lockRatioChk, el('span', { text: t('imgLockRatio') })]),
+  makeResizeScaleBtn(50),
+  makeResizeScaleBtn(200),
+  el('div', { class: 'dv-spacer' }),
+  cancelResizeBtn,
+  applyResizeBtn,
+]);
+resizeBar.hidden = true;
+
+const resizeBtn = iconButton('resize', t('imgResize'), () => setResizeOpen(!resizeOpen));
+
+function setResizeOpen(open: boolean) {
+  resizeOpen = open;
+  resizeBar.hidden = !open;
+  resizeBtn.classList.toggle('dv-active', open);
+  if (open) {
+    if (toolMode === 'crop') {
+      setToolMode('inspect');
+    }
+    if (naturalW && naturalH) {
+      resizeWInput.value = String(naturalW);
+      resizeHInput.value = String(naturalH);
+    }
+    resizeWInput.focus();
+    resizeWInput.select();
+  }
+}
+
+async function applyResizeInPlace(): Promise<void> {
+  if (!sourceCanvas || !naturalW || !naturalH) {
+    return;
+  }
+  const targetW = clamp(Math.round(Number(resizeWInput.value) || naturalW), 1, 16384);
+  const targetH = clamp(Math.round(Number(resizeHInput.value) || naturalH), 1, 16384);
+  if (targetW === naturalW && targetH === naturalH) {
+    setResizeOpen(false);
+    return;
+  }
+  const ext = currentExt();
+  if (boxes.length > 0) {
+    const sx = targetW / naturalW;
+    const sy = targetH / naturalH;
+    boxes = boxes.map((b) => ({
+      ...b,
+      x1: clamp(Math.round(b.x1 * sx), 0, targetW - 1),
+      y1: clamp(Math.round(b.y1 * sy), 0, targetH - 1),
+      x2: clamp(Math.max(1, Math.round(b.x2 * sx)), 1, targetW),
+      y2: clamp(Math.max(1, Math.round(b.y2 * sy)), 1, targetH),
+    }));
+  }
+  if (ext === 'svg' && rawFileBytes) {
+    const svgText = new TextDecoder().decode(rawFileBytes);
+    const nextSvg = resizeSvgMarkup(svgText, naturalW, naturalH, targetW, targetH);
+    setResizeOpen(false);
+    post({ type: 'imageReplace', bytes: nextSvg, label: t('imgApplyResize') });
+    return;
+  }
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = targetW;
+  outCanvas.height = targetH;
+  const ctx = outCanvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(sourceCanvas, 0, 0, naturalW, naturalH, 0, 0, targetW, targetH);
+
+  setResizeOpen(false);
+  if (ext === 'gif' || ext === 'avif') {
+    notice.flash(t('imgCropReadonlyFmt'), 4200);
+    const pngBytes = await encodeCanvas(outCanvas, 'png');
+    post({ type: 'saveImageAs', format: 'png', bytes: pngBytes, suffix: `-${targetW}x${targetH}` });
+    return;
+  }
+  const bytes = await encodeCanvas(outCanvas, currentNativeFormat());
+  post({ type: 'imageReplace', bytes, label: t('imgApplyResize') });
 }
 
 // ---------------------------------------------------------------- BBox sidebar
@@ -536,15 +743,43 @@ async function applyCropInPlace(): Promise<void> {
 const sidebar = new Sidebar(t('imgBoxes', 0), undefined, { defaultOpen: false });
 const sideTitleEl = sidebar.node.querySelector('.dv-side-title');
 
+function clearAllBoxes() {
+  boxes = [];
+  selectedBoxId = undefined;
+  renderBoxes();
+}
+
+function copyBoxesJson() {
+  if (!boxes.length) {
+    return;
+  }
+  const payload = boxes.map((b) => {
+    const [x1, y1, x2, y2] = formatBBoxTuple(b);
+    const { w, h } = bboxDimensions(b);
+    return { id: b.id, bbox: [x1, y1, x2, y2], width: w, height: h };
+  });
+  copyText(JSON.stringify(payload));
+}
+
 const boxInput = el('input', { class: 'dv-input' });
 boxInput.type = 'text';
 boxInput.placeholder = '[x1, y1, x2, y2] (px)';
 boxInput.setAttribute('aria-label', '[x1, y1, x2, y2]');
 const addBoxBtn = iconButton('plus', t('imgModeBbox'), () => addBoxFromInput());
+
+const sidebarCopyJsonBtn = el('button', { class: 'dv-btn', text: t('imgCopyJson') });
+sidebarCopyJsonBtn.type = 'button';
+sidebarCopyJsonBtn.addEventListener('click', copyBoxesJson);
+
+const sidebarClearBtn = el('button', { class: 'dv-btn', text: t('imgClearBoxes') });
+sidebarClearBtn.type = 'button';
+sidebarClearBtn.addEventListener('click', clearAllBoxes);
+
 const boxList = el('div', { class: 'img-box-list' });
 sidebar.panel().append(
   el('div', { class: 'img-side-wrap' }, [
     el('div', { class: 'img-add-box-row' }, [boxInput, addBoxBtn]),
+    el('div', { class: 'img-side-actions' }, [sidebarCopyJsonBtn, sidebarClearBtn]),
     boxList,
   ]),
 );
@@ -585,26 +820,6 @@ const modeSeg = segmented<ToolMode>(
   toolMode,
   (mode) => setToolMode(mode),
 );
-
-function setToolMode(mode: ToolMode, seedCrop?: PixelRect) {
-  toolMode = mode;
-  modeSeg.set(mode);
-  writeState({ imgMode: mode });
-  stage.classList.toggle('img-mode-inspect', mode === 'inspect');
-  stage.classList.toggle('img-mode-bbox', mode === 'bbox');
-  stage.classList.toggle('img-mode-crop', mode === 'crop');
-  cropBar.hidden = mode !== 'crop';
-  if (mode === 'crop') {
-    const activeBox = seedCrop ?? boxes.find((b) => b.id === selectedBoxId);
-    initDefaultCropRect(activeBox);
-    if (getAppearance().loupePosition === 'follow') {
-      loupe.hidden = true;
-    }
-  } else {
-    syncLoupeVisibility();
-    renderOverlay();
-  }
-}
 
 const loupePosSeg = segmented<LoupePosition>(
   t('loupePosition'),
@@ -651,28 +866,18 @@ function convertMenuItems(): MenuItem[] {
 }
 
 const convertDropdown = moreMenu(t('convertMenu'), convertMenuItems(), 'export');
+const rotCCWBtn = iconButton('rotateCCW', t('imgRotateCCW'), () => void applyTransform('rotCCW'));
+const rotCWBtn = iconButton('rotateCW', t('imgRotateCW'), () => void applyTransform('rotCW'));
+const flipHBtn = iconButton('flipH', t('imgFlipH'), () => void applyTransform('flipH'));
+const flipVBtn = iconButton('flipV', t('imgFlipV'), () => void applyTransform('flipV'));
 
 const clearBtn = el('button', { class: 'dv-btn', text: t('imgClearBoxes') });
 clearBtn.type = 'button';
-clearBtn.addEventListener('click', () => {
-  boxes = [];
-  selectedBoxId = undefined;
-  renderBoxes();
-});
+clearBtn.addEventListener('click', clearAllBoxes);
 
 const copyJsonBtn = el('button', { class: 'dv-btn', text: t('imgCopyJson') });
 copyJsonBtn.type = 'button';
-copyJsonBtn.addEventListener('click', () => {
-  if (!boxes.length) {
-    return;
-  }
-  const payload = boxes.map((b) => {
-    const [x1, y1, x2, y2] = formatBBoxTuple(b);
-    const { w, h } = bboxDimensions(b);
-    return { id: b.id, bbox: [x1, y1, x2, y2], width: w, height: h };
-  });
-  copyText(JSON.stringify(payload));
-});
+copyJsonBtn.addEventListener('click', copyBoxesJson);
 
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
@@ -682,12 +887,20 @@ const topBar = customToolbar({
     { id: 'nav', nodes: [sidebar.toggle] },
     { id: 'view', nodes: [modeSeg.node] },
     { id: 'zoom', nodes: [zoomGroup] },
-    { id: 'bbox', nodes: [loupePosSeg.node, convertDropdown, copyJsonBtn, clearBtn] },
+    {
+      id: 'bbox',
+      nodes: [rotCCWBtn, rotCWBtn, flipHBtn, flipVBtn, resizeBtn, loupePosSeg.node, convertDropdown, copyJsonBtn, clearBtn],
+    },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
     openExternalMenuItem(),
+    { label: t('imgRotateCCW'), icon: 'rotateCCW', onClick: () => void applyTransform('rotCCW') },
+    { label: t('imgRotateCW'), icon: 'rotateCW', onClick: () => void applyTransform('rotCW') },
+    { label: t('imgFlipH'), icon: 'flipH', onClick: () => void applyTransform('flipH') },
+    { label: t('imgFlipV'), icon: 'flipV', onClick: () => void applyTransform('flipV') },
+    { label: t('imgResize'), icon: 'resize', onClick: () => setResizeOpen(true) },
     ...convertMenuItems(),
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
@@ -713,11 +926,45 @@ const topBar = customToolbar({
   ],
 });
 
+function syncBboxToolbarButtons() {
+  const showBboxBtns = toolMode === 'bbox' || boxes.length > 0;
+  if (copyJsonBtn.hidden === showBboxBtns || clearBtn.hidden === showBboxBtns) {
+    copyJsonBtn.hidden = !showBboxBtns;
+    clearBtn.hidden = !showBboxBtns;
+    topBar.refresh();
+  }
+}
+
+function setToolMode(mode: ToolMode, seedCrop?: PixelRect) {
+  toolMode = mode;
+  modeSeg.set(mode);
+  writeState({ imgMode: mode });
+  stage.classList.toggle('img-mode-inspect', mode === 'inspect');
+  stage.classList.toggle('img-mode-bbox', mode === 'bbox');
+  stage.classList.toggle('img-mode-crop', mode === 'crop');
+  cropBar.hidden = mode !== 'crop';
+  if (mode === 'crop') {
+    if (resizeOpen) {
+      setResizeOpen(false);
+    }
+    const activeBox = seedCrop ?? boxes.find((b) => b.id === selectedBoxId);
+    initDefaultCropRect(activeBox);
+    if (getAppearance().loupePosition === 'follow') {
+      loupe.hidden = true;
+    }
+  } else {
+    syncLoupeVisibility();
+    renderOverlay();
+  }
+  syncBboxToolbarButtons();
+}
+
 canvasWrap.classList.toggle('img-checker', checkerboard);
 
 app.append(
   topBar.node,
   cropBar,
+  resizeBar,
   notice.node,
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, stage])]),
   loupe,
@@ -813,10 +1060,6 @@ stage.addEventListener(
 function samplePixel(x: number, y: number): [number, number, number, number] {
   const px = clamp(x, 0, naturalW - 1);
   const py = clamp(y, 0, naturalH - 1);
-  if (pixelBuffer) {
-    const idx = (py * naturalW + px) * 4;
-    return [pixelBuffer[idx], pixelBuffer[idx + 1], pixelBuffer[idx + 2], pixelBuffer[idx + 3]];
-  }
   if (sampleCtx) {
     const d = sampleCtx.getImageData(px, py, 1, 1).data;
     return [d[0], d[1], d[2], d[3]];
@@ -892,6 +1135,15 @@ function positionLoupe() {
 function paintLoupe(cx: number, cy: number) {
   loupeCtx.clearRect(0, 0, LOUPE_W, LOUPE_H);
 
+  // Read only the <= 15x11 visible pixel patch once per frame (<= 660 bytes, zero full-image buffer!).
+  const sx0 = clamp(cx - LOUPE_HALF_X, 0, naturalW);
+  const sy0 = clamp(cy - LOUPE_HALF_Y, 0, naturalH);
+  const sx1 = clamp(cx + LOUPE_HALF_X + 1, 0, naturalW);
+  const sy1 = clamp(cy + LOUPE_HALF_Y + 1, 0, naturalH);
+  const sw = sx1 - sx0;
+  const sh = sy1 - sy0;
+  const patch = sampleCtx && sw > 0 && sh > 0 ? sampleCtx.getImageData(sx0, sy0, sw, sh).data : undefined;
+
   // 1. Draw magnified 15x11 pixel cells
   for (let dy = -LOUPE_HALF_Y; dy <= LOUPE_HALF_Y; dy++) {
     for (let dx = -LOUPE_HALF_X; dx <= LOUPE_HALF_X; dx++) {
@@ -899,10 +1151,14 @@ function paintLoupe(cx: number, cy: number) {
       const y = cy + dy;
       const px = (dx + LOUPE_HALF_X) * LOUPE_PX;
       const py = (dy + LOUPE_HALF_Y) * LOUPE_PX;
-      if (x < 0 || y < 0 || x >= naturalW || y >= naturalH) {
+      if (!patch || x < sx0 || y < sy0 || x >= sx1 || y >= sy1) {
         loupeCtx.fillStyle = '#18181b';
       } else {
-        const [r, g, b, a] = samplePixel(x, y);
+        const pi = ((y - sy0) * sw + (x - sx0)) * 4;
+        const r = patch[pi];
+        const g = patch[pi + 1];
+        const b = patch[pi + 2];
+        const a = patch[pi + 3];
         if (a >= 255) {
           loupeCtx.fillStyle = `rgb(${r},${g},${b})`;
         } else {
@@ -1202,8 +1458,15 @@ function renderBoxes() {
   if (sideTitleEl) {
     sideTitleEl.textContent = t('imgBoxes', boxes.length);
   }
-  clearBtn.disabled = boxes.length === 0;
-  copyJsonBtn.disabled = boxes.length === 0;
+  const empty = boxes.length === 0;
+  clearBtn.disabled = empty;
+  copyJsonBtn.disabled = empty;
+  sidebarClearBtn.disabled = empty;
+  sidebarCopyJsonBtn.disabled = empty;
+  syncBboxToolbarButtons();
+  if (fileName) {
+    writeState({ savedBoxesFile: fileName, savedBoxes: boxes });
+  }
 
   if (!boxes.length) {
     boxList.replaceChildren(el('div', { class: 'img-box-empty', text: t('imgNoBoxes') }));
@@ -1549,6 +1812,23 @@ window.addEventListener('keydown', (e) => {
   if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') {
     return;
   }
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    if (e.key === '=' || e.key === '+') {
+      e.preventDefault();
+      stepZoom(1);
+      return;
+    }
+    if (e.key === '-' || e.key === '_') {
+      e.preventDefault();
+      stepZoom(-1);
+      return;
+    }
+    if (e.key === '0') {
+      e.preventDefault();
+      setZoom(1);
+      return;
+    }
+  }
   if (e.key === 'Shift' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
     pureShiftTap = true;
     return;
@@ -1557,6 +1837,9 @@ window.addEventListener('keydown', (e) => {
 
   if (e.key === ' ') {
     spaceHeld = true;
+  } else if (resizeOpen && e.key === 'Escape') {
+    e.preventDefault();
+    setResizeOpen(false);
   } else if (toolMode === 'crop' && e.key === 'Enter') {
     e.preventDefault();
     void applyCropInPlace();
@@ -1600,8 +1883,19 @@ stage.append(statusHost);
 showStatus(statusHost, t('loading'));
 
 async function loadImage(name: string, bytes: Uint8Array) {
+  const prevName = fileName;
   fileName = name;
   rawFileBytes = bytes;
+  if (prevName && prevName !== name) {
+    boxes = [];
+    selectedBoxId = undefined;
+  } else if (!prevName && boxes.length === 0) {
+    const st = readState();
+    if (st.savedBoxesFile === name && Array.isArray(st.savedBoxes)) {
+      boxes = st.savedBoxes as BBox[];
+      nextBoxId = boxes.reduce((m, b) => Math.max(m, b.id || 0), 0) + 1;
+    }
+  }
   topBar.refresh();
   const ext = currentExt();
   const mime = MIME_BY_EXT[ext] ?? 'image/png';
@@ -1630,12 +1924,12 @@ async function loadImage(name: string, bytes: Uint8Array) {
     offscreen.height = naturalH;
     sourceCanvas = offscreen;
     sampleCtx = offscreen.getContext('2d', { willReadFrequently: true }) ?? undefined;
-    pixelBuffer = undefined;
     if (sampleCtx) {
       sampleCtx.drawImage(imgEl, 0, 0, naturalW, naturalH);
-      if (naturalW * naturalH <= 36_000_000) {
-        pixelBuffer = sampleCtx.getImageData(0, 0, naturalW, naturalH).data;
-      }
+    }
+    if (resizeOpen) {
+      resizeWInput.value = String(naturalW);
+      resizeHInput.value = String(naturalH);
     }
 
     // Clamp or discard out-of-bounds BBoxes after a crop/reload

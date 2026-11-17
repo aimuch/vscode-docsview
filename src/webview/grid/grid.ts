@@ -51,6 +51,8 @@ export interface GridOptions {
   /** Paste had to truncate rows because growing rows is temporarily blocked (e.g. sorted/filtered view). */
   onPasteTruncated?(): void;
   onColumnResize?(col: number, width: number): void;
+  /** Double-click on a column header right border to auto-fit that column's width. */
+  onColumnAutoFit?(col: number): void;
   /** Adds a menu button to column headers (sort / filter). */
   onColumnMenu?(col: number, anchor: DOMRect): void;
   /** Right-click context menu on a cell, row header, or column header. */
@@ -1033,9 +1035,38 @@ export class Grid {
 
   // ------------------------------------------------------------------ editing
 
+  /** Updates a single column's width in place without resetting scroll or selection. */
+  setColumnWidth(col: number, width: number): void {
+    if (col < 0 || col >= this.source.colCount) {
+      return;
+    }
+    const clamped = Math.max(MIN_COL_WIDTH, Math.round(width));
+    if (this.source.colWidths[col] === clamped) {
+      return;
+    }
+    this.source.colWidths[col] = clamped;
+    this.measure();
+    this.repositionPool();
+    this.render();
+    this.opts.onColumnResize?.(col, clamped);
+  }
+
   private onDoubleClick(e: MouseEvent): void {
     if (e.target === this.editor) {
       return;
+    }
+    if (this.source.colCount > 0) {
+      const rect = this.viewport.getBoundingClientRect();
+      const vx = e.clientX - rect.left;
+      const vy = e.clientY - rect.top;
+      if (vy >= 0 && vy < this.headerH && vx >= this.headerW) {
+        const resizeCol = this.resizeTargetFromVx(vx);
+        if (resizeCol !== undefined) {
+          e.preventDefault();
+          this.opts.onColumnAutoFit?.(resizeCol);
+          return;
+        }
+      }
     }
     if (!this.opts.editable) {
       if (this.hitTest(e.clientX, e.clientY).area === 'cell') {

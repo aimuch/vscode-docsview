@@ -57,6 +57,27 @@ describe('MarkdownRenderer', () => {
     expect(html).toContain('class="footnotes"');
     expect(html).toContain('class="katex"');
   });
+
+  it('renders GitHub-style alerts while preserving source line annotations and regular blockquotes', () => {
+    const md = [
+      '> [!NOTE]',
+      '> Pay attention to this detail.',
+      '',
+      '> [!WARNING]',
+      '> Breaking change ahead.',
+      '',
+      '> Plain blockquote line.',
+      '',
+    ].join('\n');
+    const { html } = renderer.render(md);
+    expect(html).toContain('<div data-line="0" data-line-end="2" class="markdown-alert markdown-alert-note">');
+    expect(html).toContain('class="markdown-alert-title"');
+    expect(html).toContain('<span>Note</span></p>');
+    expect(html).toContain('Pay attention to this detail.');
+    expect(html).toContain('<div data-line="3" data-line-end="5" class="markdown-alert markdown-alert-warning">');
+    expect(html).toContain('<span>Warning</span></p>');
+    expect(html).toContain('<blockquote data-line="6" data-line-end="7">');
+  });
 });
 
 describe('slugify', () => {

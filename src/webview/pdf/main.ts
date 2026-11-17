@@ -276,10 +276,22 @@ findInput.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) {
+    return;
+  }
+  if (e.key.toLowerCase() === 'f') {
     e.preventDefault();
     findInput.focus();
     findInput.select();
+  } else if (e.key === '=' || e.key === '+') {
+    e.preventDefault();
+    viewer.increaseScale();
+  } else if (e.key === '-' || e.key === '_') {
+    e.preventDefault();
+    viewer.decreaseScale();
+  } else if (e.key === '0') {
+    e.preventDefault();
+    viewer.currentScaleValue = '1';
   }
 });
 

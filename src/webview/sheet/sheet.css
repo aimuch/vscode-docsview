@@ -193,3 +193,29 @@
 .sheet-ctx-menu {
   width: 200px;
 }
+
+.sheet-sel-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 8px;
+}
+
+.sheet-stat-pill {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--dv-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dv-accent) 11%, transparent);
+  color: var(--vscode-foreground);
+  font: inherit;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sheet-stat-pill:hover {
+  border-color: var(--vscode-focusBorder);
+  color: var(--vscode-textLink-foreground, var(--dv-accent));
+}

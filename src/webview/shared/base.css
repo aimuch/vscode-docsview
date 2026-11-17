@@ -104,14 +104,27 @@ body {
 .dv-toolbar {
   flex: none;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px 8px;
   padding: 5px 10px;
   min-height: 30px;
+  min-width: 0;
+  overflow: hidden;
   border-bottom: 1px solid var(--dv-border);
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   user-select: none;
+}
+
+.dv-overflow-popover {
+  width: auto;
+  min-width: 180px;
+  max-width: calc(100vw - 20px);
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
 }
 
 .dv-toolbar .dv-spacer {
@@ -277,6 +290,27 @@ body {
   background: transparent;
   color: var(--vscode-input-foreground);
   font: inherit;
+}
+
+.dv-find-box {
+  width: 165px;
+}
+
+.dv-find-icon {
+  display: flex;
+}
+
+.dv-find-count {
+  min-width: 30px;
+}
+
+::highlight(dv-find) {
+  background-color: rgba(255, 210, 0, 0.45);
+}
+
+::highlight(dv-find-current) {
+  background-color: rgba(255, 140, 0, 0.82);
+  color: #000000;
 }
 
 .dv-notice {
@@ -599,14 +633,36 @@ body[data-sidebar-pos='right'] .dv-slot[data-slot='nav'] svg {
 }
 
 .dv-side {
+  position: relative;
   flex: none;
   width: 244px;
-  max-width: 45%;
+  max-width: 55%;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--vscode-sideBar-background, var(--vscode-editor-background));
   border-right: 1px solid var(--dv-border);
+}
+
+.dv-side-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -2px;
+  width: 5px;
+  z-index: 16;
+  cursor: col-resize;
+  transition: background 0.12s;
+}
+
+body[data-sidebar-pos='right'] .dv-side-resizer {
+  right: auto;
+  left: -2px;
+}
+
+.dv-side-resizer:hover,
+.dv-side-resizer.dv-resizing {
+  background: var(--vscode-focusBorder, #0078d4);
 }
 
 @media (max-width: 720px) {

@@ -475,11 +475,48 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
   gearBtn.setAttribute('aria-expanded', 'false');
 
   const rightSep = divider();
+  const overflowPop = el('div', { class: 'dv-menu dv-overflow-popover' });
+  overflowPop.hidden = true;
+
+  const closeOverflow = () => {
+    if (!overflowPop.hidden) {
+      overflowPop.hidden = true;
+      overflowBtn.setAttribute('aria-expanded', 'false');
+      overflowBtn.classList.remove('dv-active');
+      document.removeEventListener('mousedown', onOverflowOutside);
+    }
+  };
+  const onOverflowOutside = (e: MouseEvent) => {
+    if (!overflowPop.contains(e.target as Node) && !overflowBtn.contains(e.target as Node)) {
+      closeOverflow();
+    }
+  };
+
+  const overflowBtn = iconButton('chevronsRight', t('moreTools'), () => {
+    if (!overflowPop.hidden) {
+      closeOverflow();
+      return;
+    }
+    if (!overflowPop.isConnected) {
+      document.body.append(overflowPop);
+    }
+    overflowPop.hidden = false;
+    overflowBtn.setAttribute('aria-expanded', 'true');
+    overflowBtn.classList.add('dv-active');
+    document.addEventListener('mousedown', onOverflowOutside);
+    const rect = overflowBtn.getBoundingClientRect();
+    overflowPop.style.top = `${rect.bottom + 6}px`;
+    overflowPop.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+  });
+  overflowBtn.classList.add('dv-overflow-btn');
+  overflowBtn.hidden = true;
+
   const bar = el('div', { class: 'dv-toolbar' }, [
     leftZone,
     ...(opts.extraLeft ?? []),
     spacer(),
     rightZone,
+    overflowBtn,
     rightSep,
     gearBtn,
   ]);
@@ -510,10 +547,67 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     return count;
   }
 
+  function fitOverflow(): void {
+    if (!bar.isConnected || bar.clientWidth <= 0) {
+      return;
+    }
+    if (bar.scrollWidth <= bar.clientWidth + 2) {
+      return;
+    }
+    overflowBtn.hidden = false;
+    const moved: HTMLElement[] = [];
+    const popFrom = (zoneEl: HTMLElement, minKeep: number): HTMLElement | undefined => {
+      const slotsInZone = zoneEl.querySelectorAll<HTMLElement>(':scope > .dv-slot');
+      if (slotsInZone.length <= minKeep) {
+        return undefined;
+      }
+      const last = slotsInZone[slotsInZone.length - 1];
+      const prev = last.previousElementSibling;
+      last.remove();
+      if (prev?.classList.contains('dv-divider')) {
+        prev.remove();
+      }
+      zoneEl.hidden = zoneEl.childElementCount === 0;
+      return last;
+    };
+
+    let guard = 32;
+    while (bar.scrollWidth > bar.clientWidth + 2 && guard-- > 0) {
+      const popped = popFrom(leftZone, 1) ?? popFrom(rightZone, 0);
+      if (!popped) {
+        break;
+      }
+      moved.unshift(popped);
+    }
+    if (!moved.length) {
+      overflowBtn.hidden = true;
+      return;
+    }
+    rightSep.hidden = false;
+    overflowPop.replaceChildren(...moved);
+  }
+
   function reconcileBar(): void {
+    closeOverflow();
+    overflowPop.replaceChildren();
+    overflowBtn.hidden = true;
     fillZone(leftZone, currentToolbar.left);
     const rightCount = fillZone(rightZone, currentToolbar.right);
     rightSep.hidden = rightCount === 0;
+    fitOverflow();
+  }
+
+  let lastObservedW = 0;
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(() => {
+      const w = bar.clientWidth;
+      if (w > 0 && Math.abs(w - lastObservedW) >= 4) {
+        lastObservedW = w;
+        if (overflowPop.hidden) {
+          reconcileBar();
+        }
+      }
+    }).observe(bar);
   }
 
   // -------------------------------------------------------------- Settings Drawer (Git Map style)

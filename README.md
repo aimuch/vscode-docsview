@@ -8,15 +8,15 @@ Preview common document formats inside VS Code and edit spreadsheets in place. *
 
 | 格式 | 扩展名 | 打开方式 | 能力 |
 | --- | --- | --- | --- |
-| Markdown | `.md` `.markdown` | 标题栏预览按钮 | GitHub 风格渲染、固定/自适应宽度、自定义分栏左右位置、代码高亮、Mermaid、KaTeX 公式、目录导航（默认展开可收起）、与编辑器滚动同步 |
-| CSV / TSV | `.csv` `.tsv` | 标题栏预览按钮 | 表格视图，改单元格、增删行列；撤销/保存/编码由 VS Code 原生处理 |
-| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、冻结窗格、公式栏编辑与实时公式计算、增删行列、新建/重命名/删除工作表 |
+| Markdown | `.md` `.markdown` | 标题栏预览按钮 | GitHub 风格渲染、GitHub Alerts（`[!NOTE]` 等）、可勾选任务列表写回源码、字数/阅读时长统计栏、固定/自适应宽度、自定义分栏左右位置、代码高亮、Mermaid、KaTeX 公式、目录导航、滚动同步 |
+| CSV / TSV | `.csv` `.tsv` | 标题栏预览按钮 | 表格 / 分栏 / 文本三态视图、一键冻结首行、双击列边缘自动列宽、底部选区实时统计（计数/求和/均值/最值）、改单元格、增删行列；撤销/保存/编码由 VS Code 原生处理 |
+| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、冻结窗格/一键冻结首行、双击自动列宽、底部选区实时统计、公式栏编辑与实时公式计算、增删行列、新建/重命名/删除工作表 |
 | Excel（旧版等） | `.xls` `.ods` | 单击即预览 | 只读 |
-| Word | `.docx` | 单击即预览 | 页面版式、中英文字体映射、双击段落就地修改文字、标准 OOXML 批注（与 Word/WPS 双向互通）、一键用外部程序打开 |
+| Word | `.docx` | 单击即预览 | 页面版式、`Ctrl/Cmd+F` 全文搜索、中英文字体映射、双击段落就地修改文字、标准 OOXML 批注（与 Word/WPS 双向互通）、一键用外部程序打开 |
 | Word（旧版） | `.doc` | 单击即预览 | **仅文字**，无版式（支持一键调用本地 Office/WPS 打开） |
-| PDF | `.pdf` | 单击即预览 | 翻页、缩放、适应宽度、搜索、文字选择、ISO 32000 标准框选/图钉批注（与 Acrobat/WPS/预览双向互通） |
-| PowerPoint | `.pptx` | 单击即预览 | 原生画幅比例（`4:3` / `16:10` / `16:9`）、双击文本框就地改字、标准幻灯片批注（与 PowerPoint/WPS 互通） |
-| 图片编辑与像素标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览 | 15×11 十字准星放大镜取色（跟随指针 / 固定可拖拽、`C` 复制、`Shift` 切换 RGB/HEX）、纯像素坐标与 BBox 画框测距、交互式图像裁剪（支持撤销/保存/另存）、PNG/JPG/WebP/BMP/ICO 格式互转 |
+| PDF | `.pdf` | 单击即预览 | 翻页、键盘与滚轮缩放、适应宽度、全文搜索、文字选择、ISO 32000 标准框选/图钉批注（与 Acrobat/WPS/预览双向互通） |
+| PowerPoint | `.pptx` | 单击即预览 | 原生画幅比例（`4:3` / `16:10` / `16:9`）、`Ctrl/Cmd+F` 跨页全文搜索、双击文本框就地改字、标准幻灯片批注（与 PowerPoint/WPS 互通） |
+| 图片编辑与像素标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览（`.svg` 亦支持源码分栏） | 15×11 十字准星放大镜取色（跟随指针 / 固定可拖拽、`C` 复制、`Shift` 切换 RGB/HEX）、纯像素坐标与 BBox 画框测距、90° 旋转/水平垂直镜像翻转/修改尺寸、交互式图像裁剪（均接入撤销/保存/历史）、PNG/JPG/WebP/BMP/ICO 格式互转 |
 
 Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一致：点编辑器右上角的预览图标，或在命令面板运行 **DocsView：在侧边打开预览**。想让 CSV 默认用表格打开，可在设置里加：
 
@@ -33,7 +33,7 @@ Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一
 | 格式 | 侧栏导航 | 视图切换 |
 | --- | --- | --- |
 | Markdown | 标题目录（可筛选、可折叠，随滚动高亮当前章节） | 预览 / 分栏（文本编辑器在旁边）/ 源码 |
-| CSV / TSV | — | 表格 / 文本 |
+| CSV / TSV | — | 表格 / 分栏 / 文本 |
 | Excel | 底部工作表标签 | 样式 / 纯数据 |
 | Word (.docx) | 目录 / 批注列表 | 页面 / 连续 |
 | PDF | 书签目录 / 页面缩略图 / 批注列表 | 连续 / 单页 |
@@ -145,15 +145,15 @@ npm run package     # 生成 .vsix
 
 | Format | Extensions | Opens | Features |
 | --- | --- | --- | --- |
-| Markdown | `.md` `.markdown` | preview button in the editor title | GitHub-style rendering, syntax highlighting, Mermaid, KaTeX, task lists, footnotes, outline, live refresh, scroll sync |
-| CSV / TSV | `.csv` `.tsv` | preview button in the editor title | table view; edit cells, insert/delete rows and columns; undo/save/encoding handled by VS Code |
-| Excel | `.xlsx` `.xlsm` | on click | styles, merged cells, frozen panes, multiple sheets; cell editing with save |
+| Markdown | `.md` `.markdown` | preview button in the editor title | GitHub-style rendering, GitHub Alerts (`[!NOTE]` etc.), interactive task-list checkboxes, word/reading-time status bar, syntax highlighting, Mermaid, KaTeX, outline, live refresh, scroll sync |
+| CSV / TSV | `.csv` `.tsv` | preview button in the editor title | table / split / text views, one-click freeze header row, double-click column auto-fit, live selection stats (Count/Sum/Avg/Min/Max), edit cells, insert/delete rows & columns |
+| Excel | `.xlsx` `.xlsm` | on click | styles, merged cells, frozen panes / freeze top row, double-click auto-fit, live selection stats, `fx` formula bar & live recalculation, multi-sheet editing |
 | Excel (legacy) | `.xls` `.ods` | on click | read-only |
-| Word | `.docx` | on click | paged layout, Office/WPS CJK font aliases, double-click paragraph editing, interoperable OOXML comments, open in external app |
+| Word | `.docx` | on click | paged layout, `Ctrl/Cmd+F` search, Office/WPS CJK font aliases, double-click paragraph editing, interoperable OOXML comments, open in external app |
 | Word (legacy) | `.doc` | on click | **text only** (plus one-click open in system app) |
-| PDF | `.pdf` | on click | paging, zoom, fit width, search, text selection, ISO 32000 box & pin annotations |
-| PowerPoint | `.pptx` | on click | native slide aspect ratio (`4:3` / `16:9`), double-click shape text editing, interoperable OOXML slide comments |
-| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click | 15×11 crosshair magnifier loupe (follow cursor or fixed & draggable), RGB/HEX picker, pixel BBox measurement, interactive image cropping (with undo/save), PNG/JPG/WebP/BMP/ICO format conversion |
+| PDF | `.pdf` | on click | paging, keyboard & wheel zoom, fit width, search, text selection, ISO 32000 box & pin annotations |
+| PowerPoint | `.pptx` | on click | native slide aspect ratio (`4:3` / `16:9`), `Ctrl/Cmd+F` cross-slide search, double-click shape text editing, interoperable OOXML slide comments |
+| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click (`.svg` also supports split source) | 15×11 crosshair magnifier loupe (follow cursor or fixed & draggable), RGB/HEX picker, pixel BBox measurement, 90° rotate / H·V flip / resize, interactive cropping (with undo/save), PNG/JPG/WebP/BMP/ICO conversion |
 
 Markdown and CSV keep opening as text; use the preview icon in the editor title or **DocsView: Open Preview to the Side**. Use **Reopen Editor With…** to switch any file between DocsView and the text editor.
 

@@ -101,7 +101,7 @@ export function parentUri(uri: vscode.Uri): vscode.Uri {
   return vscode.Uri.joinPath(uri, '..');
 }
 
-/** Custom editor viewType for text-backed formats (Markdown, CSV/TSV). */
+/** Custom editor viewType for text-backed formats (Markdown, CSV/TSV, SVG). */
 export function previewViewTypeFor(uri: vscode.Uri): string | undefined {
   const path = uri.path.toLowerCase();
   if (path.endsWith('.md') || path.endsWith('.markdown')) {
@@ -109,6 +109,9 @@ export function previewViewTypeFor(uri: vscode.Uri): string | undefined {
   }
   if (path.endsWith('.csv') || path.endsWith('.tsv')) {
     return 'docsview.csv';
+  }
+  if (path.endsWith('.svg')) {
+    return 'docsview.image';
   }
   return undefined;
 }

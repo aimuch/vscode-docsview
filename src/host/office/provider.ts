@@ -138,8 +138,8 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
               this.changeEmitter.fire({
                 document,
                 label: mutation.kind,
-                undo: () => document.post(result.undo()),
-                redo: () => document.post(result.redo()),
+                undo: () => Promise.resolve(result.undo()).then((m) => document.post(m)),
+                redo: () => Promise.resolve(result.redo()).then((m) => document.post(m)),
               });
             })
             .catch((err: unknown) => {

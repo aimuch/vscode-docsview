@@ -30,16 +30,33 @@ export function createZoom(onChange: (value: number) => void, wheelTarget?: HTML
     }
   }
 
-  wheelTarget?.addEventListener(
-    "wheel",
-    (e) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        step(e.deltaY < 0 ? 1 : -1);
+  if (wheelTarget) {
+    wheelTarget.addEventListener(
+      "wheel",
+      (e) => {
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          step(e.deltaY < 0 ? 1 : -1);
+        }
+      },
+      { passive: false },
+    );
+    window.addEventListener("keydown", (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) {
+        return;
       }
-    },
-    { passive: false },
-  );
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        step(1);
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        step(-1);
+      } else if (e.key === "0") {
+        e.preventDefault();
+        set(1);
+      }
+    });
+  }
 
   label.textContent = `${Math.round(value * 100)}%`;
   const group = el("div", { class: "dv-zoom" }, [

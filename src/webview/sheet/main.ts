@@ -20,7 +20,7 @@ import {
 } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 import './sheet.css';
-import { emptyView, isActive, viewRows, type SheetView } from './view';
+import { computeSelectionStats, emptyView, isActive, viewRows, type SheetView } from './view';
 
 let info: WorkbookInfo | undefined;
 let active = 0;
@@ -44,10 +44,12 @@ formula.placeholder = t('formulaPlaceholder');
 formula.setAttribute('aria-label', t('formulaPlaceholder'));
 const formulaBar = el('span', { class: 'sheet-formula-wrap' }, [fxBadge, formula]);
 
+const selectionStatsEl = el('div', { class: 'sheet-sel-stats' });
+selectionStatsEl.hidden = true;
 const summary = el('span', { class: 'dv-label' });
 const notice = noticeBanner();
 const gridHost = el('div', { class: 'sheet-grid' });
-// Bottom bar: sheet tabs (+ add-sheet button) on the left, size summary on the right.
+// Bottom bar: sheet tabs (+ add-sheet button) on the left, live selection stats & size summary on the right.
 const tabs = el('div', { class: 'sheet-tab-list' });
 const addSheetBtn = iconButton('plus', t('newSheet'), () => {
   if (getAppearance().lockEdits) {
@@ -58,7 +60,13 @@ const addSheetBtn = iconButton('plus', t('newSheet'), () => {
 });
 addSheetBtn.classList.add('sheet-add-btn');
 addSheetBtn.hidden = true;
-const statusBar = el('div', { class: 'sheet-tabs' }, [tabs, addSheetBtn, el('div', { class: 'dv-spacer' }), summary]);
+const statusBar = el('div', { class: 'sheet-tabs' }, [
+  tabs,
+  addSheetBtn,
+  el('div', { class: 'dv-spacer' }),
+  selectionStatsEl,
+  summary,
+]);
 const structureButtons: HTMLButtonElement[] = [];
 
 function viewOf(index: number): SheetView {
@@ -106,21 +114,33 @@ structureButtons.push(
 const structureGroup = el('div', { class: 'sheet-structure' }, structureButtons);
 structureGroup.hidden = true;
 
-// CSV: table here, or the text editor instead. Excel: authored styles, or plain data.
-const csvView = segmented<'table' | 'text'>(
+// CSV: table here, split beside text editor, or text editor instead. Excel: authored styles, or plain data.
+const csvView = segmented<'table' | 'split' | 'text'>(
   t('view'),
   [
     ['table', t('viewTable')],
+    ['split', t('viewSplit')],
     ['text', t('viewText')],
   ],
   'table',
   (mode) => {
-    if (mode === 'text') {
-      post({ type: 'showSource', beside: false });
-      csvView.set('table');
+    if (mode === 'table') {
+      post({ type: 'closeSource' });
+    } else {
+      post({ type: 'showSource', beside: mode === 'split' });
+      if (mode === 'text') {
+        csvView.set('table');
+      }
     }
   },
 );
+
+/** Per-sheet user override for freezing the top row (`undefined` = follow workbook's own `frozenRows`). */
+const freezeOverrides = new Map<number, boolean>();
+const freezeBtn = toggleButton('freeze', t('freezeHeader'), (on) => {
+  freezeOverrides.set(active, on);
+  show(active, true);
+});
 let plain = readState().plain === true;
 const excelView = segmented<'styled' | 'plain'>(
   t('view'),
@@ -443,7 +463,7 @@ const topBar = customToolbar({
     { id: 'cellBar', nodes: [address, formulaBar] },
     { id: 'find', nodes: [findToggle, findBox, findStatus] },
     { id: 'edit', label: t('lockEdits'), nodes: [lock] },
-    { id: 'highlight', nodes: [highlightToggle()] },
+    { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node] },
     { id: 'structure', nodes: [structureGroup] },
     {
       id: 'actions',
@@ -477,6 +497,15 @@ const topBar = customToolbar({
       label: t('highlightRowCol'),
       checked: () => getAppearance().highlight,
       onChange: (on) => updateAppearance({ highlight: on }),
+    },
+    {
+      label: t('freezeHeader'),
+      checked: () => effectiveFrozenRows(active, models.get(active)) > 0,
+      onChange: (on) => {
+        freezeOverrides.set(active, on);
+        freezeBtn.set(on);
+        show(active, true);
+      },
     },
     {
       label: t('rtl'),
@@ -523,9 +552,17 @@ function autoWidths(model: SheetModel): number[] {
   return result;
 }
 
+function effectiveFrozenRows(index: number, model: SheetModel | undefined): number {
+  const override = freezeOverrides.get(index);
+  if (override !== undefined) {
+    return override ? Math.max(1, model?.frozenRows ?? 0) : 0;
+  }
+  return model?.frozenRows ?? 0;
+}
+
 /** Rows that stay on top and out of sorting: frozen rows, else an optional header row. */
 function fixedRows(model: SheetModel, view: SheetView): number {
-  return model.frozenRows || (view.headerRow ? 1 : 0);
+  return effectiveFrozenRows(active, model) || (view.headerRow ? 1 : 0);
 }
 
 function sourceFor(index: number, model: SheetModel): GridSource {
@@ -548,6 +585,8 @@ function sourceFor(index: number, model: SheetModel): GridSource {
       : undefined;
     merges = model.merges?.filter((m) => m.r + m.rs <= fixed);
   }
+  const frozenR = effectiveFrozenRows(index, model);
+  freezeBtn.set(frozenR > 0);
   return {
     rowCount: map ? map.length : model.rowCount,
     colCount: model.colCount,
@@ -556,7 +595,7 @@ function sourceFor(index: number, model: SheetModel): GridSource {
     colWidths,
     rowHeights,
     merges,
-    frozenRows: model.frozenRows,
+    frozenRows: frozenR,
     frozenCols: model.frozenCols,
     palette: !plain && model.styles?.some((s) => s.color || s.bg) ? 'light' : 'theme',
     rowLabel: map ? (r) => String(map[r] + 1) : undefined,
@@ -655,6 +694,74 @@ formula.addEventListener('blur', () => {
   commitFormulaBar();
 });
 
+function formatStatNum(n: number): string {
+  const rounded = Math.abs(n - Math.round(n)) < 1e-9 ? Math.round(n) : Number(n.toFixed(4));
+  return rounded.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+function updateSelectionStats(sel: Selection) {
+  const model = models.get(active);
+  if (!model) {
+    selectionStatsEl.hidden = true;
+    return;
+  }
+  const cellAt = (r: number, c: number) => {
+    const srcR = toSource(r);
+    return srcR >= 0 ? model.rows[srcR]?.[c] : undefined;
+  };
+  const stats = computeSelectionStats(cellAt, sel.r0, sel.c0, sel.r1, sel.c1);
+  if (!stats) {
+    selectionStatsEl.hidden = true;
+    selectionStatsEl.replaceChildren();
+    return;
+  }
+  const makePill = (label: string, rawVal: string, displayVal: string) => {
+    const btn = el('button', {
+      class: 'sheet-stat-pill',
+      text: `${label}: ${displayVal}`,
+      title: `${t('copy')}: ${rawVal}`,
+    });
+    btn.type = 'button';
+    btn.addEventListener('click', () => {
+      void navigator.clipboard?.writeText(rawVal).then(() => flash(t('imgCopied', rawVal)));
+    });
+    return btn;
+  };
+  const pills: HTMLElement[] = [makePill(t('statCount'), String(stats.count), String(stats.count))];
+  if (stats.numCount > 0) {
+    pills.push(
+      makePill(t('statSum'), String(Number(stats.sum.toFixed(6))), formatStatNum(stats.sum)),
+      makePill(t('statAvg'), String(Number(stats.avg.toFixed(6))), formatStatNum(stats.avg)),
+    );
+    if (stats.numCount >= 2) {
+      pills.push(
+        makePill(t('statMin'), String(Number(stats.min.toFixed(6))), formatStatNum(stats.min)),
+        makePill(t('statMax'), String(Number(stats.max.toFixed(6))), formatStatNum(stats.max)),
+      );
+    }
+  }
+  selectionStatsEl.replaceChildren(...pills);
+  selectionStatsEl.hidden = false;
+}
+
+function autoFitColumn(col: number) {
+  const model = models.get(active);
+  if (!model || !grid) {
+    return;
+  }
+  const limit = Math.min(model.rows.length, 600);
+  let maxChars = Math.max(3, columnName(col).length + 2);
+  for (let r = 0; r < limit; r++) {
+    maxChars = Math.max(maxChars, displayWidth(cellText(model.rows[r]?.[col])));
+  }
+  const fitted = Math.min(480, Math.max(48, Math.round(maxChars * 7.6 + 20)));
+  const savedWidths = widths.get(active);
+  if (savedWidths && col < savedWidths.length) {
+    savedWidths[col] = fitted;
+  }
+  grid.setColumnWidth(col, fitted);
+}
+
 function onSelection(sel: Selection) {
   if (formulaTarget && document.activeElement === formula) {
     commitFormulaBar();
@@ -665,6 +772,7 @@ function onSelection(sel: Selection) {
     ? `${columnName(sel.c)}${row(sel.r)}`
     : `${columnName(sel.c0)}${row(sel.r0)}:${columnName(sel.c1)}${row(sel.r1)}`;
   syncFormulaFromSelection(sel);
+  updateSelectionStats(sel);
 }
 
 // ---------------------------------------------------------------- context menu (grid & sheet tabs)
@@ -811,6 +919,13 @@ function ensureGrid(): Grid {
           flash(t('structureBlocked'));
         }
       },
+      onColumnResize: (col, w) => {
+        const cur = widths.get(active);
+        if (cur && col < cur.length) {
+          cur[col] = w;
+        }
+      },
+      onColumnAutoFit: (col) => autoFitColumn(col),
       onColumnMenu: (col, anchor) => openColumnMenu(col, anchor),
       onContextMenu: (_area, _r, _c, x, y) => openGridContextMenu(x, y),
     });
@@ -1041,6 +1156,9 @@ onMessage((message) => {
       }
       break;
     }
+    case 'viewState':
+      csvView.set(message.split ? 'split' : 'table');
+      break;
     case 'error':
       grid = undefined;
       showStatus(gridHost, message.message, true);

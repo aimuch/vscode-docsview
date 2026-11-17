@@ -282,4 +282,34 @@ describe('OfficeSession undo, redo, stale rejection & hot-exit backup', () => {
     session.markSaved();
     expect(session.dirty).toBe(false);
   });
+
+  it('evicts old byte snapshots beyond MAX_CACHED_STEPS while deterministically replaying deep undo/redo', async () => {
+    const initial = await makeSampleDocx();
+    const session = await OfficeSession.open('docx', initial, 'deep.docx');
+    const steps = [];
+    for (let i = 1; i <= 9; i++) {
+      const step = await session.apply({
+        kind: 'addComment',
+        pIndex: i % 3,
+        text: `批注 #${i}`,
+      });
+      expect(step).toBeDefined();
+      steps.push(step!);
+    }
+    expect(session.comments).toHaveLength(9);
+
+    // Undo all 9 steps (crossing the 6-step snapshot cache boundary)
+    for (let i = steps.length - 1; i >= 0; i--) {
+      await steps[i].undo();
+      expect(session.comments).toHaveLength(i);
+    }
+    expect(session.dirty).toBe(false);
+
+    // Redo all 9 steps back
+    for (let i = 0; i < steps.length; i++) {
+      await steps[i].redo();
+      expect(session.comments).toHaveLength(i + 1);
+    }
+    expect(session.comments[8].text).toBe('批注 #9');
+  });
 });

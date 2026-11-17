@@ -236,6 +236,9 @@ function setRtl(on: boolean) {
 function exportAs(format: 'html' | 'pdf') {
   const copy = article.cloneNode(true) as HTMLElement;
   copy.querySelectorAll('.md-copy, .md-edit').forEach((n) => n.remove());
+  copy.querySelectorAll<HTMLInputElement>('li.task-list-item input[type="checkbox"]').forEach((c) => {
+    c.disabled = true;
+  });
   copy.querySelectorAll<HTMLElement>('[hidden]').forEach((n) => (n.hidden = false));
   copy.querySelectorAll('.md-hl-row, .md-hl-col, .md-hl-cell').forEach((n) =>
     n.classList.remove('md-hl-row', 'md-hl-col', 'md-hl-cell'),
@@ -297,13 +300,61 @@ const topBar = customToolbar({
   ],
 });
 
+const statusLabel = el('span', { class: 'dv-label' });
+const mdStatusBar = el('div', { class: 'md-statusbar' }, [el('div', { class: 'dv-spacer' }), statusLabel]);
+
 scroller.tabIndex = -1;
 app.append(
   topBar.node,
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, scroller])]),
+  mdStatusBar,
 );
 setEditMode(readState().mdEdit === true);
 setRtl(rtl);
+
+// Interactive task-list checkboxes: toggle "- [ ]" <-> "- [x]" directly in the source document.
+article.addEventListener('change', (e) => {
+  const target = e.target;
+  if (!(target instanceof HTMLInputElement) || target.type !== 'checkbox') {
+    return;
+  }
+  const li = target.closest<HTMLElement>('li.task-list-item[data-line]');
+  if (!li) {
+    return;
+  }
+  const start = Number(li.dataset.line);
+  const end = Number(li.dataset.lineEnd ?? start + 1);
+  const lines = getSourceLines();
+  if (!Number.isFinite(start) || start < 0 || start >= lines.length) {
+    return;
+  }
+  const taskRe = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\].*)$/;
+  let hitLine = -1;
+  for (let ln = start; ln < Math.min(lines.length, Math.max(start + 1, end)); ln++) {
+    if (taskRe.test(lines[ln])) {
+      hitLine = ln;
+      break;
+    }
+  }
+  if (hitLine < 0) {
+    return;
+  }
+  const orig = lines[hitLine];
+  const updated = orig.replace(taskRe, (_, p1: string, _state: string, p3: string) => `${p1}${target.checked ? 'x' : ' '}${p3}`);
+  if (updated !== orig) {
+    post({ type: 'editBlock', start: hitLine, end: hitLine + 1, text: updated, expected: orig });
+  }
+});
+
+function updateDocStats() {
+  const text = article.innerText || article.textContent || '';
+  const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
+  const latin = (text.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, ' ').match(/[A-Za-z0-9_'-]+/g) ?? []).length;
+  const totalWords = cjk + latin;
+  const readMin = Math.max(1, Math.ceil(totalWords / 350));
+  const lineCount = rawSource ? getSourceLines().length : 0;
+  statusLabel.textContent = `${t('mdWords', totalWords.toLocaleString())} · ${t('mdReadMin', readMin)} · ${t('mdLines', lineCount.toLocaleString())}`;
+}
 
 // ---------------------------------------------------------------- rendering
 
@@ -341,6 +392,10 @@ function render(html: string, toc: TocEntry[]) {
   });
   renderToc(toc);
   addCopyButtons();
+  article.querySelectorAll<HTMLInputElement>('li.task-list-item input[type="checkbox"]').forEach((box) => {
+    box.disabled = false;
+  });
+  updateDocStats();
   find.refresh();
   showFindCount();
   invalidateLineIndex();

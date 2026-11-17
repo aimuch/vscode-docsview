@@ -158,6 +158,45 @@ export function encodeIcoFromPng(pngBytes: Uint8Array, width: number, height: nu
   return out;
 }
 
+export type ImageTransformOp = 'rotCW' | 'rotCCW' | 'flipH' | 'flipV';
+
+/** Pure RGBA pixel rotation (90° CW/CCW) and mirror flip (horizontal/vertical). */
+export function transformRgba(
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+  op: ImageTransformOp,
+): { data: Uint8ClampedArray; width: number; height: number } {
+  const outW = op === 'rotCW' || op === 'rotCCW' ? height : width;
+  const outH = op === 'rotCW' || op === 'rotCCW' ? width : height;
+  const out = new Uint8ClampedArray(outW * outH * 4);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let dx = x;
+      let dy = y;
+      if (op === 'rotCW') {
+        dx = height - 1 - y;
+        dy = x;
+      } else if (op === 'rotCCW') {
+        dx = y;
+        dy = width - 1 - x;
+      } else if (op === 'flipH') {
+        dx = width - 1 - x;
+      } else if (op === 'flipV') {
+        dy = height - 1 - y;
+      }
+      const si = (y * width + x) * 4;
+      const di = (dy * outW + dx) * 4;
+      out[di] = rgba[si];
+      out[di + 1] = rgba[si + 1];
+      out[di + 2] = rgba[si + 2];
+      out[di + 3] = rgba[si + 3];
+    }
+  }
+  return { data: out, width: outW, height: outH };
+}
+
 /** Crops a vector SVG document losslessly by adjusting its `viewBox`, `width` and `height`. */
 export function cropSvgMarkup(svgText: string, imgW: number, imgH: number, rect: PixelRect): Uint8Array {
   const w = Math.max(1, Math.round(rect.x2 - rect.x1));
@@ -193,6 +232,28 @@ export function cropSvgMarkup(svgText: string, imgW: number, imgH: number, rect:
   tag = setOrReplaceAttr(tag, 'width', String(w));
   tag = setOrReplaceAttr(tag, 'height', String(h));
 
+  const updated = svgText.slice(0, openTagMatch.index) + tag + svgText.slice(openTagMatch.index + openTagMatch[0].length);
+  return new TextEncoder().encode(updated);
+}
+
+/** Resizes a vector SVG document losslessly by updating `width` and `height` while preserving `viewBox`. */
+export function resizeSvgMarkup(svgText: string, imgW: number, imgH: number, newW: number, newH: number): Uint8Array {
+  const w = Math.max(1, Math.round(newW));
+  const h = Math.max(1, Math.round(newH));
+  const openTagMatch = /<svg\b[^>]*>/i.exec(svgText);
+  if (!openTagMatch) {
+    return new TextEncoder().encode(svgText);
+  }
+  let tag = openTagMatch[0];
+  const setOrReplaceAttr = (src: string, attr: string, val: string): string => {
+    const re = new RegExp(`\\b${attr}\\s*=\\s*["'][^"']*["']`, 'i');
+    return re.test(src) ? src.replace(re, `${attr}="${val}"`) : src.replace(/\/?>$/, (end) => ` ${attr}="${val}"${end}`);
+  };
+  if (!/\bviewBox\s*=/i.test(tag)) {
+    tag = setOrReplaceAttr(tag, 'viewBox', `0 0 ${imgW} ${imgH}`);
+  }
+  tag = setOrReplaceAttr(tag, 'width', String(w));
+  tag = setOrReplaceAttr(tag, 'height', String(h));
   const updated = svgText.slice(0, openTagMatch.index) + tag + svgText.slice(openTagMatch.index + openTagMatch[0].length);
   return new TextEncoder().encode(updated);
 }

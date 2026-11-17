@@ -145,6 +145,17 @@
   font-variant-numeric: tabular-nums;
 }
 
+.img-lock-ratio {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  user-select: none;
+  margin: 0 2px;
+}
+
 .img-crop-mask {
   fill: rgba(0, 0, 0, 0.56);
   pointer-events: none;
@@ -380,6 +391,16 @@
   min-width: 0;
   font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
   font-size: 11.5px;
+}
+
+.img-side-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.img-side-actions .dv-btn {
+  flex: 1;
+  justify-content: center;
 }
 
 .img-box-list {

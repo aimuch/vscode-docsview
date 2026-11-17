@@ -5,7 +5,15 @@ import { DEFAULT_TOOLBAR, normalizeToolbarConfig, type Cell } from '../../src/co
 import { rowsToDelimited, rowsToXlsx, sanitizeSheetName, workbookToDelimited, workbookToXlsx } from '../../src/host/convert';
 import { parseCsv } from '../../src/host/csv/csvParser';
 import { exportPage, inlineFonts, inlineImages, sanitizeExportHtml } from '../../src/host/markdown/exportPage';
-import { compareCells, emptyView, isActive, numericValue, viewRows, type SheetView } from '../../src/webview/sheet/view';
+import {
+  compareCells,
+  computeSelectionStats,
+  emptyView,
+  isActive,
+  numericValue,
+  viewRows,
+  type SheetView,
+} from '../../src/webview/sheet/view';
 
 // ---------------------------------------------------------------- sort & filter
 
@@ -61,6 +69,28 @@ describe('sheet view', () => {
     expect(numericValue('2024-01-05')).toBeUndefined();
     expect(compareCells('10', 'abc', 1)).toBeLessThan(0);
     expect(compareCells('', 'abc', -1)).toBeGreaterThan(0);
+  });
+
+  it('computes live selection stats (count, sum, avg, min, max) across multi-cell ranges', () => {
+    const statRows: Cell[][] = [
+      ['Item', 'Revenue'],
+      ['Alpha', '$100.00'],
+      ['Beta', '250'],
+      ['Gamma', ''],
+      ['Delta', '50%'],
+    ];
+    const cellAt = (r: number, c: number) => statRows[r]?.[c];
+    // Single cell returns undefined (no status clutter for 1x1 selection)
+    expect(computeSelectionStats(cellAt, 1, 1, 1, 1)).toBeUndefined();
+
+    const stats = computeSelectionStats(cellAt, 1, 0, 4, 1);
+    expect(stats).toBeDefined();
+    expect(stats!.count).toBe(7); // 4 names + 3 non-empty values (Gamma's revenue is blank)
+    expect(stats!.numCount).toBe(3); // 100, 250, 0.5
+    expect(stats!.sum).toBeCloseTo(350.5);
+    expect(stats!.avg).toBeCloseTo(350.5 / 3);
+    expect(stats!.min).toBeCloseTo(0.5);
+    expect(stats!.max).toBe(250);
   });
 });
 
@@ -266,5 +296,25 @@ describe('markdown export', () => {
     expect(svgOut).toContain('viewBox="50 20 100 50"');
     expect(svgOut).toContain('width="100"');
     expect(svgOut).toContain('height="50"');
+
+    // Pure RGBA 90° CW/CCW rotation & H/V flip on a 2x1 image ([Red, Blue])
+    const { resizeSvgMarkup, transformRgba } = await import('../../src/webview/image/bbox');
+    const twoByOne = new Uint8ClampedArray([255, 0, 0, 255, 0, 0, 255, 255]);
+    const cw = transformRgba(twoByOne, 2, 1, 'rotCW');
+    expect([cw.width, cw.height, ...cw.data]).toEqual([1, 2, 255, 0, 0, 255, 0, 0, 255, 255]);
+    const ccw = transformRgba(twoByOne, 2, 1, 'rotCCW');
+    expect([ccw.width, ccw.height, ...ccw.data]).toEqual([1, 2, 0, 0, 255, 255, 255, 0, 0, 255]);
+    const fh = transformRgba(twoByOne, 2, 1, 'flipH');
+    expect([fh.width, fh.height, ...fh.data]).toEqual([2, 1, 0, 0, 255, 255, 255, 0, 0, 255]);
+    const fv = transformRgba(cw.data, 1, 2, 'flipV');
+    expect([fv.width, fv.height, ...fv.data]).toEqual([1, 2, 0, 0, 255, 255, 255, 0, 0, 255]);
+
+    // Vector SVG resize (adds viewBox if missing so artwork scales cleanly)
+    const resizedSvg = new TextDecoder().decode(
+      resizeSvgMarkup('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><circle r="10"/></svg>', 100, 50, 300, 150),
+    );
+    expect(resizedSvg).toContain('viewBox="0 0 100 50"');
+    expect(resizedSvg).toContain('width="300"');
+    expect(resizedSvg).toContain('height="150"');
   });
 });

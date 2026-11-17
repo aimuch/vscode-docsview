@@ -276,7 +276,7 @@ function createSession(file: string): Session {
               return [];
             }
             redoStack.push(last);
-            return [last.undo()];
+            return [await last.undo()];
           }
           case 'dev-redo': {
             const next = redoStack.pop();
@@ -284,7 +284,7 @@ function createSession(file: string): Session {
               return [];
             }
             undoStack.push(next);
-            return [next.redo()];
+            return [await next.redo()];
           }
           case 'dev-save': {
             if (session) {

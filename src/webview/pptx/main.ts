@@ -13,6 +13,7 @@ import {
   renderSurfaceAnnotations,
 } from '../shared/comments';
 import { getFileState } from '../shared/fileState';
+import { createFindWidget, PreviewFind } from '../shared/find';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
 import {
   customToolbar,
@@ -121,6 +122,21 @@ const view = segmented<'list' | 'single'>(
 
 const pager = createPager((n) => goTo(n - 1), t('slideN', ''));
 const zoom = createZoom((value) => host.style.setProperty('zoom', String(value)), stage);
+stage.tabIndex = -1;
+const pptFind = new PreviewFind(host, stage, {
+  includeHidden: true,
+  onReveal: (range) => {
+    const parentEl = range.startContainer.parentElement;
+    const slideEl = parentEl?.closest<HTMLElement>('.pptx-preview-slide-wrapper');
+    if (slideEl) {
+      const idx = slides.indexOf(slideEl);
+      if (idx >= 0 && idx !== current) {
+        goTo(idx);
+      }
+    }
+  },
+});
+const findWidget = createFindWidget(pptFind, stage);
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
 const topBar = customToolbar({
@@ -130,6 +146,7 @@ const topBar = customToolbar({
     { id: 'view', nodes: [view.node] },
     { id: 'pager', nodes: [pager.node] },
     { id: 'zoom', nodes: zoom.nodes },
+    { id: 'find', nodes: findWidget.nodes },
     { id: 'edit', label: t('pptxEditMode'), nodes: [editToggle.node], visible: () => editable },
     { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
@@ -424,6 +441,8 @@ async function load(bytes: Uint8Array) {
     setCurrent(Math.min(keep, slides.length - 1));
     applyView();
     syncCommentsUi();
+    pptFind.refresh();
+    findWidget.refreshCount();
     post({ type: 'status', ok: true, detail: `${previewer.slideCount} slides` });
   } catch (err) {
     if (run === generation) {

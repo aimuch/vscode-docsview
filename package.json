@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -166,17 +166,17 @@
       "editor/title": [
         {
           "command": "docsview.showPreview",
-          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i",
+          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i",
           "group": "navigation@-100"
         },
         {
           "command": "docsview.showPreviewToSide",
-          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i",
+          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i",
           "group": "navigation@-99"
         },
         {
           "command": "docsview.showSource",
-          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv'",
+          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv' || (activeCustomEditorId == 'docsview.image' && resourceExtname =~ /^\\.svg$/i)",
           "group": "navigation@-100"
         }
       ],

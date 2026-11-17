@@ -105,3 +105,67 @@ export function viewRows(rows: Cell[][], dataRows: number, fixed: number, view: 
   }
   return [...head, ...body];
 }
+
+export interface SelectionStats {
+  count: number;
+  numCount: number;
+  sum: number;
+  avg: number;
+  min: number;
+  max: number;
+}
+
+/**
+ * Aggregates non-empty cell count and numeric SUM / AVG / MIN / MAX across a rectangular
+ * selection `[r0..r1] x [c0..c1]` (capped to `maxCells` so full-sheet Ctrl+A stays O(1) instant).
+ */
+export function computeSelectionStats(
+  cellAt: (r: number, c: number) => Cell | undefined,
+  r0: number,
+  c0: number,
+  r1: number,
+  c1: number,
+  maxCells = 50_000,
+): SelectionStats | undefined {
+  const totalSelected = (r1 - r0 + 1) * (c1 - c0 + 1);
+  if (totalSelected < 2) {
+    return undefined;
+  }
+  let count = 0;
+  let numCount = 0;
+  let sum = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  let visited = 0;
+  outer: for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      if (++visited > maxCells) {
+        break outer;
+      }
+      const cell = cellAt(r, c);
+      const t = text(cell).trim();
+      if (!t) {
+        continue;
+      }
+      count++;
+      const n = numericValue(cell);
+      if (n !== undefined && Number.isFinite(n)) {
+        numCount++;
+        sum += n;
+        if (n < min) min = n;
+        if (n > max) max = n;
+      }
+    }
+  }
+  if (count === 0) {
+    return undefined;
+  }
+  return {
+    count,
+    numCount,
+    sum,
+    avg: numCount > 0 ? sum / numCount : 0,
+    min: numCount > 0 ? min : 0,
+    max: numCount > 0 ? max : 0,
+  };
+}

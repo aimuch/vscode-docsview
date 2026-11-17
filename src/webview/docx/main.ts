@@ -6,6 +6,7 @@ import type { DocComment } from '../../common/protocol';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { closeFloatingEditors, CommentsPanel, openCommentComposer, openInlineTextEditor } from '../shared/comments';
 import { getFileState } from '../shared/fileState';
+import { createFindWidget, PreviewFind } from '../shared/find';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
 import {
   customToolbar,
@@ -128,6 +129,10 @@ const zoom = createZoom((value) => {
   pages.style.setProperty('zoom', String(value));
 }, stage);
 
+stage.tabIndex = -1;
+const docFind = new PreviewFind(pages, stage);
+const findWidget = createFindWidget(docFind, stage);
+
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
 const topBar = customToolbar({
@@ -136,6 +141,7 @@ const topBar = customToolbar({
     { id: 'nav', nodes: [sidebar.toggle] },
     { id: 'view', nodes: [view.node] },
     { id: 'zoom', nodes: zoom.nodes },
+    { id: 'find', nodes: findWidget.nodes },
     { id: 'edit', label: t('docxEditMode'), nodes: [editToggle.node], visible: () => editable },
     { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
@@ -385,6 +391,8 @@ async function load(bytes: Uint8Array) {
     indexRenderedParagraphs();
     buildOutline();
     syncCommentsUi();
+    docFind.refresh();
+    findWidget.refreshCount();
     post({
       type: 'status',
       ok: true,

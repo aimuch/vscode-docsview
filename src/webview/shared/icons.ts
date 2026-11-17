@@ -54,6 +54,13 @@ export const icons = {
     '<path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5"/><path d="M12.5 9.5v3a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1h3"/>',
   ),
   trash: svg('<path d="M3 4.5h10M6 4.5V3a.8.8 0 0 1 .8-.8h2.4a.8.8 0 0 1 .8.8v1.5M4.5 4.5l.6 8.2a1 1 0 0 0 1 .8h3.8a1 1 0 0 0 1-.8l.6-8.2"/>'),
+  rotateCCW: svg('<path d="M3.2 6V2.5M3.2 6h3.5"/><path d="M3.5 5.8a5.1 5.1 0 1 1-.5 4.1"/>'),
+  rotateCW: svg('<path d="M12.8 6V2.5M12.8 6H9.3"/><path d="M12.5 5.8a5.1 5.1 0 1 0 .5 4.1"/>'),
+  flipH: svg('<path d="M8 2v12" stroke-dasharray="1.5 1.8"/><path d="M5.6 4.5L2.2 8l3.4 3.5zM10.4 4.5L13.8 8l-3.4 3.5z"/>'),
+  flipV: svg('<path d="M2 8h12" stroke-dasharray="1.5 1.8"/><path d="M4.5 5.6L8 2.2l3.5 3.4zM4.5 10.4L8 13.8l3.5-3.4z"/>'),
+  resize: svg('<rect x="2" y="5.5" width="6.5" height="6.5" rx="1"/><path d="M7.5 3h5.5v5.5M13 3L8.5 7.5"/>'),
+  freeze: svg('<rect x="2" y="2.5" width="12" height="11" rx="1.4"/><path d="M2 6.3h12M6 2.5v3.8M10 2.5v3.8"/>'),
+  chevronsRight: svg('<path d="M4.5 4.5L8 8l-3.5 3.5M8.8 4.5L12.3 8l-3.5 3.5"/>'),
 };
 
 export type IconName = keyof typeof icons;

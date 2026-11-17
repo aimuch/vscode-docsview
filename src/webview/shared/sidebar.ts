@@ -5,6 +5,7 @@ import { iconButton, toggleButton } from './ui';
 
 interface PersistedState {
   sidebar?: { open: boolean; tab?: string };
+  sidebarWidth?: number;
   [key: string]: unknown;
 }
 
@@ -67,6 +68,47 @@ export class Sidebar {
       this.panels.set(tab.id, panel);
       this.node.append(panel);
     }
+
+    // Resizable split handle on the inner edge of the sidebar (supports both left & right positions).
+    const savedWidth = readState().sidebarWidth;
+    if (typeof savedWidth === 'number' && savedWidth >= 150 && savedWidth <= 520) {
+      this.node.style.width = `${savedWidth}px`;
+    }
+    const resizer = el('div', { class: 'dv-side-resizer', title: t('resizeSidebar') });
+    resizer.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) {
+        return;
+      }
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = this.node.getBoundingClientRect().width || 244;
+      const onRight = document.body.dataset.sidebarPos === 'right';
+      resizer.classList.add('dv-resizing');
+      document.body.style.userSelect = 'none';
+      const move = (ev: MouseEvent) => {
+        const delta = onRight ? startX - ev.clientX : ev.clientX - startX;
+        const maxW = Math.max(220, Math.min(520, Math.floor((window.innerWidth || 960) * 0.55)));
+        const nextW = Math.max(150, Math.min(maxW, Math.round(startW + delta)));
+        this.node.style.width = `${nextW}px`;
+      };
+      const up = () => {
+        resizer.classList.remove('dv-resizing');
+        document.body.style.userSelect = '';
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        const finalW = parseInt(this.node.style.width, 10);
+        if (Number.isFinite(finalW)) {
+          writeState({ sidebarWidth: finalW });
+        }
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+    });
+    resizer.addEventListener('dblclick', () => {
+      this.node.style.width = '';
+      writeState({ sidebarWidth: undefined });
+    });
+    this.node.append(resizer);
 
     this.expandBtn = iconButton('sidebarExpand', t('expandSidebar'), () => this.setOpen(true));
     this.expandBtn.classList.add('dv-side-expand');
