@@ -7,7 +7,17 @@ import { getAppearance, highlightToggle, lockToggle, onAppearanceChange, updateA
 import { getFileState } from '../shared/fileState';
 import { icons } from '../shared/icons';
 import { readState, writeState } from '../shared/sidebar';
-import { customToolbar, iconButton, moreMenu, noticeBanner, segmented, toggleButton, type MenuItem } from '../shared/ui';
+import {
+  customToolbar,
+  iconButton,
+  moreMenu,
+  noticeBanner,
+  openExternalButton,
+  openExternalMenuItem,
+  segmented,
+  toggleButton,
+  type MenuItem,
+} from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 import './sheet.css';
 import { emptyView, isActive, viewRows, type SheetView } from './view';
@@ -443,8 +453,10 @@ const topBar = customToolbar({
     },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'rtl', nodes: [rtlToggle.node] },
+    { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
+    openExternalMenuItem(),
     ...convertItems(),
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],

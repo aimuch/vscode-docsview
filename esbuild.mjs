@@ -24,6 +24,7 @@ const common = {
 const lazyHostMap = new Map([
   [join(root, 'src/host/markdown/renderer.ts'), './host/markdown-renderer.cjs'],
   [join(root, 'src/host/spreadsheet.ts'), './host/spreadsheet.cjs'],
+  [join(root, 'src/host/office.ts'), './host/office.cjs'],
   [join(root, 'src/host/doc/docExtractor.ts'), './host/doc-extractor.cjs'],
 ]);
 

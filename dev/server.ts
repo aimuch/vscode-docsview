@@ -23,6 +23,7 @@ import { CsvSession } from '../src/host/csv/csvSession';
 import { extractDocText } from '../src/host/doc/docExtractor';
 import { ExcelSession, type EditResult } from '../src/host/excel/excelSession';
 import { MarkdownRenderer } from '../src/host/markdown/renderer';
+import { OfficeSession, type OfficeEditResult, type OfficeFormat } from '../src/host/office';
 
 const root = process.cwd();
 const port = Number(process.env.PORT ?? 5177);
@@ -44,7 +45,7 @@ const MIME: Record<string, string> = {
   '.wasm': 'application/wasm',
 };
 
-function kindFor(file: string): { kind: ViewerKind; engine: 'markdown' | 'csv' | 'excel' | 'binary' | 'doc' } | undefined {
+function kindFor(file: string): { kind: ViewerKind; engine: 'markdown' | 'csv' | 'excel' | 'office' | 'binary' | 'doc' } | undefined {
   switch (extname(file).toLowerCase()) {
     case '.md':
     case '.markdown':
@@ -58,13 +59,13 @@ function kindFor(file: string): { kind: ViewerKind; engine: 'markdown' | 'csv' |
     case '.ods':
       return { kind: 'sheet', engine: 'excel' };
     case '.docx':
-      return { kind: 'docx', engine: 'binary' };
+      return { kind: 'docx', engine: 'office' };
     case '.doc':
       return { kind: 'text', engine: 'doc' };
     case '.pdf':
-      return { kind: 'pdf', engine: 'binary' };
+      return { kind: 'pdf', engine: 'office' };
     case '.pptx':
-      return { kind: 'pptx', engine: 'binary' };
+      return { kind: 'pptx', engine: 'office' };
     case '.png':
     case '.jpg':
     case '.jpeg':
@@ -249,6 +250,57 @@ function createSession(file: string): Session {
     };
   }
 
+  if (engine === 'office') {
+    const format = kindFor(file)!.kind as OfficeFormat;
+    let session: OfficeSession | undefined;
+    const undoStack: OfficeEditResult[] = [];
+    const redoStack: OfficeEditResult[] = [];
+    return {
+      async handle(message) {
+        switch (message.type) {
+          case 'ready':
+            session = await OfficeSession.open(format, bytes(), name);
+            return [session.loadMessage()];
+          case 'docMutate': {
+            const result = await session?.apply(message.mutation);
+            if (!result) {
+              return [];
+            }
+            undoStack.push(result);
+            redoStack.length = 0;
+            return [result.message];
+          }
+          case 'dev-undo': {
+            const last = undoStack.pop();
+            if (!last) {
+              return [];
+            }
+            redoStack.push(last);
+            return [last.undo()];
+          }
+          case 'dev-redo': {
+            const next = redoStack.pop();
+            if (!next) {
+              return [];
+            }
+            undoStack.push(next);
+            return [next.redo()];
+          }
+          case 'dev-save': {
+            if (session) {
+              mkdirSync(savedDir, { recursive: true });
+              writeFileSync(join(savedDir, name), session.export());
+              session.markSaved();
+            }
+            return [];
+          }
+          default:
+            return [];
+        }
+      },
+    };
+  }
+
   return {
     async handle(message) {
       if (message.type !== 'ready') {
@@ -362,7 +414,7 @@ const server = http.createServer(async (req, res) => {
         type: 'fileState',
         isDefault: ['md', 'markdown', 'csv', 'tsv'].includes(ext) ? defaults.has(ext) : undefined,
         ext,
-        history: ['md', 'markdown', 'csv', 'tsv', 'xlsx', 'xlsm'].includes(ext),
+        history: ['md', 'markdown', 'csv', 'tsv', 'xlsx', 'xlsm', 'docx', 'pptx', 'pdf'].includes(ext),
       });
       if (message.type === 'setDefault') {
         if (message.on) {
@@ -382,8 +434,8 @@ const server = http.createServer(async (req, res) => {
         toolbar = normalizeToolbarConfig(message.toolbar);
         return send(200, MIME['.json'], JSON.stringify([{ type: 'toolbar', toolbar }]));
       }
-      if (message.type === 'openSettings') {
-        console.log('[dev] openSettings');
+      if (message.type === 'openSettings' || message.type === 'openExternalApp') {
+        console.log(`[dev] ${message.type}`);
         return send(200, MIME['.json'], '[]');
       }
       if (message.type === 'history' || message.type === 'convert') {

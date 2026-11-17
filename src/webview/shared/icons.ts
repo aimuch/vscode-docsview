@@ -41,6 +41,16 @@ export const icons = {
   export: svg('<path d="M8 10.5V2.5M5 5.2L8 2.5l3 2.7M3 10.5v2a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-2"/>'),
   rtl: svg('<path d="M7 3h5M9 3v8M11.5 3v8M7 3a2.2 2.2 0 0 0 0 4.4H9M6.5 13l-2.5-2 2.5-2M4 11h8"/>'),
   invert: svg('<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/>'),
+  comment: svg(
+    '<path d="M2.5 3h11a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H6.5L3 14.2V11.5h-.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>',
+  ),
+  commentPlus: svg(
+    '<path d="M2.5 3h11a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H6.5L3 14.2V11.5h-.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M8 5.2v4.2M5.9 7.3h4.2"/>',
+  ),
+  external: svg(
+    '<path d="M9.5 2.5h4v4M13.5 2.5L7.5 8.5"/><path d="M12.5 9.5v3a1 1 0 0 1-1 1h-8a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1h3"/>',
+  ),
+  trash: svg('<path d="M3 4.5h10M6 4.5V3a.8.8 0 0 1 .8-.8h2.4a.8.8 0 0 1 .8.8v1.5M4.5 4.5l.6 8.2a1 1 0 0 0 1 .8h3.8a1 1 0 0 0 1-.8l.6-8.2"/>'),
 };
 
 export type IconName = keyof typeof icons;

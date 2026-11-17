@@ -335,4 +335,83 @@ export async function runEditingChecks(api: Api, samples: string, work: string, 
     }
     return `values, formats, formula, merge and untouched parts verified; previous version kept; reopened as ${reopened.detail}`;
   });
+
+  // ------------------------------------------------------------ docx: comment, paragraph edit, undo, save, history
+
+  await check(results, 'docx: comment, edit paragraph, undo, save, reopen', 'docsview.word', async () => {
+    const path = join(work, 'letter.docx');
+    copyFileSync(join(samples, 'letter.docx'), path);
+    const uri = vscode.Uri.file(path);
+    await open(api, uri, 'docsview.word');
+    const dirty = () => tabs(uri).custom[0]?.isDirty === true;
+
+    send(api, uri, { type: 'docMutate', mutation: { kind: 'addComment', pIndex: 0, text: '封面批注测试' } }, 'docx');
+    await waitFor('docx marked dirty after comment', dirty);
+    await vscode.commands.executeCommand('undo');
+    await waitFor('docx undo clears dirty', () => !dirty());
+
+    send(
+      api,
+      uri,
+      {
+        type: 'docMutate',
+        mutation: { kind: 'editDocxParagraph', pIndex: 0, expected: '项目进展报告', text: '项目进展报告（已审阅）' },
+      },
+      'docx',
+    );
+    await waitFor('docx marked dirty after paragraph edit', dirty);
+    send(api, uri, { type: 'docMutate', mutation: { kind: 'addComment', pIndex: 0, text: '同意发布' } }, 'docx');
+    await sleep(300);
+    await vscode.commands.executeCommand('workbench.action.files.save');
+    await waitFor('docx saved', () => !dirty());
+
+    const versions = await api.testing.listVersions(uri);
+    if (versions.length !== 1) {
+      throw new Error(`expected 1 docx history version, got ${versions.length}`);
+    }
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    const reopened = await open(api, uri, 'docsview.word');
+    if (!reopened.ok) {
+      throw new Error(`reopen docx: ${reopened.detail}`);
+    }
+    return `saved edited paragraph + OOXML comment; history snapshot kept; reopened as ${reopened.detail}`;
+  });
+
+  // ------------------------------------------------------------ pdf: box annotation, undo, save, history
+
+  await check(results, 'pdf: box annotation, undo, save, reopen', 'docsview.pdf', async () => {
+    const path = join(work, 'paper.pdf');
+    copyFileSync(join(samples, 'paper.pdf'), path);
+    const uri = vscode.Uri.file(path);
+    await open(api, uri, 'docsview.pdf');
+    const dirty = () => tabs(uri).custom[0]?.isDirty === true;
+
+    send(
+      api,
+      uri,
+      {
+        type: 'docMutate',
+        mutation: { kind: 'addComment', page: 1, text: 'PDF 框选批注', rect: { x: 0.1, y: 0.2, w: 0.3, h: 0.15 } },
+      },
+      'pdf',
+    );
+    await waitFor('pdf marked dirty after annotation', dirty);
+    await vscode.commands.executeCommand('undo');
+    await waitFor('pdf undo clears dirty', () => !dirty());
+    await vscode.commands.executeCommand('redo');
+    await waitFor('pdf redo restores dirty', dirty);
+
+    await vscode.commands.executeCommand('workbench.action.files.save');
+    await waitFor('pdf saved', () => !dirty());
+    const versions = await api.testing.listVersions(uri);
+    if (versions.length !== 1) {
+      throw new Error(`expected 1 pdf history version, got ${versions.length}`);
+    }
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    const reopened = await open(api, uri, 'docsview.pdf');
+    if (!reopened.ok) {
+      throw new Error(`reopen pdf: ${reopened.detail}`);
+    }
+    return `saved ISO 32000 PDF annotation; undo/redo & history verified; reopened as ${reopened.detail}`;
+  });
 }

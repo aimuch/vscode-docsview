@@ -1301,3 +1301,326 @@ body[data-sidebar-pos='right'] .dv-slot[data-slot='nav'] svg {
   padding: 0 9px;
   font-size: 12px;
 }
+
+/* ------------------------------------------------------------------ comments & annotations */
+
+.dv-cm-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dv-cm-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 6px;
+}
+
+.dv-cm-head-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--dv-input-border);
+  border-radius: 4px;
+  background: var(--vscode-input-background, transparent);
+  color: var(--vscode-foreground);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.dv-cm-head-add svg {
+  width: 12px;
+  height: 12px;
+}
+
+.dv-cm-head-add:hover {
+  border-color: var(--vscode-focusBorder);
+  color: var(--vscode-textLink-foreground, var(--dv-accent));
+}
+
+.dv-cm-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 10px 14px;
+}
+
+.dv-cm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px solid var(--dv-border);
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.dv-cm-card:hover {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder, #0078d4) 60%, var(--dv-border));
+}
+
+.dv-cm-card.dv-cm-active {
+  border-color: var(--vscode-focusBorder);
+  background: color-mix(in srgb, var(--vscode-focusBorder, #0078d4) 11%, var(--vscode-editorWidget-background, transparent));
+}
+
+.dv-cm-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dv-cm-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #1f1f1f;
+  background: #f59e0b;
+  font-variant-numeric: tabular-nums;
+}
+
+.dv-cm-author {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dv-cm-date {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dv-cm-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0.55;
+}
+
+.dv-cm-card:hover .dv-cm-actions,
+.dv-cm-card.dv-cm-active .dv-cm-actions {
+  opacity: 1;
+}
+
+.dv-cm-mini {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+}
+
+.dv-cm-mini svg {
+  width: 13px;
+  height: 13px;
+}
+
+.dv-cm-target {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  border-left: 2px solid #f59e0b;
+  padding-left: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dv-cm-body {
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dv-cm-edit-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dv-cm-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 62px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--dv-input-border);
+  border-radius: 5px;
+  resize: vertical;
+}
+
+.dv-cm-textarea:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.dv-cm-edit-btns {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.dv-cm-primary {
+  background: var(--dv-accent);
+  color: var(--dv-accent-fg);
+  border-color: var(--dv-accent);
+}
+
+.dv-cm-primary:hover {
+  background: color-mix(in srgb, var(--dv-accent) 88%, #ffffff);
+}
+
+.dv-float-editor {
+  position: fixed;
+  z-index: 220;
+  box-sizing: border-box;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-focusBorder, var(--dv-border));
+  border-radius: 8px;
+  box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.35));
+}
+
+.dv-float-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dv-float-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+/* Surface overlay pins & boxes (PDF pages / PPTX slides) */
+
+.dv-annot-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 8;
+}
+
+.dv-annot-pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 11px 11px 11px 2px;
+  border: 1.5px solid #ffffff;
+  background: #f59e0b;
+  color: #1f1f1f;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: transform 0.12s, background 0.12s;
+}
+
+.dv-annot-pin:hover,
+.dv-annot-pin.dv-annot-active {
+  background: #2563eb;
+  color: #ffffff;
+  transform: translate(-50%, -50%) scale(1.14);
+  z-index: 2;
+}
+
+.dv-annot-draft-pin {
+  pointer-events: none;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.dv-annot-box {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: auto;
+  border: 2px solid #f59e0b;
+  background: rgba(245, 158, 11, 0.14);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.dv-annot-box:hover,
+.dv-annot-box.dv-annot-active {
+  border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.16);
+  z-index: 2;
+}
+
+.dv-annot-tag {
+  position: absolute;
+  top: -10px;
+  left: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #f59e0b;
+  color: #1f1f1f;
+  font-size: 10.5px;
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+}
+
+.dv-annot-box:hover .dv-annot-tag,
+.dv-annot-box.dv-annot-active .dv-annot-tag {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.dv-annot-draft {
+  position: absolute;
+  z-index: 9;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 2px dashed #2563eb;
+  background: rgba(37, 99, 235, 0.14);
+}

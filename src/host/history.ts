@@ -11,7 +11,7 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
 const ORPHAN_TTL_MS = 7 * 24 * 3600 * 1000;
 const TEXT_EXTENSIONS = new Set(['md', 'markdown', 'csv', 'tsv']);
-const HISTORY_EXTENSIONS = new Set([...TEXT_EXTENSIONS, 'xlsx', 'xlsm']);
+const HISTORY_EXTENSIONS = new Set([...TEXT_EXTENSIONS, 'xlsx', 'xlsm', 'docx', 'pptx', 'pdf']);
 
 let root: vscode.Uri | undefined;
 
@@ -201,7 +201,14 @@ function formatSize(size: number): string {
 }
 
 async function restore(uri: vscode.Uri, version: Version): Promise<void> {
-  if (vscode.workspace.textDocuments.some((d) => d.uri.toString() === uri.toString() && d.isDirty)) {
+  const key = uri.toString();
+  const textDirty = vscode.workspace.textDocuments.some((d) => d.uri.toString() === key && d.isDirty);
+  const customDirty = vscode.window.tabGroups.all.some((g) =>
+    g.tabs.some(
+      (tab) => tab.isDirty && tab.input instanceof vscode.TabInputCustom && tab.input.uri.toString() === key,
+    ),
+  );
+  if (textDirty || customDirty) {
     void vscode.window.showWarningMessage(t('restoreDirty'));
     return;
   }

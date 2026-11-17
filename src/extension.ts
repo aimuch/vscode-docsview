@@ -3,6 +3,7 @@ import { BinaryPreviewProvider } from './host/binaryPreviewProvider';
 import { CsvEditorProvider } from './host/csv/provider';
 import { ExcelEditorProvider } from './host/excel/provider';
 import { MarkdownPreviewProvider } from './host/markdown/provider';
+import { OfficeEditorProvider } from './host/office/provider';
 import { initHistory, listVersions, showHistory, watchTextSaves } from './host/history';
 import { onViewerStatus } from './host/status';
 import {
@@ -39,6 +40,12 @@ export function activate(context: vscode.ExtensionContext): {
       vscode.window.registerCustomEditorProvider(viewType, binary, {
         webviewOptions,
         supportsMultipleEditorsPerDocument: true,
+      }),
+    ),
+    ...OfficeEditorProvider.viewTypes.map((viewType) =>
+      vscode.window.registerCustomEditorProvider(viewType, new OfficeEditorProvider(context), {
+        webviewOptions,
+        supportsMultipleEditorsPerDocument: false,
       }),
     ),
     vscode.window.registerCustomEditorProvider(MarkdownPreviewProvider.viewType, new MarkdownPreviewProvider(context), {

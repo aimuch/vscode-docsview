@@ -482,6 +482,10 @@ export function handleCommonMessage(
       void vscode.commands.executeCommand('workbench.action.openSettings', 'docsview');
       break;
     }
+    case 'openExternalApp': {
+      void vscode.env.openExternal(uri);
+      break;
+    }
     case 'showSource':
       if (message.beside) {
         void openSplitPreview(uri, 'source');

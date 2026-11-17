@@ -1,0 +1,90 @@
+/* Maps common Windows Office / WPS Chinese & Western font family names to native system
+   equivalents on macOS and Linux via zero-bundle-weight local() aliases, so .docx and .pptx
+   documents keep authentic serif / kai / fangsong / sans typography out of the box. */
+
+@font-face {
+  font-family: 'SimSun';
+  src: local('SimSun'), local('宋体'), local('Songti SC'), local('STSong'), local('Noto Serif CJK SC');
+}
+@font-face {
+  font-family: '宋体';
+  src: local('宋体'), local('SimSun'), local('Songti SC'), local('STSong'), local('Noto Serif CJK SC');
+}
+@font-face {
+  font-family: 'NSimSun';
+  src: local('NSimSun'), local('新宋体'), local('Songti SC'), local('STSong'), local('Noto Serif CJK SC');
+}
+@font-face {
+  font-family: '新宋体';
+  src: local('新宋体'), local('NSimSun'), local('Songti SC'), local('STSong'), local('Noto Serif CJK SC');
+}
+
+@font-face {
+  font-family: 'FangSong';
+  src: local('FangSong'), local('仿宋'), local('STFangsong'), local('Songti SC'), local('Noto Serif CJK SC');
+}
+@font-face {
+  font-family: '仿宋';
+  src: local('仿宋'), local('FangSong'), local('STFangsong'), local('Songti SC'), local('Noto Serif CJK SC');
+}
+@font-face {
+  font-family: 'FangSong_GB2312';
+  src: local('FangSong_GB2312'), local('仿宋_GB2312'), local('STFangsong'), local('Songti SC');
+}
+@font-face {
+  font-family: '仿宋_GB2312';
+  src: local('仿宋_GB2312'), local('FangSong_GB2312'), local('STFangsong'), local('Songti SC');
+}
+
+@font-face {
+  font-family: 'KaiTi';
+  src: local('KaiTi'), local('楷体'), local('Kaiti SC'), local('STKaiti');
+}
+@font-face {
+  font-family: '楷体';
+  src: local('楷体'), local('KaiTi'), local('Kaiti SC'), local('STKaiti');
+}
+@font-face {
+  font-family: 'KaiTi_GB2312';
+  src: local('KaiTi_GB2312'), local('楷体_GB2312'), local('Kaiti SC'), local('STKaiti');
+}
+@font-face {
+  font-family: '楷体_GB2312';
+  src: local('楷体_GB2312'), local('KaiTi_GB2312'), local('Kaiti SC'), local('STKaiti');
+}
+
+@font-face {
+  font-family: 'SimHei';
+  src: local('SimHei'), local('黑体'), local('Heiti SC'), local('STHeiti'), local('PingFang SC'), local('Noto Sans CJK SC');
+}
+@font-face {
+  font-family: '黑体';
+  src: local('黑体'), local('SimHei'), local('Heiti SC'), local('STHeiti'), local('PingFang SC'), local('Noto Sans CJK SC');
+}
+
+@font-face {
+  font-family: 'DengXian';
+  src: local('DengXian'), local('等线'), local('PingFang SC'), local('Microsoft YaHei'), local('Noto Sans CJK SC');
+}
+@font-face {
+  font-family: '等线';
+  src: local('等线'), local('DengXian'), local('PingFang SC'), local('Microsoft YaHei'), local('Noto Sans CJK SC');
+}
+
+@font-face {
+  font-family: 'Microsoft YaHei';
+  src: local('Microsoft YaHei'), local('微软雅黑'), local('PingFang SC'), local('Hiragino Sans GB'), local('Noto Sans CJK SC');
+}
+@font-face {
+  font-family: '微软雅黑';
+  src: local('微软雅黑'), local('Microsoft YaHei'), local('PingFang SC'), local('Hiragino Sans GB'), local('Noto Sans CJK SC');
+}
+
+@font-face {
+  font-family: 'Calibri';
+  src: local('Calibri'), local('Carlito'), local('Segoe UI'), local('Helvetica Neue'), local('Arial');
+}
+@font-face {
+  font-family: 'Cambria';
+  src: local('Cambria'), local('Caladea'), local('Georgia'), local('Times New Roman');
+}

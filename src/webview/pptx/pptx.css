@@ -15,6 +15,18 @@
 }
 
 .pptx-host .pptx-preview-slide-wrapper {
+  position: relative;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
   scroll-margin-top: 20px;
+}
+
+.pptx-host.pptx-annotating .pptx-preview-slide-wrapper {
+  cursor: crosshair;
+}
+
+.pptx-host.pptx-editing .pptx-preview-slide-wrapper span:hover,
+.pptx-host.pptx-editing .pptx-preview-slide-wrapper p:hover {
+  outline: 1px dashed #2563eb;
+  outline-offset: 2px;
+  cursor: text;
 }

@@ -2,7 +2,7 @@
 import '../shared/base.css';
 import './text.css';
 import { app, el, onMessage, post, showStatus, t } from '../shared/api';
-import { customToolbar, noticeBanner } from '../shared/ui';
+import { customToolbar, noticeBanner, openExternalButton, openExternalMenuItem } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 
 const notice = noticeBanner(t('docNotice'));
@@ -14,7 +14,11 @@ const zoom = createZoom((value) => page.style.setProperty('zoom', String(value))
 app.append(
   customToolbar({
     subtitle: 'DOC',
-    slots: [{ id: 'zoom', nodes: zoom.nodes }],
+    slots: [
+      { id: 'zoom', nodes: zoom.nodes },
+      { id: 'openApp', nodes: [openExternalButton()] },
+    ],
+    documentActions: [openExternalMenuItem()],
   }).node,
   notice.node,
   stage,

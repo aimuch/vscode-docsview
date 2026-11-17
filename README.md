@@ -12,11 +12,11 @@ Preview common document formats inside VS Code and edit spreadsheets in place. *
 | CSV / TSV | `.csv` `.tsv` | 标题栏预览按钮 | 表格视图，改单元格、增删行列；撤销/保存/编码由 VS Code 原生处理 |
 | Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、冻结窗格、公式栏编辑与实时公式计算、增删行列、新建/重命名/删除工作表 |
 | Excel（旧版等） | `.xls` `.ods` | 单击即预览 | 只读 |
-| Word | `.docx` | 单击即预览 | 页面版式、表格、图片、页眉页脚 |
-| Word（旧版） | `.doc` | 单击即预览 | **仅文字**，无版式 |
-| PDF | `.pdf` | 单击即预览 | 翻页、缩放、适应宽度、搜索、文字选择 |
-| PowerPoint | `.pptx` | 单击即预览 | 幻灯片列表、缩放（近似效果） |
-| 图片与像素标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览 | 实时像素坐标、9×9 放大镜取色（RGB / HEX 一键复制）、BBox 画框测距（支持像素与 `0–1000` 归一化坐标及 JSON 导出） |
+| Word | `.docx` | 单击即预览 | 页面版式、中英文字体映射、双击段落就地修改文字、标准 OOXML 批注（与 Word/WPS 双向互通）、一键用外部程序打开 |
+| Word（旧版） | `.doc` | 单击即预览 | **仅文字**，无版式（支持一键调用本地 Office/WPS 打开） |
+| PDF | `.pdf` | 单击即预览 | 翻页、缩放、适应宽度、搜索、文字选择、ISO 32000 标准框选/图钉批注（与 Acrobat/WPS/预览双向互通） |
+| PowerPoint | `.pptx` | 单击即预览 | 原生画幅比例（`4:3` / `16:10` / `16:9`）、双击文本框就地改字、标准幻灯片批注（与 PowerPoint/WPS 互通） |
+| 图片与像素标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览 | 实时像素坐标、11×11 十字准星放大镜取色（支持跟随指针/固定位置、`C` 复制、`Shift` 切换 RGB/HEX）、BBox 画框测距 |
 
 Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一致：点编辑器右上角的预览图标，或在命令面板运行 **DocsView：在侧边打开预览**。想让 CSV 默认用表格打开，可在设置里加：
 
@@ -35,9 +35,9 @@ Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一
 | Markdown | 标题目录（可筛选、可折叠，随滚动高亮当前章节） | 预览 / 分栏（文本编辑器在旁边）/ 源码 |
 | CSV / TSV | — | 表格 / 文本 |
 | Excel | 底部工作表标签 | 样式 / 纯数据 |
-| Word (.docx) | 由文档标题生成的目录 | 页面 / 连续 |
-| PDF | 书签目录 / 页面缩略图 | 连续 / 单页 |
-| PPT | 幻灯片列表 | 列表 / 单页 |
+| Word (.docx) | 目录 / 批注列表 | 页面 / 连续 |
+| PDF | 书签目录 / 页面缩略图 / 批注列表 | 连续 / 单页 |
+| PPT | 幻灯片列表 / 批注列表 | 列表 / 单页 |
 
 在右侧 **设置抽屉** 中集中管理：
 - **当前文档**：导出 HTML / PDF、表格格式互转、版本历史、设为默认打开方式、从右到左（RTL）等。
@@ -100,6 +100,8 @@ Markdown / CSV 的文本编辑器右上角有两个 DocsView 图标：**打开�
 | `docsview.highlightRowColumn` | `true` | 高亮选中（表格）或悬停（Markdown 表格）单元格所在的行和列 |
 | `docsview.table.lockEditing` | `false` | 锁定 CSV / Excel 单元格编辑 |
 | `docsview.showNotices` | `true` | 在预览顶部显示格式说明提示条 |
+| `docsview.image.loupePosition` | `follow` | 图片像素取色放大镜位置：`follow`（跟随指针）/ `fixed`（固定在右上角） |
+| `docsview.sidebarPosition` | `left` | 导航/目录/批注侧边栏位置：`left`（左侧）/ `right`（右侧） |
 | `docsview.toolbar` | 默认左区 | 顶部工具栏左侧与右侧显示的项目及其排列顺序 |
 
 ## 已知限制
@@ -147,11 +149,11 @@ npm run package     # 生成 .vsix
 | CSV / TSV | `.csv` `.tsv` | preview button in the editor title | table view; edit cells, insert/delete rows and columns; undo/save/encoding handled by VS Code |
 | Excel | `.xlsx` `.xlsm` | on click | styles, merged cells, frozen panes, multiple sheets; cell editing with save |
 | Excel (legacy) | `.xls` `.ods` | on click | read-only |
-| Word | `.docx` | on click | paged layout, tables, images, headers/footers |
-| Word (legacy) | `.doc` | on click | **text only** |
-| PDF | `.pdf` | on click | paging, zoom, fit width, search, text selection |
-| PowerPoint | `.pptx` | on click | slide list, zoom (approximate rendering) |
-| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click | live pixel coordinates, 9×9 magnifier loupe, RGB/HEX picker, interactive BBox drawing & measurement (`px` and `0–1000` normalised) |
+| Word | `.docx` | on click | paged layout, Office/WPS CJK font aliases, double-click paragraph editing, interoperable OOXML comments, open in external app |
+| Word (legacy) | `.doc` | on click | **text only** (plus one-click open in system app) |
+| PDF | `.pdf` | on click | paging, zoom, fit width, search, text selection, ISO 32000 box & pin annotations |
+| PowerPoint | `.pptx` | on click | native slide aspect ratio (`4:3` / `16:9`), double-click shape text editing, interoperable OOXML slide comments |
+| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click | live pixel coordinates, 11×11 crosshair magnifier loupe (follow/fixed), RGB/HEX picker, interactive BBox drawing & measurement |
 
 Markdown and CSV keep opening as text; use the preview icon in the editor title or **DocsView: Open Preview to the Side**. Use **Reopen Editor With…** to switch any file between DocsView and the text editor.
 

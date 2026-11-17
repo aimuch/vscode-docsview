@@ -26,11 +26,10 @@ function kindFor(uri: vscode.Uri): ViewerKind {
 }
 
 /**
- * Read-only previews (docx / doc / pdf / pptx / image). The host only ships bytes (or extracted
- * text for .doc); rendering happens in the webview. Reloads when the file changes on disk.
+ * Read-only binary image preview. Reloads automatically when the file changes on disk.
  */
 export class BinaryPreviewProvider implements vscode.CustomReadonlyEditorProvider {
-  static readonly viewTypes = ['docsview.word', 'docsview.pdf', 'docsview.pptx', 'docsview.image'];
+  static readonly viewTypes = ['docsview.image'];
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 

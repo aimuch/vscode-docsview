@@ -86,6 +86,40 @@ export interface CellChange {
 
 export type StructureOp = 'insertRow' | 'deleteRows' | 'insertCol' | 'deleteCols';
 
+// ---------------------------------------------------------------- office & pdf annotations / editing
+
+export interface DocComment {
+  id: string;
+  author: string;
+  date?: string;
+  text: string;
+  /** 1-based page (PDF) or 1-based slide number (PPTX). */
+  page?: number;
+  /** 0-based body paragraph index (DOCX). */
+  pIndex?: number;
+  /** Excerpt or target label shown in the comments list. */
+  quote?: string;
+  /** Normalised [0..1] box/pin coordinates on the page or slide. */
+  rect?: { x: number; y: number; w: number; h: number };
+  color?: string;
+}
+
+export type DocMutation =
+  | {
+      kind: 'addComment';
+      text: string;
+      author?: string;
+      page?: number;
+      pIndex?: number;
+      quote?: string;
+      rect?: { x: number; y: number; w: number; h: number };
+      color?: string;
+    }
+  | { kind: 'updateComment'; id: string; text: string }
+  | { kind: 'deleteComment'; id: string }
+  | { kind: 'editDocxParagraph'; pIndex: number; text: string; expected: string }
+  | { kind: 'editPptxText'; slideIndex: number; shapeIndex: number; text: string; expected: string };
+
 // ---------------------------------------------------------------- markdown
 
 export interface TocEntry {
@@ -154,6 +188,8 @@ export type ToolbarItemId =
   | 'cellBar'
   | 'find'
   | 'edit'
+  | 'comments'
+  | 'openApp'
   | 'highlight'
   | 'structure'
   | 'actions'
@@ -174,6 +210,8 @@ export const ALL_TOOLBAR_ITEMS: readonly ToolbarItemId[] = [
   'cellBar',
   'find',
   'edit',
+  'comments',
+  'openApp',
   'highlight',
   'structure',
   'actions',
@@ -191,7 +229,20 @@ export interface ToolbarConfig {
 }
 
 export const DEFAULT_TOOLBAR: ToolbarConfig = {
-  left: ['nav', 'view', 'pager', 'zoom', 'bbox', 'cellBar', 'find', 'edit', 'highlight', 'structure'],
+  left: [
+    'nav',
+    'view',
+    'pager',
+    'zoom',
+    'bbox',
+    'cellBar',
+    'find',
+    'edit',
+    'comments',
+    'highlight',
+    'structure',
+    'openApp',
+  ],
   right: [],
 };
 
@@ -224,7 +275,17 @@ export function normalizeToolbarConfig(raw: unknown): ToolbarConfig {
 // ---------------------------------------------------------------- messages
 
 export type HostMessage =
-  | { type: 'load'; name: string; bytes: Uint8Array }
+  | {
+      type: 'load';
+      name: string;
+      bytes: Uint8Array;
+      comments?: DocComment[];
+      editable?: boolean;
+      docxParagraphs?: string[];
+      pptxShapes?: string[][];
+      slideAspect?: number;
+    }
+  | { type: 'comments'; comments: DocComment[] }
   | { type: 'text'; name: string; body: string }
   /** `source` is the full Markdown text, for editing a block in place. */
   | { type: 'render'; html: string; toc: TocEntry[]; source: string }
@@ -254,6 +315,8 @@ export type WebviewMessage =
   | { type: 'setAppearance'; patch: Partial<Appearance> }
   | { type: 'setToolbar'; toolbar: ToolbarConfig }
   | { type: 'openSettings' }
+  | { type: 'openExternalApp' }
+  | { type: 'docMutate'; mutation: DocMutation }
   /** Open the document in the text editor: replacing this editor, or beside it. */
   | { type: 'showSource'; beside: boolean }
   /** Close text editors of this document that are open beside the preview. */

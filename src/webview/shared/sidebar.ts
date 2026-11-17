@@ -119,6 +119,13 @@ export class Sidebar {
     }
     this.tabListeners.forEach((l) => l(id));
   }
+
+  setTabLabel(id: string, label: string): void {
+    const b = this.tabButtons.get(id);
+    if (b) {
+      b.textContent = label;
+    }
+  }
 }
 
 // ---------------------------------------------------------------- outline tree

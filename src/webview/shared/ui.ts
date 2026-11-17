@@ -29,6 +29,18 @@ export function iconButton(icon: IconName, title: string, onClick: () => void): 
   return b;
 }
 
+export function openExternalButton(): HTMLButtonElement {
+  return iconButton('external', t('openExternalApp'), () => post({ type: 'openExternalApp' }));
+}
+
+export function openExternalMenuItem(): MenuItem {
+  return {
+    icon: 'external',
+    label: t('openExternalApp'),
+    onClick: () => post({ type: 'openExternalApp' }),
+  };
+}
+
 /** A toggle button (aria-pressed) with an icon. */
 export function toggleButton(icon: IconName, title: string, onChange: (on: boolean) => void): {
   node: HTMLButtonElement;
@@ -312,6 +324,8 @@ const SLOT_LABELS: Record<ToolbarItemId, StringKey> = {
   cellBar: 'slotCellBar',
   find: 'slotFind',
   edit: 'slotEdit',
+  comments: 'slotComments',
+  openApp: 'slotOpenApp',
   highlight: 'slotHighlight',
   structure: 'slotStructure',
   actions: 'slotActions',

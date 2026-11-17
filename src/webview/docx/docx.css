@@ -26,3 +26,64 @@
 .docx-host.docx-flow .docx-wrapper > section.docx + section.docx {
   border-top: 1px dashed #c8c8c8;
 }
+
+/* Interactive paragraph editing & comment modes */
+
+.docx-host.docx-editing [data-p-index]:hover {
+  outline: 1px dashed #2563eb;
+  outline-offset: 2px;
+  background: rgba(37, 99, 235, 0.06);
+  cursor: text;
+}
+
+.docx-host.docx-annotating [data-p-index]:hover {
+  outline: 1px dashed #d97706;
+  outline-offset: 2px;
+  background: rgba(245, 158, 11, 0.1);
+  cursor: pointer;
+}
+
+.docx-has-comment {
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 1.5px solid rgba(217, 119, 6, 0.55);
+}
+
+.docx-cm-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  padding: 0 6px;
+  height: 18px;
+  border: 1px solid rgba(217, 119, 6, 0.65);
+  border-radius: 9px;
+  background: #fef3c7;
+  color: #92400e;
+  font-family: -apple-system, 'Segoe UI', 'PingFang SC', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+  user-select: none;
+}
+
+.docx-cm-pill:hover,
+.docx-cm-pill.docx-cm-pill-active {
+  background: #2563eb;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+
+@keyframes docxFlash {
+  0% {
+    background: rgba(37, 99, 235, 0.28);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+.docx-para-flash {
+  animation: docxFlash 1.2s ease-out;
+}
