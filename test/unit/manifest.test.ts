@@ -26,7 +26,7 @@ describe("package.json", () => {
   });
 
   it("ships light and dark icons for those buttons", () => {
-    for (const command of ["docsview.showPreview", "docsview.showPreviewToSide"]) {
+    for (const command of ["docsview.showPreview", "docsview.showPreviewToSide", "docsview.showSource"]) {
       const icon = pkg.contributes.commands.find((c: { command: string }) => c.command === command).icon;
       for (const variant of ["light", "dark"]) {
         expect(existsSync(join(root, icon[variant])), icon[variant]).toBe(true);

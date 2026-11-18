@@ -1,93 +1,159 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
   <defs>
-    <!-- Rich macOS-style squircle background gradient -->
-    <linearGradient id="bg" x1="20" y1="12" x2="236" y2="246" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#1E3A8A"/>
-      <stop offset="48%" stop-color="#2563EB"/>
-      <stop offset="100%" stop-color="#0284C7"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(68 42) rotate(48) scale(170)">
-      <stop offset="0%" stop-color="#93C5FD" stop-opacity="0.42"/>
-      <stop offset="100%" stop-color="#93C5FD" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="rim" x1="128" y1="10" x2="128" y2="246" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.42"/>
-      <stop offset="40%" stop-color="#FFFFFF" stop-opacity="0.1"/>
-      <stop offset="100%" stop-color="#0F172A" stop-opacity="0.35"/>
+    <clipPath id="squircleClip">
+      <rect x="20" y="20" width="472" height="472" rx="108"/>
+    </clipPath>
+
+    <!-- Deep Midnight-Sapphire to Royal-Indigo Squircle Base -->
+    <linearGradient id="bg" x1="48" y1="24" x2="464" y2="488" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0B132B"/>
+      <stop offset="48%" stop-color="#1E3A8A"/>
+      <stop offset="100%" stop-color="#2563EB"/>
     </linearGradient>
 
-    <!-- Multi-format accent cards -->
-    <linearGradient id="sheetGreen" x1="40" y1="56" x2="132" y2="188" gradientUnits="userSpaceOnUse">
+    <!-- Top-left Cyan Aurora Specular Bloom -->
+    <radialGradient id="auroraTop" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(136 86) rotate(42) scale(310 270)">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.46"/>
+      <stop offset="55%" stop-color="#60A5FA" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#60A5FA" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Bottom-right Indigo-Violet Ambient Glow -->
+    <radialGradient id="auroraBot" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(410 430) rotate(-135) scale(260)">
+      <stop offset="0%" stop-color="#818CF8" stop-opacity="0.38"/>
+      <stop offset="100%" stop-color="#818CF8" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Outer Squircle Glass Rim -->
+    <linearGradient id="rim" x1="120" y1="20" x2="392" y2="492" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#BAE6FD" stop-opacity="0.68"/>
+      <stop offset="38%" stop-color="#FFFFFF" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#93C5FD" stop-opacity="0.35"/>
+    </linearGradient>
+
+    <!-- Left Fanned Emerald Sheet Card (Excel / CSV / JSONL) -->
+    <linearGradient id="sheetCard" x1="78" y1="118" x2="220" y2="378" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#34D399"/>
       <stop offset="100%" stop-color="#059669"/>
     </linearGradient>
-    <linearGradient id="slideAmber" x1="124" y1="56" x2="216" y2="188" gradientUnits="userSpaceOnUse">
+
+    <!-- Right Fanned Coral-Amber Slide/PDF Card (PDF / PPTX / EPUB) -->
+    <linearGradient id="slideCard" x1="292" y1="118" x2="434" y2="378" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#FBBF24"/>
-      <stop offset="100%" stop-color="#EA580C"/>
+      <stop offset="48%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#E11D48"/>
     </linearGradient>
-    <linearGradient id="docPaper" x1="128" y1="40" x2="128" y2="204" gradientUnits="userSpaceOnUse">
+
+    <!-- Center Hero Porcelain Document Card -->
+    <linearGradient id="docPaper" x1="244" y1="80" x2="244" y2="396" gradientUnits="userSpaceOnUse">
       <stop offset="0%" stop-color="#FFFFFF"/>
       <stop offset="100%" stop-color="#F1F5F9"/>
     </linearGradient>
-    <linearGradient id="lensBg" x1="146" y1="142" x2="206" y2="208" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#0EA5E9"/>
-      <stop offset="100%" stop-color="#1D4ED8"/>
+
+    <!-- Header Accent Pill -->
+    <linearGradient id="headerPill" x1="156" y1="122" x2="292" y2="146" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
     </linearGradient>
 
-    <filter id="cardShadow" x="36" y="28" width="184" height="202" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="10" stdDeviation="9" flood-color="#09132C" flood-opacity="0.36"/>
+    <!-- Bento Tile Soft Sky Surface -->
+    <linearGradient id="bentoBg" x1="156" y1="166" x2="250" y2="258" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E0F2FE"/>
+      <stop offset="100%" stop-color="#DBEAFE"/>
+    </linearGradient>
+
+    <!-- Optical Loupe Bezel & Glass Lens -->
+    <linearGradient id="loupeRim" x1="286" y1="280" x2="394" y2="392" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#DBEAFE"/>
+    </linearGradient>
+    <linearGradient id="loupeGlass" x1="296" y1="290" x2="386" y2="382" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#06B6D4"/>
+      <stop offset="52%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#3730A3"/>
+    </linearGradient>
+    <linearGradient id="loupeHandle" x1="378" y1="378" x2="424" y2="424" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F8FAFC"/>
+      <stop offset="100%" stop-color="#BAE6FD"/>
+    </linearGradient>
+
+    <!-- Soft Realistic Elevation Shadows -->
+    <filter id="sideShadow" x="36" y="86" width="440" height="348" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#020617" flood-opacity="0.35"/>
     </filter>
-    <filter id="badgeShadow" x="122" y="124" width="112" height="112" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#09132C" flood-opacity="0.4"/>
+    <filter id="docShadow" x="86" y="60" width="320" height="388" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="16" flood-color="#020617" flood-opacity="0.46"/>
+    </filter>
+    <filter id="loupeShadow" x="242" y="246" width="220" height="220" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="11" flood-color="#020617" flood-opacity="0.45"/>
     </filter>
   </defs>
 
-  <!-- Squircle App Base (transparent outside corners) -->
-  <rect x="10" y="10" width="236" height="236" rx="54" fill="url(#bg)"/>
-  <rect x="10" y="10" width="236" height="236" rx="54" fill="url(#glow)"/>
-  <rect x="11" y="11" width="234" height="234" rx="53" stroke="url(#rim)" stroke-width="2"/>
+  <g clip-path="url(#squircleClip)">
+    <!-- 1. Squircle App Base -->
+    <rect x="20" y="20" width="472" height="472" rx="108" fill="url(#bg)"/>
+    <rect x="20" y="20" width="472" height="472" rx="108" fill="url(#auroraTop)"/>
+    <rect x="20" y="20" width="472" height="472" rx="108" fill="url(#auroraBot)"/>
 
-  <!-- Left tilted emerald spreadsheet card -->
-  <g transform="rotate(-11 99 125)">
-    <rect x="39" y="55" width="104" height="134" rx="18" fill="url(#sheetGreen)"/>
-    <path d="M55 89h44M55 111h44M55 133h44M77 73v76" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="5" stroke-linecap="round"/>
+    <!-- 2. Fanned Multi-Format Cards (Spreadsheet Left + Presentation/PDF Right) -->
+    <g filter="url(#sideShadow)">
+      <!-- Left Emerald Spreadsheet Card -->
+      <g transform="rotate(-11 178 248)">
+        <rect x="72" y="114" width="194" height="252" rx="32" fill="url(#sheetCard)"/>
+        <rect x="73" y="115" width="192" height="250" rx="31" stroke="#A7F3D0" stroke-opacity="0.5" stroke-width="2"/>
+        <rect x="96" y="150" width="74" height="126" rx="12" stroke="#FFFFFF" stroke-opacity="0.54" stroke-width="6"/>
+        <path d="M96 192h74M96 234h74M133 150v126" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="5"/>
+      </g>
+
+      <!-- Right Coral-Amber Presentation/PDF Card -->
+      <g transform="rotate(11 318 248)">
+        <rect x="232" y="114" width="194" height="252" rx="32" fill="url(#slideCard)"/>
+        <rect x="233" y="115" width="192" height="250" rx="31" stroke="#FDE68A" stroke-opacity="0.5" stroke-width="2"/>
+        <rect x="330" y="152" width="68" height="48" rx="11" fill="#FFFFFF" fill-opacity="0.45"/>
+        <path d="M336 224h56M336 252h40" stroke="#FFFFFF" stroke-opacity="0.54" stroke-width="8" stroke-linecap="round"/>
+      </g>
+    </g>
+
+    <!-- 3. Center Hero White Document Sheet -->
+    <g filter="url(#docShadow)">
+      <rect x="118" y="78" width="250" height="316" rx="36" fill="url(#docPaper)"/>
+      <rect x="119" y="79" width="248" height="314" rx="35" stroke="#FFFFFF" stroke-width="2"/>
+    </g>
+
+    <!-- Bold, High-Contrast Document Interior -->
+    <rect x="154" y="120" width="132" height="24" rx="12" fill="url(#headerPill)"/>
+
+    <!-- Visual Image / Analytics Bento Tile -->
+    <rect x="154" y="166" width="96" height="88" rx="18" fill="url(#bentoBg)" stroke="#BAE6FD" stroke-width="2"/>
+    <circle cx="180" cy="192" r="9" fill="#0284C7"/>
+    <path d="M166 240l22-26 16 17 15-14 17 23H166z" fill="#2563EB"/>
+
+    <!-- Side Typography Bars -->
+    <rect x="268" y="174" width="66" height="18" rx="9" fill="#475569"/>
+    <rect x="268" y="208" width="46" height="18" rx="9" fill="#94A3B8"/>
+
+    <!-- Full-Width Body Bars -->
+    <rect x="154" y="278" width="144" height="18" rx="9" fill="#94A3B8"/>
+    <rect x="154" y="314" width="96" height="18" rx="9" fill="#CBD5E1"/>
+
+    <!-- 4. Foreground Signature Jewel: 3D Optical Glass Loupe -->
+    <g filter="url(#loupeShadow)">
+      <!-- Seamless Machined Handle (tucked cleanly behind bezel) -->
+      <path d="M376 376L416 416" stroke="url(#loupeHandle)" stroke-width="24" stroke-linecap="round"/>
+
+      <!-- Bezel & Deep Sapphire-Cyan Lens -->
+      <circle cx="338" cy="338" r="62" fill="url(#loupeRim)"/>
+      <circle cx="338" cy="338" r="50.5" fill="url(#loupeGlass)"/>
+
+      <!-- Optical Specular Glint Arc -->
+      <path d="M304 317a39 39 0 0 1 52-17" stroke="#BAE6FD" stroke-opacity="0.76" stroke-width="5.5" stroke-linecap="round"/>
+
+      <!-- Precision Corner Reticle + Crisp 4-Point Sparkle Star inside Lens -->
+      <path d="M315 327v-9.5h9.5M361 327v-9.5h-9.5M315 349v9.5h9.5M361 349v9.5h-9.5" stroke="#7DD3FC" stroke-opacity="0.88" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M338 318c2.2 10.6 9.2 17.6 20 20-10.8 2.4-17.8 9.4-20 20-2.2-10.6-9.2-17.6-20-20 10.8-2.4 17.8-9.4 20-20z" fill="#FFFFFF"/>
+    </g>
   </g>
 
-  <!-- Right tilted amber presentation/PDF card -->
-  <g transform="rotate(11 151 125)">
-    <rect x="107" y="55" width="104" height="134" rx="18" fill="url(#slideAmber)"/>
-    <rect x="153" y="79" width="40" height="28" rx="6" fill="#FFFFFF" fill-opacity="0.42"/>
-    <path d="M159 123h32M159 141h24" stroke="#FFFFFF" stroke-opacity="0.48" stroke-width="5" stroke-linecap="round"/>
-  </g>
-
-  <!-- Center hero white document sheet -->
-  <g filter="url(#cardShadow)">
-    <rect x="61" y="38" width="128" height="160" rx="20" fill="url(#docPaper)"/>
-  </g>
-
-  <!-- Crisp content blocks inside the hero document -->
-  <rect x="81" y="62" width="66" height="13" rx="6.5" fill="#1D4ED8"/>
-
-  <!-- Mini image/chart preview tile + side text lines -->
-  <rect x="81" y="88" width="42" height="42" rx="9" fill="#DBEAFE"/>
-  <circle cx="94" cy="101" r="4.5" fill="#2563EB"/>
-  <path d="M86 123l11-12 8 8 7-6 6 10H86z" fill="#3B82F6"/>
-
-  <rect x="133" y="92" width="36" height="10" rx="5" fill="#64748B"/>
-  <rect x="133" y="112" width="26" height="10" rx="5" fill="#94A3B8"/>
-
-  <!-- Document body lines -->
-  <rect x="81" y="144" width="76" height="10" rx="5" fill="#94A3B8"/>
-  <rect x="81" y="164" width="48" height="10" rx="5" fill="#CBD5E1"/>
-
-  <!-- Signature "View" Glass Eye Badge on bottom-right -->
-  <g filter="url(#badgeShadow)">
-    <circle cx="176" cy="175" r="38" fill="#FFFFFF"/>
-    <circle cx="176" cy="175" r="32.5" fill="url(#lensBg)"/>
-    <!-- Crisp Eye silhouette -->
-    <path d="M151.5 175c4.8-9.6 13.6-15 24.5-15s19.7 5.4 24.5 15c-4.8 9.6-13.6 15-24.5 15s-19.7-5.4-24.5-15z" fill="#FFFFFF"/>
-    <circle cx="176" cy="175" r="9.5" fill="#1D4ED8"/>
-    <circle cx="176" cy="175" r="4.5" fill="#38BDF8"/>
-    <circle cx="179.5" cy="171.5" r="2.3" fill="#FFFFFF"/>
-  </g>
+  <!-- Crisp Inner Rim Overlay -->
+  <rect x="21.5" y="21.5" width="469" height="469" rx="106.5" stroke="url(#rim)" stroke-width="3"/>
 </svg>

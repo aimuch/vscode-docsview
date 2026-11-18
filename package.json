@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -186,7 +186,10 @@
       {
         "command": "docsview.showSource",
         "title": "%command.showSource%",
-        "icon": "$(go-to-file)"
+        "icon": {
+          "light": "media/icons/source-light.svg",
+          "dark": "media/icons/source-dark.svg"
+        }
       },
       {
         "command": "docsview.showHistory",
