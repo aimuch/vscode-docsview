@@ -145,12 +145,12 @@ describe('Performance Optimizations (PERF-1, PERF-2, PERF-4)', () => {
     expect(countDocumentWords('你好世界 DocsView 2026')).toBe(6); // 4 CJK + 2 Latin/number tokens
   });
 
-  it('computeSelectionStats stops at populatedRowBound on sparse sheets', () => {
-    const spy = vi.fn((r: number, c: number) => (r < 3 ? String((r + 1) * 10 + c) : ''));
-    const stats = computeSelectionStats(spy, 0, 0, 99_999, 1, 50_000, 3);
+  it('computeSelectionStats stops at populatedRowBound and rowLengthAt on sparse sheets', () => {
+    const spy = vi.fn((r: number, c: number) => `${(r + 1) * 10 + c}`);
+    const stats = computeSelectionStats(spy, 0, 0, 99_999, 99, 200_000, 3, () => 2);
     expect(stats).toBeDefined();
     expect(stats?.count).toBe(6);
-    // Only 3 populated rows * 2 cols = 6 cell lookups instead of 50,000!
+    // Only 3 populated rows * 2 populated cols = 6 cell lookups instead of 10,000,000!
     expect(spy).toHaveBeenCalledTimes(6);
   });
 

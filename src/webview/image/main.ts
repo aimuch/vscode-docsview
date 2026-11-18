@@ -11,7 +11,7 @@ import { createAiAssistant } from '../shared/aiAssistant';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { getAppearance, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
-import { overlayStack } from '../shared/overlayStack';
+import { bindLiveViewerStatus, overlayStack } from '../shared/overlayStack';
 import { readState, Sidebar, writeState } from '../shared/sidebar';
 import {
   customToolbar,
@@ -1506,7 +1506,18 @@ function applyWorkspaceState() {
   syncBboxToolbarButtons();
 }
 
-workspaceMachine.onChange(() => applyWorkspaceState());
+let imgInitialRendered = false;
+workspaceMachine.onChange(() => {
+  applyWorkspaceState();
+  if (imgInitialRendered) {
+    post({ type: 'status', ok: true, mode: workspaceMachine.mode, overlays: overlayStack.getOpenIds() });
+  }
+});
+bindLiveViewerStatus(
+  (mode, overlays) => post({ type: 'status', ok: true, mode, overlays }),
+  () => workspaceMachine.mode,
+  () => imgInitialRendered,
+);
 
 function setToolMode(mode: ToolMode, seedCrop?: PixelRect) {
   pendingCropSeed = seedCrop;
@@ -2594,6 +2605,7 @@ async function loadImage(name: string, bytes: Uint8Array) {
       renderBoxes();
     }
     syncLoupeVisibility();
+    imgInitialRendered = true;
     post({
       type: 'status',
       ok: true,

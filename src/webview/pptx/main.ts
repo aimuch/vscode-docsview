@@ -16,7 +16,7 @@ import {
 } from '../shared/comments';
 import { getFileState } from '../shared/fileState';
 import { createFindWidget, PreviewFind } from '../shared/find';
-import { overlayStack } from '../shared/overlayStack';
+import { bindLiveViewerStatus, overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
 import {
   customToolbar,
@@ -322,6 +322,12 @@ function enterPresentation() {
   modeMachine.setMode('present');
   presentOverlay.hidden = false;
   renderPresentSlide();
+  overlayStack.push({
+    id: 'pptxPresentation',
+    isOpen: () => presenting,
+    close: exitPresentation,
+    restoreFocus: () => stage,
+  });
   try {
     void document.documentElement.requestFullscreen?.()?.catch(() => undefined);
   } catch {
@@ -334,6 +340,7 @@ function exitPresentation() {
     return;
   }
   presenting = false;
+  overlayStack.remove('pptxPresentation');
   if (modeMachine.mode === 'present') {
     modeMachine.setMode('read');
   }
@@ -533,6 +540,17 @@ const topBar = customToolbar({
   ],
 });
 
+let pptxInitialRendered = false;
+modeMachine.onChange(() => {
+  if (pptxInitialRendered) {
+    post({ type: 'status', ok: true, mode: modeMachine.mode, overlays: overlayStack.getOpenIds() });
+  }
+});
+bindLiveViewerStatus(
+  (mode, overlays) => post({ type: 'status', ok: true, mode, overlays }),
+  () => modeMachine.mode,
+  () => pptxInitialRendered,
+);
 openPptxDrawerFn = () => topBar.openDrawer();
 app.append(
   topBar.node,
@@ -868,6 +886,7 @@ async function load(bytes: Uint8Array) {
     syncCommentsUi();
     pptFind.refresh();
     findWidget.refreshCount();
+    pptxInitialRendered = true;
     post({
       type: 'status',
       ok: true,

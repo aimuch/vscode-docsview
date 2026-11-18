@@ -10,7 +10,7 @@ import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } fro
 import { closeFloatingEditors, CommentsPanel, openCommentComposer, openInlineTextEditor } from '../shared/comments';
 import { getFileState } from '../shared/fileState';
 import { createFindWidget, PreviewFind } from '../shared/find';
-import { overlayStack } from '../shared/overlayStack';
+import { bindLiveViewerStatus, overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
 import {
   customToolbar,
@@ -239,6 +239,18 @@ const topBar = customToolbar({
   ],
 });
 
+let docxInitialRendered = false;
+const emitDocxLiveStatus = () => {
+  if (docxInitialRendered) {
+    post({ type: 'status', ok: true, mode: modeMachine.mode, overlays: overlayStack.getOpenIds() });
+  }
+};
+modeMachine.onChange(emitDocxLiveStatus);
+bindLiveViewerStatus(
+  (mode, overlays) => post({ type: 'status', ok: true, mode, overlays }),
+  () => modeMachine.mode,
+  () => docxInitialRendered,
+);
 openDocxDrawerFn = () => topBar.openDrawer();
 app.append(
   topBar.node,
@@ -545,6 +557,7 @@ async function load(bytes: Uint8Array) {
     syncCommentsUi();
     docFind.refresh();
     findWidget.refreshCount();
+    docxInitialRendered = true;
     post({
       type: 'status',
       ok: true,

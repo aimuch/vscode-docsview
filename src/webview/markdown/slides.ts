@@ -1,6 +1,7 @@
 // Markdown Slide Deck Presentation Mode: splits rendered blocks by `<hr>` (`---`) or `<h1>`/`<h2>`
 // into an interactive fullscreen deck with keyboard navigation and a virtual laser pointer.
 import { el, t } from '../shared/api';
+import { overlayStack } from '../shared/overlayStack';
 import { iconButton, toggleButton } from '../shared/ui';
 
 export function splitArticleIntoSlides(article: HTMLElement): HTMLElement[][] {
@@ -195,6 +196,12 @@ export class MarkdownSlideDeck {
     this.active = true;
     this.overlay!.hidden = false;
     this.renderCurrent();
+    overlayStack.push({
+      id: 'markdownSlides',
+      isOpen: () => this.active,
+      close: () => this.close(),
+      restoreFocus: () => this.getScroller?.(),
+    });
   }
 
   close(): void {
@@ -202,6 +209,7 @@ export class MarkdownSlideDeck {
       return;
     }
     this.active = false;
+    overlayStack.remove('markdownSlides');
     if (this.overlay) {
       this.overlay.hidden = true;
     }

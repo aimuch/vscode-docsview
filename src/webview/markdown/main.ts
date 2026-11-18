@@ -9,7 +9,7 @@ import { app, el, errorText, isDark, onMessage, onThemeChange, post, t } from '.
 import { getAppearance, highlightToggle, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
 import { icons } from '../shared/icons';
-import { overlayStack } from '../shared/overlayStack';
+import { bindLiveViewerStatus, overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
 import { createFindWidget } from '../shared/find';
 import { customToolbar, iconButton, moreMenu, segmented, toggleButton } from '../shared/ui';
@@ -385,6 +385,12 @@ const topBar = customToolbar({
 });
 
 const statusLabel = el('span', { class: 'dv-label' });
+let mdInitialRendered = false;
+bindLiveViewerStatus(
+  (mode, overlays) => post({ type: 'status', ok: true, mode, overlays }),
+  () => (scroller.classList.contains('md-editing') ? 'edit' : 'read'),
+  () => mdInitialRendered,
+);
 openDrawerFn = () => topBar.openDrawer();
 const mdStatusBar = el('div', { class: 'dv-statusbar' }, [el('div', { class: 'dv-spacer' }), statusLabel]);
 
@@ -562,6 +568,7 @@ function render(html: string, toc: TocEntry[]) {
       const diagrams = article.querySelectorAll('.mermaid svg').length;
       const images = [...article.querySelectorAll('img')];
       const loaded = images.filter((img) => img.complete && img.naturalWidth > 0).length;
+      mdInitialRendered = true;
       post({
         type: 'status',
         ok: failed === 0,

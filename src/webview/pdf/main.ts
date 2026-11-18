@@ -24,7 +24,7 @@ import {
 import { getFileState } from '../shared/fileState';
 import { createFindBar } from '../shared/find';
 import { icons, type IconName } from '../shared/icons';
-import { overlayStack } from '../shared/overlayStack';
+import { bindLiveViewerStatus, overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
 import {
   customToolbar,
@@ -1002,6 +1002,16 @@ const topBar = customToolbar({
   ],
 });
 
+modeMachine.onChange(() => {
+  if (reported) {
+    post({ type: 'status', ok: true, mode: modeMachine.mode, overlays: overlayStack.getOpenIds() });
+  }
+});
+bindLiveViewerStatus(
+  (mode, overlays) => post({ type: 'status', ok: true, mode, overlays }),
+  () => modeMachine.mode,
+  () => reported,
+);
 openPdfDrawerFn = () => topBar.openDrawer();
 app.append(
   topBar.node,

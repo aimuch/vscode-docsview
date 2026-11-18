@@ -95,3 +95,19 @@ class WebviewOverlayStack {
 }
 
 export const overlayStack = new WebviewOverlayStack();
+
+/**
+ * Keeps the host's `docsview.getViewerState` snapshot synced in real time whenever transient
+ * overlays open or close (only after `isReady()` becomes true so initial load status comes first).
+ */
+export function bindLiveViewerStatus(
+  postStatus: (mode: string, overlays: string[]) => void,
+  getMode: () => string,
+  isReady: () => boolean,
+): () => void {
+  return overlayStack.onChange((overlays) => {
+    if (isReady()) {
+      postStatus(getMode(), overlays);
+    }
+  });
+}

@@ -1,6 +1,7 @@
 // Interactive fullscreen Mermaid Diagram Lightbox with pan, wheel zoom, SVG & 2x PNG export.
 import { el, post, t } from '../shared/api';
 import { icons } from '../shared/icons';
+import { overlayStack } from '../shared/overlayStack';
 import { iconButton } from '../shared/ui';
 
 let modal: HTMLElement | undefined;
@@ -150,14 +151,6 @@ function ensureModal(): HTMLElement {
     window.addEventListener('mouseup', up);
   });
 
-  window.addEventListener('keydown', (e) => {
-    if (modal && !modal.hidden && e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      closeMermaidLightbox();
-    }
-  });
-
   return modal;
 }
 
@@ -176,11 +169,17 @@ export function openMermaidLightbox(mermaidContainer: HTMLElement): void {
   panY = 0;
   applyTransform();
   m.hidden = false;
+  overlayStack.push({
+    id: 'mermaidLightbox',
+    isOpen: () => Boolean(modal && !modal.hidden),
+    close: closeMermaidLightbox,
+  });
 }
 
 export function closeMermaidLightbox(): void {
-  if (modal) {
+  if (modal && !modal.hidden) {
     modal.hidden = true;
+    overlayStack.remove('mermaidLightbox');
   }
 }
 

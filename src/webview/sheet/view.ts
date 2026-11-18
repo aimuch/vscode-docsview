@@ -256,8 +256,9 @@ export function computeSelectionStats(
   c0: number,
   r1: number,
   c1: number,
-  maxCells = 50_000,
+  maxCells = 200_000,
   populatedRowBound?: number,
+  rowLengthAt?: (r: number) => number,
 ): SelectionStats | undefined {
   const totalSelected = (r1 - r0 + 1) * (c1 - c0 + 1);
   if (totalSelected < 2) {
@@ -274,7 +275,8 @@ export function computeSelectionStats(
   let max = -Infinity;
   let visited = 0;
   outer: for (let r = r0; r <= effectiveR1; r++) {
-    for (let c = c0; c <= c1; c++) {
+    const rowEndC = rowLengthAt ? Math.min(c1, rowLengthAt(r) - 1) : c1;
+    for (let c = c0; c <= rowEndC; c++) {
       if (++visited > maxCells) {
         break outer;
       }

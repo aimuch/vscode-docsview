@@ -9,7 +9,7 @@ import { getAppearance, highlightToggle, lockToggle, onAppearanceChange, updateA
 import { getFileState } from '../shared/fileState';
 import { createFindBar } from '../shared/find';
 import { icons } from '../shared/icons';
-import { overlayStack } from '../shared/overlayStack';
+import { bindLiveViewerStatus, overlayStack } from '../shared/overlayStack';
 import { readState, writeState } from '../shared/sidebar';
 import {
   customToolbar,
@@ -422,10 +422,18 @@ function setReplaceBarOpen(on: boolean) {
   replaceToggle.set(allowed);
   if (allowed) {
     sheetFindBar.open();
+    overlayStack.push({
+      id: 'sheetReplaceBar',
+      isOpen: () => !replaceBar.hidden,
+      close: () => setReplaceBarOpen(false),
+      restoreFocus: () => gridHost,
+    });
     if (sheetFindBar.input.value.trim()) {
       replaceInput.focus();
       replaceInput.select();
     }
+  } else {
+    overlayStack.remove('sheetReplaceBar');
   }
 }
 
@@ -508,6 +516,7 @@ function closeColumnMenu() {
   if (!columnMenu.hidden) {
     columnMenu.hidden = true;
     document.removeEventListener('mousedown', onColumnMenuOutside);
+    overlayStack.remove('sheetColumnMenu');
   }
 }
 
@@ -784,6 +793,12 @@ function openColumnMenu(col: number, anchor: DOMRect) {
     columnMenu.hidden = false;
     document.addEventListener('mousedown', onColumnMenuOutside);
   }
+  overlayStack.push({
+    id: 'sheetColumnMenu',
+    isOpen: () => !columnMenu.hidden,
+    close: closeColumnMenu,
+    restoreFocus: () => gridHost,
+  });
   const left = Math.min(anchor.left, window.innerWidth - columnMenu.offsetWidth - 8);
   const top = Math.min(anchor.bottom + 4, Math.max(8, window.innerHeight - columnMenu.offsetHeight - 8));
   columnMenu.style.left = `${Math.max(8, left)}px`;
@@ -1174,6 +1189,11 @@ const topBar = customToolbar({
 
 const sheetMain = el('div', { class: 'sheet-workspace' }, [gridHost, jsonlInspector.node]);
 openSheetDrawerFn = () => topBar.openDrawer();
+bindLiveViewerStatus(
+  (mode, overlays) => post({ type: 'status', ok: true, mode, overlays }),
+  () => (canEdit() ? 'edit' : 'read'),
+  () => models.has(active),
+);
 app.append(topBar.node, replaceBar, notice.node, sheetMain, statusBar);
 showStatus(gridHost, t('loading'));
 
@@ -1420,7 +1440,11 @@ function updateSelectionStats(sel: Selection) {
     return srcR >= 0 ? model.rows[srcR]?.[c] : undefined;
   };
   const populatedRows = rowMap ? rowMap.length : model.rows.length;
-  const stats = computeSelectionStats(cellAt, sel.r0, sel.c0, sel.r1, sel.c1, 50_000, populatedRows);
+  const rowLengthAt = (r: number) => {
+    const srcR = toSource(r);
+    return srcR >= 0 ? (model.rows[srcR]?.length ?? 0) : 0;
+  };
+  const stats = computeSelectionStats(cellAt, sel.r0, sel.c0, sel.r1, sel.c1, 200_000, populatedRows, rowLengthAt);
   if (!stats) {
     selectionStatsEl.hidden = true;
     selectionStatsEl.replaceChildren();
@@ -1506,6 +1530,7 @@ function closeCtxPopup() {
   if (!ctxPopup.hidden) {
     ctxPopup.hidden = true;
     document.removeEventListener('mousedown', onCtxOutside);
+    overlayStack.remove('sheetContextMenu');
   }
 }
 
@@ -1533,6 +1558,12 @@ function showCtxPopup(x: number, y: number, rows: (HTMLElement | '-')[]) {
   );
   ctxPopup.hidden = false;
   document.addEventListener('mousedown', onCtxOutside);
+  overlayStack.push({
+    id: 'sheetContextMenu',
+    isOpen: () => !ctxPopup.hidden,
+    close: closeCtxPopup,
+    restoreFocus: () => gridHost,
+  });
   const left = Math.max(8, Math.min(x, window.innerWidth - ctxPopup.offsetWidth - 8));
   const top = Math.max(8, Math.min(y, window.innerHeight - ctxPopup.offsetHeight - 8));
   ctxPopup.style.left = `${left}px`;
