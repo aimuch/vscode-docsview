@@ -28,6 +28,10 @@ const WORKSHEET_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/200
 const WORKSHEET_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml';
 const PRECOMPRESSED_MEDIA = /\.(?:png|jpe?g|gif|webp|avif|mp4|m4v|mov|mp3|wav|ogg|zip|gz)$/i;
 
+function createXmlParser(): DOMParser {
+  return new DOMParser({ locator: false, onError: () => undefined });
+}
+
 function serializeXml(doc: XDocument): string {
   const out = new XMLSerializer().serializeToString(doc);
   return out.startsWith('<?xml') ? out : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${out}`;
@@ -72,34 +76,56 @@ function elements(parent: XElement, localName: string): XElement[] {
 }
 
 function resolveTarget(target: string): string {
-  if (target.startsWith('/')) {
-    return target.slice(1);
+  const clean = target.trim().replace(/\\/g, '/');
+  if (clean.startsWith('/')) {
+    return clean.replace(/^\/+/, '');
   }
   const parts = ['xl'];
-  for (const part of target.split('/')) {
+  for (const part of clean.split('/')) {
     if (part === '..') {
       parts.pop();
-    } else if (part !== '.') {
+    } else if (part && part !== '.') {
       parts.push(part);
     }
   }
   return parts.join('/');
 }
 
+function findArchiveEntry(files: Record<string, Uint8Array>, candidate: string): string | undefined {
+  if (files[candidate]) {
+    return candidate;
+  }
+  if (candidate.startsWith('xl/xl/') && files[candidate.slice(3)]) {
+    return candidate.slice(3);
+  }
+  const lower = candidate.toLowerCase();
+  const trimmedLower = candidate.startsWith('xl/xl/') ? lower.slice(3) : undefined;
+  for (const key of Object.keys(files)) {
+    const norm = key.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+    if (norm === lower || (trimmedLower && norm === trimmedLower)) {
+      return key;
+    }
+  }
+  return undefined;
+}
+
 /** Maps sheet name -> zip path of its XML. */
 export function sheetPaths(files: Record<string, Uint8Array>): Map<string, string> {
-  const workbook = files['xl/workbook.xml'];
-  const rels = files['xl/_rels/workbook.xml.rels'];
+  const wbKey = findArchiveEntry(files, 'xl/workbook.xml');
+  const relsKey = findArchiveEntry(files, 'xl/_rels/workbook.xml.rels');
+  const workbook = wbKey ? files[wbKey] : undefined;
+  const rels = relsKey ? files[relsKey] : undefined;
   if (!workbook || !rels) {
     throw new Error('Not a valid xlsx file (workbook part missing).');
   }
-  const parser = new DOMParser();
+  const parser = createXmlParser();
   const relDoc = parser.parseFromString(strFromU8(rels), XML);
   const targets = new Map<string, string>();
   const relNodes = relDoc.getElementsByTagName('Relationship');
   for (let i = 0; i < relNodes.length; i++) {
     const rel = relNodes.item(i)!;
-    targets.set(rel.getAttribute('Id') ?? '', resolveTarget(rel.getAttribute('Target') ?? ''));
+    const resolved = resolveTarget(rel.getAttribute('Target') ?? '');
+    targets.set(rel.getAttribute('Id') ?? '', findArchiveEntry(files, resolved) ?? resolved);
   }
   const wbDoc = parser.parseFromString(strFromU8(workbook), XML);
   const result = new Map<string, string>();
@@ -171,7 +197,7 @@ function materializeSharedFormulas(doc: XDocument, sheetData: XElement): void {
 }
 
 function patchSheetXml(xml: string, edits: CellEdit[]): string {
-  const doc: XDocument = new DOMParser().parseFromString(xml, XML);
+  const doc: XDocument = createXmlParser().parseFromString(xml, XML);
   const root = doc.documentElement;
   if (!root) {
     throw new Error('Worksheet XML is empty.');
@@ -338,7 +364,7 @@ function patchStructureInSheetXml(
   at: number,
   count: number,
 ): string {
-  const doc: XDocument = new DOMParser().parseFromString(xml, XML);
+  const doc: XDocument = createXmlParser().parseFromString(xml, XML);
   const root = doc.documentElement;
   if (!root) {
     return xml;
@@ -475,7 +501,7 @@ function patchStructureInSheetXml(
 }
 
 function rewriteFormulasInSheetXml(xml: string, transform: (formula: string) => string): string | undefined {
-  const doc: XDocument = new DOMParser().parseFromString(xml, XML);
+  const doc: XDocument = createXmlParser().parseFromString(xml, XML);
   const root = doc.documentElement;
   if (!root) {
     return undefined;
@@ -507,7 +533,7 @@ function rewriteFormulasInSheetXml(xml: string, transform: (formula: string) => 
 // ---------------------------------------------------------------- sheet CRUD XML patching
 
 function applyAddSheet(files: Record<string, Uint8Array>, name: string): void {
-  const parser = new DOMParser();
+  const parser = createXmlParser();
   let n = 1;
   while (files[`xl/worksheets/sheet${n}.xml`]) {
     n++;
@@ -580,7 +606,7 @@ function applyAddSheet(files: Record<string, Uint8Array>, name: string): void {
 }
 
 function applyRenameSheet(files: Record<string, Uint8Array>, oldName: string, newName: string): void {
-  const parser = new DOMParser();
+  const parser = createXmlParser();
   const wbDoc = parser.parseFromString(strFromU8(files['xl/workbook.xml']), XML);
   const wbRoot = wbDoc.documentElement!;
   const sheetsWrap = elements(wbRoot, 'sheets')[0];
@@ -620,7 +646,7 @@ function applyRenameSheet(files: Record<string, Uint8Array>, oldName: string, ne
 }
 
 function applyDeleteSheet(files: Record<string, Uint8Array>, name: string): void {
-  const parser = new DOMParser();
+  const parser = createXmlParser();
   const wbDoc = parser.parseFromString(strFromU8(files['xl/workbook.xml']), XML);
   const wbRoot = wbDoc.documentElement!;
   const sheetsWrap = elements(wbRoot, 'sheets')[0];
@@ -692,7 +718,7 @@ function applyDeleteSheet(files: Record<string, Uint8Array>, name: string): void
 
 /** Makes Excel recompute everything on open, since cached formula results may now be stale. */
 function forceRecalculation(files: Record<string, Uint8Array>): void {
-  const parser = new DOMParser();
+  const parser = createXmlParser();
 
   // Remove calcChain.xml if present (or referenced), using DOM manipulation rather than regex.
   const hasCalcChain = Object.keys(files).find((k) => k.toLowerCase() === 'xl/calcchain.xml');

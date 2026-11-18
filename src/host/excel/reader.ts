@@ -1,9 +1,12 @@
 // Workbook bytes -> SheetModel. exceljs for xlsx/xlsm (keeps styles), SheetJS for the
-// legacy/other formats (values only). Pure module.
+// legacy/other formats or as a resilient fallback. Pure module.
+import { DOMParser, XMLSerializer, type Element as XElement } from '@xmldom/xmldom';
 import ExcelJS from 'exceljs';
+import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import * as XLSX from 'xlsx';
 import type { Cell, CellObject, CellStyle, MergeRange, SheetModel } from '../../common/protocol';
 import { colToIndex, expandSharedFormula } from './formula';
+import { sheetPaths } from './xlsxPatcher';
 
 export interface LoadedSheet {
   name: string;
@@ -514,10 +517,309 @@ function lazySheet(
   };
 }
 
+const WORKSHEET_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet';
+const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+/**
+ * Parts ExcelJS never needs for cell values/styles/merges/panes, and which frequently crash
+ * ExcelJS's non-namespace-aware Xforms (e.g. `<wsDr>` without `xdr:` -> `undefined.anchors`,
+ * VML comments, charts, tables, pivot caches, embedded media).
+ */
+const SKIPPED_OOXML_PARTS =
+  /^(?:docprops\/|customxml\/|xl\/(?:drawings|media|charts|chartsheets|dialogsheets|macrosheets|tables|pivottables|pivotcache|threadedcomments|persons|printersettings|embeddings|activex|ctrlprops|customxml)\/|xl\/(?:comments|vml|calcchain)[^/]*$)/i;
+
+const EXCELJS_IGNORE_NODES = [
+  'drawing',
+  'legacyDrawing',
+  'legacyDrawingHF',
+  'picture',
+  'tableParts',
+  'dataValidations',
+  'conditionalFormatting',
+  'extLst',
+  'autoFilter',
+  'pageMargins',
+  'pageSetup',
+  'printOptions',
+  'headerFooter',
+  'rowBreaks',
+  'colBreaks',
+  'sheetProtection',
+];
+
+const SHEET_DATA_BYTES = [115, 104, 101, 101, 116, 68, 97, 116, 97]; // "sheetData"
+
+function isZipArchive(bytes: Uint8Array): boolean {
+  return (
+    bytes.byteLength >= 4 &&
+    bytes[0] === 0x50 &&
+    bytes[1] === 0x4b &&
+    (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07)
+  );
+}
+
+function createSilentXmlParser(): DOMParser {
+  return new DOMParser({ locator: false, onError: () => undefined });
+}
+
+function childElements(parent: XElement): XElement[] {
+  const out: XElement[] = [];
+  for (let n = parent.firstChild; n; n = n.nextSibling) {
+    if (n.nodeType === 1) {
+      out.push(n as XElement);
+    }
+  }
+  return out;
+}
+
+function resolveXlTarget(target: string): string {
+  const clean = target.trim().replace(/\\/g, '/');
+  if (clean.startsWith('/')) {
+    return clean.replace(/^\/+/, '');
+  }
+  const parts = ['xl'];
+  for (const seg of clean.split('/')) {
+    if (seg === '..') {
+      parts.pop();
+    } else if (seg && seg !== '.') {
+      parts.push(seg);
+    }
+  }
+  return parts.join('/');
+}
+
+/**
+ * Strips dangling `r:id` attributes from `<hyperlink>` tags in the tail of a worksheet XML
+ * (after `sheetData`) without decoding `<sheetData>` itself.
+ */
+function sanitizeWorksheetBytes(sheetBytes: Uint8Array, validHyperlinkIds: Set<string>): Uint8Array {
+  let tailStart = 0;
+  outer: for (let i = sheetBytes.byteLength - SHEET_DATA_BYTES.length; i >= 0; i--) {
+    for (let j = 0; j < SHEET_DATA_BYTES.length; j++) {
+      if (sheetBytes[i + j] !== SHEET_DATA_BYTES[j]) {
+        continue outer;
+      }
+    }
+    tailStart = i + SHEET_DATA_BYTES.length;
+    while (tailStart < sheetBytes.byteLength && sheetBytes[tailStart] !== 0x3e) {
+      tailStart++;
+    }
+    if (tailStart < sheetBytes.byteLength) {
+      tailStart++;
+    }
+    break;
+  }
+
+  const tail = strFromU8(sheetBytes.subarray(tailStart));
+  if (!tail.includes('hyperlink')) {
+    return sheetBytes;
+  }
+  const cleanedTail = tail.replace(/<([a-zA-Z0-9_]+:)?hyperlink\b([^>]*)>/g, (full, prefix = '', attrs: string) => {
+    const nextAttrs = attrs.replace(/\s+r:id=(?:"([^"]*)"|'([^']*)')/g, (attrFull, dId, sId) => {
+      const id = dId ?? sId ?? '';
+      return validHyperlinkIds.has(id) ? attrFull : '';
+    });
+    return nextAttrs === attrs ? full : `<${prefix}hyperlink${nextAttrs}>`;
+  });
+  if (cleanedTail === tail) {
+    return sheetBytes;
+  }
+  const tailBytes = strToU8(cleanedTail);
+  const merged = new Uint8Array(tailStart + tailBytes.byteLength);
+  merged.set(sheetBytes.subarray(0, tailStart), 0);
+  merged.set(tailBytes, tailStart);
+  return merged;
+}
+
+/**
+ * Builds a lean, sanitized in-memory `.xlsx` archive strictly for `ExcelJS.Workbook.xlsx.load`.
+ * Original `bytes` in `ExcelSession` remain completely untouched so saving preserves all drawings,
+ * charts, comments, tables, and media byte-for-byte.
+ */
+function prepareBufferForExcelJs(bytes: Uint8Array): ArrayBuffer {
+  const unzipped = unzipSync(bytes, {
+    filter: (file) => {
+      const norm = file.name.replace(/\\/g, '/').replace(/^\/+/, '');
+      return Boolean(norm) && !norm.endsWith('/') && !SKIPPED_OOXML_PARTS.test(norm);
+    },
+  });
+
+  const raw: Record<string, Uint8Array> = {};
+  const byLower = new Map<string, string>();
+  for (const [k, v] of Object.entries(unzipped)) {
+    const norm = k.replace(/\\/g, '/').replace(/^\/+/, '');
+    raw[norm] = v;
+    byLower.set(norm.toLowerCase(), norm);
+  }
+
+  const findKey = (candidate: string): string | undefined => {
+    if (raw[candidate]) {
+      return candidate;
+    }
+    if (candidate.startsWith('xl/xl/') && raw[candidate.slice(3)]) {
+      return candidate.slice(3);
+    }
+    const lower = candidate.toLowerCase();
+    return byLower.get(lower) ?? (lower.startsWith('xl/xl/') ? byLower.get(lower.slice(3)) : undefined);
+  };
+
+  const wbKey = findKey('xl/workbook.xml');
+  const wbRelsKey = findKey('xl/_rels/workbook.xml.rels');
+  if (!wbKey || !wbRelsKey) {
+    throw new Error('Missing workbook OOXML parts.');
+  }
+
+  const parser = createSilentXmlParser();
+  const serializer = new XMLSerializer();
+  const out: Zippable = {};
+
+  const rootRelsKey = findKey('_rels/.rels');
+  if (rootRelsKey) {
+    out['_rels/.rels'] = [raw[rootRelsKey], { level: 0 }];
+  }
+  const sharedStringsKey = findKey('xl/sharedStrings.xml');
+  if (sharedStringsKey) {
+    out['xl/sharedStrings.xml'] = [raw[sharedStringsKey], { level: 0 }];
+  }
+  const stylesKey = findKey('xl/styles.xml');
+  if (stylesKey) {
+    out['xl/styles.xml'] = [raw[stylesKey], { level: 0 }];
+  }
+
+  const wbRelsDoc = parser.parseFromString(strFromU8(raw[wbRelsKey]), 'text/xml');
+  const wbRelsRoot = wbRelsDoc.documentElement;
+  if (!wbRelsRoot) {
+    throw new Error('Malformed workbook.xml.rels.');
+  }
+
+  let sheetIdx = 0;
+  let themeCopied = false;
+  for (const rel of childElements(wbRelsRoot)) {
+    if (rel.localName !== 'Relationship') {
+      continue;
+    }
+    const type = (rel.getAttribute('Type') ?? '').toLowerCase();
+    const target = rel.getAttribute('Target') ?? '';
+    if (type.endsWith('/worksheet')) {
+      const sheetKey = findKey(resolveXlTarget(target));
+      if (!sheetKey) {
+        wbRelsRoot.removeChild(rel);
+        continue;
+      }
+      sheetIdx++;
+      rel.setAttribute('Type', WORKSHEET_REL_TYPE);
+      rel.setAttribute('Target', `worksheets/sheet${sheetIdx}.xml`);
+
+      const slash = sheetKey.lastIndexOf('/');
+      const sheetRelsCandidate =
+        slash >= 0 ? `${sheetKey.slice(0, slash)}/_rels/${sheetKey.slice(slash + 1)}.rels` : `_rels/${sheetKey}.rels`;
+      const sheetRelsKey = findKey(sheetRelsCandidate);
+      const validHyperlinkIds = new Set<string>();
+
+      if (sheetRelsKey) {
+        const sRelsDoc = parser.parseFromString(strFromU8(raw[sheetRelsKey]), 'text/xml');
+        const sRelsRoot = sRelsDoc.documentElement;
+        if (sRelsRoot) {
+          for (const sRel of childElements(sRelsRoot)) {
+            if (sRel.localName !== 'Relationship') {
+              continue;
+            }
+            const sType = (sRel.getAttribute('Type') ?? '').toLowerCase();
+            const sId = sRel.getAttribute('Id') ?? '';
+            const sTarget = sRel.getAttribute('Target') ?? '';
+            if (sType.endsWith('/hyperlink') && sId && sTarget) {
+              validHyperlinkIds.add(sId);
+            } else {
+              sRelsRoot.removeChild(sRel);
+            }
+          }
+          if (validHyperlinkIds.size > 0) {
+            out[`xl/worksheets/_rels/sheet${sheetIdx}.xml.rels`] = [
+              strToU8(serializer.serializeToString(sRelsDoc)),
+              { level: 0 },
+            ];
+          }
+        }
+      }
+
+      out[`xl/worksheets/sheet${sheetIdx}.xml`] = [
+        sanitizeWorksheetBytes(raw[sheetKey], validHyperlinkIds),
+        { level: 0 },
+      ];
+    } else if (type.endsWith('/sharedstrings') && sharedStringsKey) {
+      rel.setAttribute('Target', 'sharedStrings.xml');
+    } else if (type.endsWith('/styles') && stylesKey) {
+      rel.setAttribute('Target', 'styles.xml');
+    } else if (type.endsWith('/theme')) {
+      const themeKey = findKey(resolveXlTarget(target));
+      if (themeKey) {
+        out['xl/theme/theme1.xml'] = [raw[themeKey], { level: 0 }];
+        rel.setAttribute('Target', 'theme/theme1.xml');
+        themeCopied = true;
+      } else {
+        wbRelsRoot.removeChild(rel);
+      }
+    } else {
+      wbRelsRoot.removeChild(rel);
+    }
+  }
+
+  if (!themeCopied) {
+    const fallbackTheme = findKey('xl/theme/theme1.xml');
+    if (fallbackTheme) {
+      out['xl/theme/theme1.xml'] = [raw[fallbackTheme], { level: 0 }];
+    }
+  }
+
+  out['xl/_rels/workbook.xml.rels'] = [strToU8(serializer.serializeToString(wbRelsDoc)), { level: 0 }];
+
+  const wbDoc = parser.parseFromString(strFromU8(raw[wbKey]), 'text/xml');
+  const wbRoot = wbDoc.documentElement;
+  if (wbRoot) {
+    for (const child of childElements(wbRoot)) {
+      if (child.localName === 'definedNames') {
+        wbRoot.removeChild(child);
+      } else if (child.localName === 'sheets') {
+        for (const s of childElements(child)) {
+          if (s.localName === 'sheet' && !s.getAttribute('r:id')) {
+            const nsId = s.getAttributeNS(REL_NS, 'id');
+            if (nsId) {
+              s.setAttribute('r:id', nsId);
+            }
+          }
+        }
+      }
+    }
+    out['xl/workbook.xml'] = [strToU8(serializer.serializeToString(wbDoc)), { level: 0 }];
+  } else {
+    out['xl/workbook.xml'] = [raw[wbKey], { level: 0 }];
+  }
+
+  const packed = zipSync(out, { level: 0 });
+  return packed.buffer.slice(packed.byteOffset, packed.byteOffset + packed.byteLength) as ArrayBuffer;
+}
+
+function canPatchOoxml(bytes: Uint8Array): boolean {
+  if (!isZipArchive(bytes)) {
+    return false;
+  }
+  try {
+    const meta = unzipSync(bytes, {
+      filter: (f) => {
+        const norm = f.name.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+        return norm === 'xl/workbook.xml' || norm === 'xl/_rels/workbook.xml.rels';
+      },
+    });
+    return sheetPaths(meta).size > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function loadWithExcelJs(bytes: Uint8Array): Promise<LoadedWorkbook> {
   const workbook = new ExcelJS.Workbook();
-  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  await workbook.xlsx.load(buffer);
+  const buffer = prepareBufferForExcelJs(bytes);
+  await workbook.xlsx.load(buffer, { ignoreNodes: EXCELJS_IGNORE_NODES } as never);
   const date1904 = Boolean((workbook.properties as { date1904?: boolean } | undefined)?.date1904);
   const sheets = workbook.worksheets.map((ws) => {
     let ref: ExcelJS.Worksheet | undefined = ws;
@@ -532,10 +834,12 @@ async function loadWithExcelJs(bytes: Uint8Array): Promise<LoadedWorkbook> {
 
 // ---------------------------------------------------------------- SheetJS
 
-function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet): BuiltSheetData {
+function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet, editable: boolean): BuiltSheetData {
   const data = ((ws as unknown as Record<string, unknown>)['!data'] ?? []) as (XLSX.CellObject | undefined)[][];
   let usedCols = 0;
   const rows: Cell[][] = [];
+  const numFmts = new Map<string, string>();
+  const scalars = new Map<string, number | string | boolean>();
   for (let r = 0; r < data.length; r++) {
     const src = data[r] ?? [];
     const out: Cell[] = [];
@@ -547,6 +851,17 @@ function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet): BuiltSheetData {
       }
       const text = cell.w ?? (cell.v === undefined ? '' : String(cell.v));
       const numeric = cell.t === 'n' || cell.t === 'd';
+      const key = `${r},${c}`;
+      if (typeof cell.v === 'number' && Number.isFinite(cell.v)) {
+        scalars.set(key, cell.v);
+      } else if (cell.v instanceof Date) {
+        scalars.set(key, dateToSerial(cell.v));
+      } else if (typeof cell.v === 'boolean' || typeof cell.v === 'string') {
+        scalars.set(key, cell.v);
+      }
+      if (typeof cell.z === 'string' && cell.z && cell.z !== 'General') {
+        numFmts.set(key, cell.z);
+      }
       out.push(cell.f || numeric ? { v: text, raw: cell.f ? `=${cell.f}` : undefined, n: numeric || undefined } : text);
     }
     usedCols = Math.max(usedCols, out.length);
@@ -558,11 +873,16 @@ function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet): BuiltSheetData {
     rs: m.e.r - m.s.r + 1,
     cs: m.e.c - m.s.c + 1,
   }));
+  for (const m of merges) {
+    usedCols = Math.max(usedCols, m.c + m.cs);
+  }
   const cols = ws['!cols'];
+  const colCount = editable ? Math.max(usedCols + EXTRA_COLS, 10) : Math.max(usedCols, 1);
+  const rowCount = editable ? Math.max(rows.length + EXTRA_ROWS, 40) : Math.max(rows.length, 1);
   const model: SheetModel = {
     name,
-    rowCount: Math.max(rows.length, 1),
-    colCount: Math.max(usedCols, 1),
+    rowCount,
+    colCount,
     rows,
   };
   if (merges.length) {
@@ -571,23 +891,35 @@ function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet): BuiltSheetData {
   if (cols?.some((col) => col?.wpx)) {
     model.colWidths = Array.from({ length: model.colCount }, (_, c) => cols[c]?.wpx ?? null);
   }
-  return { model, numFmts: new Map(), scalars: new Map() };
+  return { model, numFmts, scalars };
 }
 
-function loadWithSheetJs(bytes: Uint8Array): LoadedWorkbook {
-  const workbook = XLSX.read(bytes, { type: 'array', dense: true, cellText: true, cellFormula: true });
+function loadWithSheetJs(bytes: Uint8Array, editable = false): LoadedWorkbook {
+  const workbook = XLSX.read(bytes, { type: 'array', dense: true, cellText: true, cellFormula: true, cellNF: true });
   const date1904 = Boolean(workbook.Workbook?.WBProps?.date1904);
   const sheets = workbook.SheetNames.map((name) => {
     let ref: XLSX.WorkSheet | undefined = workbook.Sheets[name];
     return lazySheet(name, date1904, () => {
-      const out = buildSheetJsSheet(name, ref!);
+      const out = buildSheetJsSheet(name, ref!, editable);
       ref = undefined;
       return out;
     });
   });
-  return { sheets, editable: false };
+  return { sheets, editable };
 }
 
 export async function loadWorkbook(bytes: Uint8Array, fileName: string): Promise<LoadedWorkbook> {
-  return /\.(xlsx|xlsm)$/i.test(fileName) ? loadWithExcelJs(bytes) : loadWithSheetJs(bytes);
+  if (/\.(xlsx|xlsm)$/i.test(fileName) && isZipArchive(bytes)) {
+    try {
+      const loaded = await loadWithExcelJs(bytes);
+      if (loaded.sheets.length > 0) {
+        return loaded;
+      }
+      const fallback = loadWithSheetJs(bytes, canPatchOoxml(bytes));
+      return fallback.sheets.length > 0 ? fallback : loaded;
+    } catch {
+      return loadWithSheetJs(bytes, canPatchOoxml(bytes));
+    }
+  }
+  return loadWithSheetJs(bytes, false);
 }

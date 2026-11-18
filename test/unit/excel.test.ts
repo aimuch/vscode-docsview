@@ -197,6 +197,155 @@ describe('loadWorkbook', () => {
     const total = model.rows[1][2] as CellObject;
     expect(total).toMatchObject({ v: '10', raw: '=B2*2.5', n: true });
   });
+
+  it('opens workbooks whose unprefixed <wsDr> drawings crash ExcelJS ("reading \'anchors\'") and preserves drawings on save', async () => {
+    const files = unzipSync(await makeWorkbook());
+    const drawingXml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<wsDr xmlns="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<twoCellAnchor><from><col>0</col><colOff>0</colOff><row>0</row><rowOff>0</rowOff></from>' +
+      '<to><col>2</col><colOff>0</colOff><row>3</row><rowOff>0</rowOff></to><clientData/></twoCellAnchor></wsDr>';
+    files['xl/drawings/drawing1.xml'] = strToU8(drawingXml);
+    files['xl/drawings/_rels/drawing1.xml.rels'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>' +
+        '</Relationships>',
+    );
+    files['xl/worksheets/_rels/sheet1.xml.rels'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rIdDraw1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>' +
+        '</Relationships>',
+    );
+    files['xl/worksheets/sheet1.xml'] = strToU8(
+      strFromU8(files['xl/worksheets/sheet1.xml']).replace(
+        '</worksheet>',
+        '<drawing r:id="rIdDraw1"/></worksheet>',
+      ),
+    );
+    const wpsBytes = zipSync(files);
+
+    // Sanity check: raw ExcelJS crashes with the exact user-reported anchors TypeError.
+    await expect(read(wpsBytes)).rejects.toThrow(/anchors/);
+
+    const session = await ExcelSession.open(wpsBytes, 'wps-book.xlsx');
+    expect(session.editable).toBe(true);
+    const model = session.sheet(0)!;
+    const header = model.rows[0][0] as CellObject;
+    expect(header.v).toBe('Item');
+    expect(model.styles?.[header.s!]).toMatchObject({ bold: true, color: '#FF0000' });
+
+    session.edit(0, [{ r: 1, c: 1, text: '16' }]);
+    expect(model.rows[1][2]).toMatchObject({ v: '40', raw: '=B2*2.5', n: true });
+
+    const saved = unzipSync(session.export());
+    expect(strFromU8(saved['xl/drawings/drawing1.xml'])).toBe(drawingXml);
+    expect(strFromU8(saved['xl/worksheets/sheet1.xml'])).toContain('<drawing r:id="rIdDraw1"/>');
+  });
+
+  it('survives VML/comments rels, missing tables, broken Print_Area names, dangling hyperlinks and custom sheet paths', async () => {
+    const files = unzipSync(await makeWorkbook());
+    // Rename sheet1.xml to a non-standard filename & casing + SharedStrings casing
+    files['xl/worksheets/Sales_Report.xml'] = strToU8(
+      strFromU8(files['xl/worksheets/sheet1.xml']).replace(
+        '</mergeCells>',
+        '</mergeCells><hyperlinks>' +
+          '<hyperlink ref="A1" r:id="rIdValid"/>' +
+          '<hyperlink ref="A2" r:id="rIdDangling"/>' +
+          '</hyperlinks>' +
+          '<legacyDrawing r:id="rIdVml"/>' +
+          '<tableParts count="1"><tablePart r:id="rIdTbl"/></tableParts>',
+      ),
+    );
+    delete files['xl/worksheets/sheet1.xml'];
+    files['xl/worksheets/_rels/Sales_Report.xml.rels'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rIdValid" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="External"/>' +
+        '<Relationship Id="rIdCom" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="/xl/comments1.xml"/>' +
+        '<Relationship Id="rIdVml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" Target="/xl/drawings/vmlDrawing1.vml"/>' +
+        '<Relationship Id="rIdTbl" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>' +
+        '</Relationships>',
+    );
+    files['xl/drawings/vmlDrawing1.vml'] = strToU8('<v:group xmlns:v="urn:schemas-microsoft-com:vml"/>');
+    files['xl/_rels/workbook.xml.rels'] = strToU8(
+      strFromU8(files['xl/_rels/workbook.xml.rels']).replace('worksheets/sheet1.xml', 'worksheets/Sales_Report.xml'),
+    );
+    files['xl/workbook.xml'] = strToU8(
+      strFromU8(files['xl/workbook.xml']).replace(
+        '</sheets>',
+        '</sheets><definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">#REF!</definedName></definedNames>',
+      ),
+    );
+
+    const quirkyBytes = zipSync(files);
+    const session = await ExcelSession.open(quirkyBytes, 'quirky.xlsx');
+    expect(session.editable).toBe(true);
+    expect(session.info.sheets.map((s) => s.name)).toEqual(['Data', 'Other']);
+
+    const model = session.sheet(0)!;
+    const header = model.rows[0][0] as CellObject;
+    expect(header.v).toBe('Item');
+    expect(model.styles?.[header.s!]).toMatchObject({ bold: true, color: '#FF0000' });
+
+    // Edit & export patches the custom worksheet path cleanly
+    session.edit(0, [{ r: 1, c: 0, text: 'Updated Widget' }]);
+    const saved = unzipSync(session.export());
+    expect(strFromU8(saved['xl/worksheets/Sales_Report.xml'])).toContain('Updated Widget');
+  });
+
+  it('falls back cleanly for prefixed <x:worksheet> OOXML and misnamed non-ZIP .xlsx files', async () => {
+    // 1. Prefixed <x:workbook> + <x:worksheet> (ClosedXML / POI style) remains editable via SheetJS + DOM patcher
+    const prefixedFiles: Record<string, Uint8Array> = {
+      '[Content_Types].xml': strToU8(
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+          '<Default Extension="xml" ContentType="application/xml"/>' +
+          '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+          '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+          '</Types>',
+      ),
+      '_rels/.rels': strToU8(
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+          '</Relationships>',
+      ),
+      'xl/workbook.xml': strToU8(
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<x:workbook xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+          'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+          '<x:sheets><x:sheet name="Prefixed" sheetId="1" r:id="rId1"/></x:sheets></x:workbook>',
+      ),
+      'xl/_rels/workbook.xml.rels': strToU8(
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+          '</Relationships>',
+      ),
+      'xl/worksheets/sheet1.xml': strToU8(
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<x:worksheet xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+          '<x:sheetData><x:row r="1"><x:c r="A1" t="inlineStr"><x:is><x:t>Hello</x:t></x:is></x:c>' +
+          '<x:c r="B1"><x:v>21</x:v></x:c></x:row></x:sheetData></x:worksheet>',
+      ),
+    };
+    const prefixedSession = await ExcelSession.open(zipSync(prefixedFiles), 'prefixed.xlsx');
+    expect(prefixedSession.editable).toBe(true);
+    expect(prefixedSession.sheet(0)!.rows[0][0]).toBe('Hello');
+    prefixedSession.edit(0, [{ r: 0, c: 2, text: '=B1*2' }]);
+    expect(prefixedSession.sheet(0)!.rows[0][2]).toMatchObject({ v: '42', raw: '=B1*2' });
+    expect(strFromU8(unzipSync(prefixedSession.export())['xl/worksheets/sheet1.xml'])).toContain('B1*2');
+
+    // 2. Plain CSV / HTML bytes misnamed as .xlsx opens read-only instead of throwing a ZIP error
+    const misnamed = await ExcelSession.open(strToU8('Name,Score\nAlice,95\n'), 'export.xlsx');
+    expect(misnamed.editable).toBe(false);
+    expect(misnamed.sheet(0)!.rows[0][0]).toBe('Name');
+    expect(misnamed.sheet(0)!.rows[1][1]).toMatchObject({ v: '95', n: true });
+  });
 });
 
 describe('ExcelSession', () => {
