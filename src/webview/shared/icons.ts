@@ -63,6 +63,18 @@ export const icons = {
   freezeCol: svg('<rect x="2" y="2.5" width="12" height="11" rx="1.4"/><path d="M5.8 2.5v11M2 6.5h3.8M2 10h3.8"/>'),
   copyMd: svg('<rect x="1.8" y="3" width="12.4" height="10" rx="1.5"/><path d="M4.2 10V6l2 2.3L8.2 6v4M11.3 6v4M9.9 8.6l1.4 1.4 1.4-1.4"/>'),
   chevronsRight: svg('<path d="M4.5 4.5L8 8l-3.5 3.5M8.8 4.5L12.3 8l-3.5 3.5"/>'),
+  play: svg('<polygon points="4.8,2.8 13.4,8 4.8,13.2" fill="currentColor"/>'),
+  compare: svg('<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M8 2.5v11M5.4 6.5L3.8 8l1.6 1.5M10.6 6.5L12.2 8l-1.6 1.5"/>'),
+  markup: svg('<path d="M2.5 13.5l3.8-1L13.1 5.7a1.3 1.3 0 0 0-1.8-1.8L4.5 10.7z"/><path d="M9.8 4.3l1.9 1.9"/>'),
+  copy: svg('<rect x="5.2" y="5.2" width="8.3" height="8.3" rx="1.3"/><path d="M3.8 10.8H3a1.2 1.2 0 0 1-1.2-1.2V3A1.2 1.2 0 0 1 3 1.8h6.6A1.2 1.2 0 0 1 10.8 3v.8"/>'),
+  replace: svg('<path d="M2.8 5h7.2M7.8 2.8L10.2 5 7.8 7.2M13.2 11H6M8.2 8.8L5.8 11l2.4 2.2"/>'),
+  bars: svg('<path d="M2.5 3.8h9v2.2h-9zM2.5 7.2h5.8v2.2H2.5zM2.5 10.6h11v2.2h-11z"/>'),
+  notes: svg('<rect x="2.5" y="2.2" width="11" height="11.6" rx="1.4"/><path d="M5 5.6h6M5 8.2h6M5 10.8h3.8"/>'),
+  expand: svg('<path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/>'),
+  highlighter: svg('<path d="M9.8 2.5l3.7 3.7-5.8 5.8H4v-3.7zM2.5 13.8h11"/>'),
+  folder: svg('<path d="M2 4.2A1.2 1.2 0 0 1 3.2 3h3l1.4 1.6h5.2A1.2 1.2 0 0 1 14 5.8v6A1.2 1.2 0 0 1 12.8 13H3.2A1.2 1.2 0 0 1 2 11.8z"/>'),
+  file: svg('<path d="M4 2.2h5.2L12.5 5.5v8.3H4a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1z"/><path d="M9 2.2v3.5h3.5"/>'),
+  laser: svg('<circle cx="8" cy="8" r="2.4" fill="currentColor"/><circle cx="8" cy="8" r="5.5" stroke-dasharray="2 2"/>'),
 };
 
 export type IconName = keyof typeof icons;

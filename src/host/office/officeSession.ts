@@ -15,6 +15,7 @@ interface DocSnapshot {
   comments: DocComment[];
   docxParagraphs?: string[];
   pptxShapes?: string[][];
+  pptxNotes?: string[];
   slideAspect?: number;
 }
 
@@ -47,7 +48,13 @@ function inspectSyncFormat(format: 'docx' | 'pptx', bytes: Uint8Array): DocSnaps
     return { bytes: clean, comments: info.comments, docxParagraphs: info.paragraphs };
   }
   const info = inspectPptx(clean);
-  return { bytes: clean, comments: info.comments, pptxShapes: info.shapes, slideAspect: info.slideAspect };
+  return {
+    bytes: clean,
+    comments: info.comments,
+    pptxShapes: info.shapes,
+    pptxNotes: info.notes,
+    slideAspect: info.slideAspect,
+  };
 }
 
 async function inspectByFormat(format: OfficeFormat, bytes: Uint8Array): Promise<DocSnapshot> {
@@ -116,18 +123,23 @@ export class OfficeSession {
       comments: this.current.comments,
       docxParagraphs: this.current.docxParagraphs,
       pptxShapes: this.current.pptxShapes,
+      pptxNotes: this.current.pptxNotes,
       slideAspect: this.current.slideAspect,
     };
   }
 
   private messageForTransition(mutation: DocMutation): HostMessage {
-    const isCommentOnly =
-      mutation.kind === 'addComment' || mutation.kind === 'updateComment' || mutation.kind === 'deleteComment';
-    if (isCommentOnly) {
+    const isCommentOrNoteOnly =
+      mutation.kind === 'addComment' ||
+      mutation.kind === 'updateComment' ||
+      mutation.kind === 'deleteComment' ||
+      mutation.kind === 'editPptxNote';
+    if (isCommentOrNoteOnly) {
       return {
         type: 'comments',
         comments: this.current.comments,
         docxParagraphs: this.current.docxParagraphs,
+        pptxNotes: this.current.pptxNotes,
       };
     }
     return this.loadMessage();
@@ -176,7 +188,15 @@ export class OfficeSession {
       if (mutation.text === mutation.expected) {
         return undefined;
       }
-    } else if (mutation.kind === 'addComment' && !mutation.text.trim()) {
+    } else if (mutation.kind === 'editPptxNote') {
+      if (this.format !== 'pptx') {
+        return undefined;
+      }
+      const curNote = this.current.pptxNotes?.[mutation.slideIndex] ?? '';
+      if (mutation.text.trim() === curNote.trim()) {
+        return undefined;
+      }
+    } else if (mutation.kind === 'addComment' && !mutation.text.trim() && mutation.subtype !== 'highlight') {
       return undefined;
     }
 

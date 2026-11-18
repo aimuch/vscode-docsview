@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -30,6 +30,9 @@
     "docx",
     "pdf",
     "pptx",
+    "jsonl",
+    "epub",
+    "zip",
     "image",
     "bbox",
     "preview"
@@ -133,6 +136,34 @@
           { "filenamePattern": "*.avif" }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "docsview.jsonl",
+        "displayName": "%editor.jsonl%",
+        "selector": [
+          { "filenamePattern": "*.jsonl" },
+          { "filenamePattern": "*.ndjson" }
+        ],
+        "priority": "option"
+      },
+      {
+        "viewType": "docsview.epub",
+        "displayName": "%editor.epub%",
+        "selector": [
+          { "filenamePattern": "*.epub" }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "docsview.archive",
+        "displayName": "%editor.archive%",
+        "selector": [
+          { "filenamePattern": "*.zip" },
+          { "filenamePattern": "*.tar" },
+          { "filenamePattern": "*.tar.gz" },
+          { "filenamePattern": "*.tgz" }
+        ],
+        "priority": "default"
       }
     ],
     "commands": [
@@ -166,43 +197,43 @@
       "editor/title": [
         {
           "command": "docsview.showPreview",
-          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i",
+          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv|jsonl|ndjson|svg)$/i",
           "group": "navigation@-100"
         },
         {
           "command": "docsview.showPreviewToSide",
-          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i",
+          "when": "!activeCustomEditorId && resourceExtname =~ /^\\.(md|markdown|csv|tsv|jsonl|ndjson|svg)$/i",
           "group": "navigation@-99"
         },
         {
           "command": "docsview.showSource",
-          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv' || (activeCustomEditorId == 'docsview.image' && resourceExtname =~ /^\\.svg$/i)",
+          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv' || activeCustomEditorId == 'docsview.jsonl' || (activeCustomEditorId == 'docsview.image' && resourceExtname =~ /^\\.svg$/i)",
           "group": "navigation@-100"
         }
       ],
       "explorer/context": [
         {
           "command": "docsview.showPreview",
-          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i",
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|jsonl|ndjson|svg)$/i",
           "group": "navigation@90"
         }
       ],
       "commandPalette": [
         {
           "command": "docsview.showPreview",
-          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i"
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|jsonl|ndjson|svg)$/i"
         },
         {
           "command": "docsview.showPreviewToSide",
-          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i"
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|jsonl|ndjson|svg)$/i"
         },
         {
           "command": "docsview.showSource",
-          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv' || (activeCustomEditorId == 'docsview.image' && resourceExtname =~ /^\\.svg$/i)"
+          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv' || activeCustomEditorId == 'docsview.jsonl' || (activeCustomEditorId == 'docsview.image' && resourceExtname =~ /^\\.svg$/i)"
         },
         {
           "command": "docsview.showHistory",
-          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|xlsx|xlsm|docx|pptx|pdf|png|jpg|jpeg|webp|gif|bmp|svg|ico|avif)$/i"
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|jsonl|ndjson|xlsx|xlsm|docx|pptx|pdf|png|jpg|jpeg|webp|gif|bmp|svg|ico|avif)$/i"
         }
       ]
     },

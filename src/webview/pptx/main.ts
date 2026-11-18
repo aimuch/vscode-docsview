@@ -42,11 +42,13 @@ const slideList = new Outline((key) => goTo(Number(key)), {
 });
 sidebar.panel('slides').append(slideList.node);
 
+let docFileName = 'Presentation.pptx';
 let editable = false;
 let editMode = false;
 let annotateMode = false;
 let comments: DocComment[] = [];
 let pptxShapes: string[][] = [];
+let pptxNotes: string[] = [];
 let lastSlideAspect: number | undefined;
 
 const editToggle = toggleButton('pencil', t('pptxEditMode'), (on) => {
@@ -80,6 +82,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
 });
 
 const commentsPanel = new CommentsPanel({
+  docName: () => docFileName,
   targetLabel: (c) => (c.page ? t('slideN', c.page) : ''),
   onSelect: (c) => {
     if (c.page) {
@@ -137,13 +140,182 @@ const pptFind = new PreviewFind(host, stage, {
   },
 });
 const findWidget = createFindWidget(pptFind, stage);
+// ---------------------------------------------------------------- Speaker Notes & Fullscreen Presentation
+
+let notesOpen = readState().pptxNotesOpen === true;
+const notesTitleEl = el('span', { class: 'pptx-notes-title', text: t('speakerNotes') });
+const notesEditBtn = iconButton('pencil', t('editSpeakerNotes'), () => startNoteEdit());
+notesEditBtn.classList.add('dv-cm-mini');
+const notesCloseBtn = iconButton('close', t('cancel'), () => setNotesOpen(false));
+notesCloseBtn.classList.add('dv-cm-mini');
+const notesBody = el('div', { class: 'pptx-notes-body' });
+const notesPanel = el('div', { class: 'pptx-notes-panel' }, [
+  el('div', { class: 'pptx-notes-head' }, [notesTitleEl, el('div', { class: 'dv-spacer' }), notesEditBtn, notesCloseBtn]),
+  notesBody,
+]);
+notesPanel.hidden = !notesOpen;
+
+const notesToggle = toggleButton('notes', t('speakerNotes'), (on) => setNotesOpen(on));
+notesToggle.set(notesOpen);
+
+function setNotesOpen(on: boolean) {
+  notesOpen = on;
+  notesToggle.set(on);
+  notesPanel.hidden = !on;
+  writeState({ pptxNotesOpen: on });
+  if (on) {
+    syncNotesUi();
+  }
+}
+
+function syncNotesUi() {
+  notesEditBtn.hidden = !editable;
+  if (!slides.length) {
+    notesTitleEl.textContent = t('speakerNotes');
+    notesBody.textContent = '';
+    return;
+  }
+  notesTitleEl.textContent = `${t('speakerNotes')} · ${t('slideN', current + 1)}`;
+  const note = (pptxNotes[current] ?? '').trim();
+  notesBody.classList.toggle('pptx-notes-empty', !note);
+  notesBody.textContent = note || t('noSpeakerNotes');
+}
+
+function startNoteEdit() {
+  if (!editable || !slides.length) {
+    return;
+  }
+  const slideIndex = current;
+  const initial = pptxNotes[slideIndex] ?? '';
+  const rect = notesPanel.getBoundingClientRect();
+  openInlineTextEditor({
+    anchor: { x: Math.max(16, rect.left + 24), y: Math.max(48, rect.top - 180) },
+    title: `${t('editSpeakerNotes')} · ${t('slideN', slideIndex + 1)}`,
+    initialText: initial,
+    onCommit: (nextText) => {
+      post({ type: 'docMutate', mutation: { kind: 'editPptxNote', slideIndex, text: nextText } });
+    },
+  });
+}
+
+notesBody.addEventListener('dblclick', () => {
+  if (editable) {
+    startNoteEdit();
+  }
+});
+
+// Fullscreen Presentation Mode (F5) + Virtual Laser Pointer
+let presenting = false;
+let laserOn = false;
+const presentStageWrap = el('div', { class: 'pptx-present-stage' });
+const presentCounter = el('span', { class: 'dv-label' });
+const laserDot = el('div', { class: 'dv-laser-dot' });
+laserDot.hidden = true;
+
+const laserToggle = toggleButton('laser', `${t('laserPointer')} (L)`, (on) => {
+  laserOn = on;
+  presentOverlay.classList.toggle('dv-laser-on', on);
+  if (!on) {
+    laserDot.hidden = true;
+  }
+});
+
+const presentHud = el('div', { class: 'dv-present-hud' }, [
+  iconButton('left', t('prevPage'), () => stepPresentation(-1)),
+  presentCounter,
+  iconButton('right', t('nextPage'), () => stepPresentation(1)),
+  laserToggle.node,
+  iconButton('close', t('exitPresentation'), () => exitPresentation()),
+]);
+presentHud.addEventListener('click', (e) => e.stopPropagation());
+
+const presentOverlay = el('div', { class: 'dv-present-overlay' }, [presentStageWrap, presentHud, laserDot]);
+presentOverlay.hidden = true;
+document.body.append(presentOverlay);
+
+presentOverlay.addEventListener('mousemove', (e) => {
+  if (presenting && laserOn) {
+    laserDot.hidden = false;
+    laserDot.style.left = `${e.clientX}px`;
+    laserDot.style.top = `${e.clientY}px`;
+  }
+});
+presentOverlay.addEventListener('mouseleave', () => {
+  laserDot.hidden = true;
+});
+presentOverlay.addEventListener('click', (e) => {
+  if ((e.target as HTMLElement | null)?.closest('.dv-present-hud')) {
+    return;
+  }
+  stepPresentation(1);
+});
+
+function renderPresentSlide() {
+  if (!presenting || !slides.length) {
+    return;
+  }
+  const srcSlide = slides[current];
+  const clone = srcSlide.cloneNode(true) as HTMLElement;
+  clone.hidden = false;
+  clone.classList.remove('dv-page-invert');
+  clone.querySelectorAll('.dv-annot-layer').forEach((n) => n.remove());
+  const sw = srcSlide.offsetWidth || 960;
+  const sh = srcSlide.offsetHeight || 540;
+  const scale = Math.min((window.innerWidth - 32) / sw, (window.innerHeight - 64) / sh);
+  clone.style.transformOrigin = 'center center';
+  clone.style.transform = `scale(${Math.max(0.2, scale)})`;
+  presentStageWrap.replaceChildren(clone);
+  presentCounter.textContent = `${current + 1} / ${slides.length}`;
+}
+
+function stepPresentation(delta: -1 | 1) {
+  if (!slides.length) {
+    return;
+  }
+  goTo(Math.max(0, Math.min(slides.length - 1, current + delta)));
+  renderPresentSlide();
+}
+
+function enterPresentation() {
+  if (!slides.length) {
+    return;
+  }
+  presenting = true;
+  presentOverlay.hidden = false;
+  renderPresentSlide();
+  try {
+    void document.documentElement.requestFullscreen?.();
+  } catch {
+    // Webview sandbox may disallow OS fullscreen; fixed overlay still fills viewport.
+  }
+}
+
+function exitPresentation() {
+  if (!presenting) {
+    return;
+  }
+  presenting = false;
+  presentOverlay.hidden = true;
+  laserDot.hidden = true;
+  if (document.fullscreenElement) {
+    void document.exitFullscreen?.().catch(() => undefined);
+  }
+}
+
+window.addEventListener('resize', () => {
+  if (presenting) {
+    renderPresentSlide();
+  }
+});
+
+const presentBtn = iconButton('play', t('presentSlides'), () => enterPresentation());
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
 const topBar = customToolbar({
   subtitle: 'PPTX',
   slots: [
     { id: 'nav', nodes: [sidebar.toggle] },
-    { id: 'view', nodes: [view.node] },
+    { id: 'view', nodes: [view.node, presentBtn, notesToggle.node] },
     { id: 'pager', nodes: [pager.node] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'find', nodes: findWidget.nodes },
@@ -154,6 +326,13 @@ const topBar = customToolbar({
   ],
   documentActions: [
     openExternalMenuItem(),
+    { label: t('presentSlides'), icon: 'play', onClick: () => enterPresentation() },
+    {
+      label: t('exportCommentsMd'),
+      icon: 'export',
+      visible: () => comments.length > 0,
+      onClick: () => commentsPanel.exportMarkdown(),
+    },
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
 });
@@ -161,7 +340,10 @@ const topBar = customToolbar({
 app.append(
   topBar.node,
   notice.node,
-  el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, stage])]),
+  el('div', { class: 'dv-body' }, [
+    sidebar.node,
+    el('div', { class: 'dv-main' }, [sidebar.expandBtn, stage, notesPanel]),
+  ]),
 );
 showStatus(host, t('loading'));
 
@@ -232,6 +414,7 @@ function setCurrent(index: number) {
   current = Math.max(0, Math.min(slides.length - 1, index));
   pager.update(current + 1, slides.length);
   slideList.setActive(String(current));
+  syncNotesUi();
 }
 
 function applyView() {
@@ -387,7 +570,36 @@ stage.addEventListener('scroll', () => {
 
 window.addEventListener('keydown', (e) => {
   const target = e.target as HTMLElement;
-  if (!single || target.closest('input, textarea')) {
+  if (target?.closest('input, textarea')) {
+    return;
+  }
+  if (e.key === 'F5') {
+    e.preventDefault();
+    enterPresentation();
+    return;
+  }
+  if (presenting) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitPresentation();
+    } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
+      e.preventDefault();
+      stepPresentation(1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
+      e.preventDefault();
+      stepPresentation(-1);
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      laserOn = !laserOn;
+      laserToggle.set(laserOn);
+      presentOverlay.classList.toggle('dv-laser-on', laserOn);
+      if (!laserOn) {
+        laserDot.hidden = true;
+      }
+    }
+    return;
+  }
+  if (!single) {
     return;
   }
   if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
@@ -454,15 +666,24 @@ async function load(bytes: Uint8Array) {
 
 onMessage((message) => {
   if (message.type === 'load') {
+    docFileName = message.name || 'Presentation.pptx';
     editable = message.editable === true;
     comments = message.comments ?? [];
     pptxShapes = message.pptxShapes ?? [];
+    pptxNotes = message.pptxNotes ?? [];
+    if (pptxNotes.some((n) => n.trim().length > 0) && readState().pptxNotesOpen === undefined) {
+      setNotesOpen(true);
+    }
     lastSlideAspect = message.slideAspect;
     topBar.refresh();
     void load(message.bytes);
   } else if (message.type === 'comments') {
     comments = message.comments;
+    if (message.pptxNotes) {
+      pptxNotes = message.pptxNotes;
+    }
     syncCommentsUi();
+    syncNotesUi();
   } else if (message.type === 'error') {
     showStatus(host, message.message, true);
   }

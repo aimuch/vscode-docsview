@@ -16,6 +16,7 @@
 
 .img-stage.img-mode-inspect,
 .img-stage.img-mode-bbox,
+.img-stage.img-mode-markup,
 .img-stage.img-mode-crop {
   cursor: crosshair;
 }
@@ -63,8 +64,56 @@
   pointer-events: none;
 }
 
-.img-pixelated .img-el {
+.img-pixelated .img-el,
+.img-pixelated .img-markup-canvas,
+.img-pixelated .img-compare-el {
   image-rendering: pixelated;
+}
+
+.img-markup-canvas,
+.img-compare-el {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.img-markup-canvas[hidden],
+.img-compare-el[hidden],
+.img-diff-curtain[hidden],
+.img-crop-bar[hidden] {
+  display: none;
+}
+
+.img-diff-curtain {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-1px);
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 8px rgba(0, 0, 0, 0.45);
+  z-index: 3;
+  cursor: ew-resize;
+}
+
+.img-diff-curtain::after {
+  content: '⇔';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1.5px solid #ffffff;
+  color: #ffffff;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .img-grid-overlay {
@@ -462,4 +511,73 @@
 .img-box-mini {
   width: 22px;
   height: 22px;
+}
+
+.img-box-label-input {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11.5px;
+}
+
+.img-markup-colors {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.img-markup-color {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(128, 128, 128, 0.65);
+  cursor: pointer;
+}
+
+.img-markup-color.dv-active {
+  outline: 2px solid var(--vscode-focusBorder, #3b82f6);
+  outline-offset: 1px;
+}
+
+.img-markup-text-input {
+  width: 130px;
+  height: 24px;
+  font-size: 12px;
+}
+
+.img-markup-text-input[hidden] {
+  display: none;
+}
+
+.img-diff-range {
+  width: 140px;
+  accent-color: var(--dv-accent);
+}
+
+.img-diff-range[hidden] {
+  display: none;
+}
+
+.img-swatch-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.img-swatch-history[hidden] {
+  display: none;
+}
+
+.img-swatch-chip {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 3px;
+  border: 1px solid rgba(128, 128, 128, 0.65);
+  cursor: pointer;
+}
+
+.img-swatch-chip:hover {
+  transform: scale(1.15);
+  border-color: var(--vscode-focusBorder);
 }

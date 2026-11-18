@@ -109,3 +109,105 @@
 .dv-side:has(.pdf-thumbs) {
   width: 200px;
 }
+
+.pdf-thumb-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.pdf-thumb-wrap.pdf-thumb-drop {
+  outline: 2px dashed var(--vscode-focusBorder);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.pdf-thumb-tools {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.82);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.pdf-thumb-wrap:hover .pdf-thumb-tools,
+.pdf-thumb-wrap:focus-within .pdf-thumb-tools {
+  opacity: 1;
+}
+
+.pdf-thumb-act {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #f8fafc;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pdf-thumb-act:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.pdf-thumb-act:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pdf-sel-bar {
+  position: fixed;
+  z-index: 230;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 16px;
+  background: var(--vscode-menu-background, #18181b);
+  border: 1px solid var(--vscode-focusBorder, rgba(255, 255, 255, 0.2));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.pdf-sel-bar[hidden] {
+  display: none;
+}
+
+.pdf-sel-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pdf-sel-btn:hover {
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+.pdf-sel-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.28);
+}
+
+.pdf-sel-yellow {
+  background: #fde047;
+}
+
+.pdf-sel-green {
+  background: #4ade80;
+}

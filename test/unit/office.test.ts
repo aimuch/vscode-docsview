@@ -3,14 +3,17 @@ import { unzipSync } from 'fflate';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import PptxGenJS from 'pptxgenjs';
 import { describe, expect, it } from 'vitest';
+import { formatCommentsAsMarkdown } from '../../src/common/commentsMarkdown';
 import {
   applyDocxMutations,
   applyPdfMutations,
   applyPptxMutations,
+  extractPdfPagesToBytes,
   inspectDocx,
   inspectPdf,
   inspectPptx,
   OfficeSession,
+  parsePageRangeSpec,
   readPptxAspect,
   resolveTargetIndex,
 } from '../../src/host/office';
@@ -326,5 +329,59 @@ describe('OfficeSession undo, redo, stale rejection & hot-exit backup', () => {
     expect(resolveTargetIndex(paras, 3, '待定')).toBe(1);
     // Ambiguous duplicate far from both occurrences is safely rejected (-1) instead of corrupting line 1!
     expect(resolveTargetIndex(paras, 18, '待定')).toBe(-1);
+  });
+
+  it('supports PPTX Speaker Notes (notesSlide), PDF page restructuring, /Highlight & Markdown comment export', async () => {
+    // 1. PPTX Speaker Notes creation & editing
+    const ppt = await makeSamplePptx('LAYOUT_16x9');
+    expect(inspectPptx(ppt).notes).toEqual(['', '']);
+    const withNote = applyPptxMutations(ppt, [
+      { kind: 'editPptxNote', slideIndex: 0, text: '开场提醒：强调本季度增长亮点\n控制 3 分钟内' },
+    ]);
+    const pptInfo = inspectPptx(withNote);
+    expect(pptInfo.notes[0]).toBe('开场提醒：强调本季度增长亮点\n控制 3 分钟内');
+    expect(pptInfo.notes[1]).toBe('');
+
+    // 2. PDF /Highlight, rotation, reorder, delete, merge & extract
+    const pdf2 = await makeSamplePdf();
+    const pdfMutated = await applyPdfMutations(pdf2, [
+      {
+        kind: 'addComment',
+        page: 1,
+        text: '关键结论句',
+        quote: 'Sample PDF Page 1',
+        rect: { x: 0.1, y: 0.1, w: 0.5, h: 0.04 },
+        color: '#fde047',
+        subtype: 'highlight',
+      },
+      { kind: 'rotatePdfPages', pages: [1], delta: 90 },
+      { kind: 'movePdfPage', fromPage: 1, toPage: 2 },
+    ]);
+    const loadedDoc = await PDFDocument.load(pdfMutated);
+    expect(loadedDoc.getPageCount()).toBe(2);
+    // Original page 1 was rotated 90° and moved to page 2!
+    expect(loadedDoc.getPage(1).getRotation().angle).toBe(90);
+    const hlComments = await inspectPdf(pdfMutated);
+    expect(hlComments).toHaveLength(1);
+    expect(hlComments[0].page).toBe(2);
+    expect(hlComments[0].subtype).toBe('highlight');
+
+    // Merge another 2-page PDF -> 4 pages, then delete page 4 -> 3 pages
+    const merged = await applyPdfMutations(pdfMutated, [
+      { kind: 'appendPdfBytes', otherBytes: pdf2 },
+      { kind: 'deletePdfPage', page: 4 },
+    ]);
+    expect((await PDFDocument.load(merged)).getPageCount()).toBe(3);
+
+    // Extract page range "1, 3" -> 2-page PDF
+    expect(parsePageRangeSpec('1-2, 5, 2', 3)).toEqual([1, 2]);
+    const extracted = await extractPdfPagesToBytes(merged, [1, 3]);
+    expect((await PDFDocument.load(extracted)).getPageCount()).toBe(2);
+
+    // 3. Markdown checklist export for comments
+    const mdChecklist = formatCommentsAsMarkdown('spec.pdf', hlComments, (c) => `Page ${c.page}`);
+    expect(mdChecklist).toContain('# spec.pdf — Comments (1)');
+    expect(mdChecklist).toContain('- [ ] **#1** [Page 2]');
+    expect(mdChecklist).toContain('> Sample PDF Page 1');
   });
 });

@@ -361,3 +361,205 @@ describe('markdown export', () => {
     expect(imgSession.dirty).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------- v0.7.0 deep analytics, CV, JSONL, EPUB & Archive
+
+describe('spreadsheet deep analytics (value/numeric filters, JSON export, autofill & conditional formatting)', () => {
+  it('filters by unique-value sets and numeric comparisons (>=, between, topN)', async () => {
+    const { collectColumnUniqueValues, condFormatGradient } = await import('../../src/webview/sheet/view');
+    const data: Cell[][] = [
+      ['item', 'cat', 'score'],
+      ['A', 'Core', '95'],
+      ['B', 'Edge', '60'],
+      ['C', 'Core', '82'],
+      ['D', '', '40'],
+      ['E', 'Aux', '99'],
+    ];
+    const uniques = collectColumnUniqueValues(data, data.length, 1, 1);
+    expect(uniques).toEqual([
+      { value: '', count: 1 },
+      { value: 'Aux', count: 1 },
+      { value: 'Core', count: 2 },
+      { value: 'Edge', count: 1 },
+    ]);
+
+    // Multi-select value filter (allow '' and 'Core')
+    const v1: SheetView = { ...emptyView(), valueFilters: { 1: ['', 'Core'] } };
+    expect(viewRows(data, data.length, 1, v1)).toEqual([0, 1, 3, 4]);
+
+    // Numeric between [60, 95]
+    const v2: SheetView = { ...emptyView(), numFilters: { 2: { op: 'between', a: 60, b: 95 } } };
+    expect(viewRows(data, data.length, 1, v2)).toEqual([0, 1, 2, 3]);
+
+    // Top 2 numeric rows
+    const v3: SheetView = { ...emptyView(), numFilters: { 2: { op: 'topN', a: 2 } } };
+    expect(viewRows(data, data.length, 1, v3)).toEqual([0, 1, 5]);
+
+    // Conditional format CSS gradients
+    expect(condFormatGradient('bar', 50, { min: 0, max: 100 })).toContain('50.0%');
+    expect(condFormatGradient('heat', 100, { min: 0, max: 100 })).toContain('rgba(34, 197, 94');
+  });
+
+  it('exports rectangular selections to typed JSON and extrapolates series & formulas on AutoFill', async () => {
+    const { computeAutoFillChanges, selectionToJson, shiftFormulaRefs } = await import('../../src/webview/sheet/view');
+    const gridData: Cell[][] = [
+      ['id', 'active', 'meta'],
+      ['101', 'true', '{"k":1}'],
+      ['007', 'false', ''],
+    ];
+    const jsonMulti = JSON.parse(selectionToJson((r, c) => gridData[r]?.[c], 0, 0, 2, 2));
+    expect(jsonMulti).toEqual([
+      { id: 101, active: true, meta: { k: 1 } },
+      { id: '007', active: false, meta: null },
+    ]);
+    const jsonSingle = JSON.parse(selectionToJson((r, c) => gridData[r]?.[c], 1, 0, 1, 2));
+    expect(jsonSingle).toEqual([101, true, { k: 1 }]);
+
+    // Relative vs $ anchored formula shifting
+    expect(shiftFormulaRefs('=A1+B$1+$C2+$D$3', 2, 1)).toBe('=B3+C$1+$C4+$D$3');
+
+    // Vertical AutoFill: numeric step [10, 20] -> 30, 40; padded string ID-001 -> ID-002, ID-003; formula =A1*2
+    const srcCells = [
+      ['10', 'ID-001', '=A1*2'],
+      ['20', 'ID-002', '=A2*2'],
+    ];
+    const fill = computeAutoFillChanges(
+      (r, c) => srcCells[r]?.[c] ?? '',
+      { r0: 0, c0: 0, r1: 1, c1: 2 },
+      { r0: 0, c0: 0, r1: 3, c1: 2 },
+    );
+    expect(fill).toEqual([
+      { r: 2, c: 0, text: '30' },
+      { r: 3, c: 0, text: '40' },
+      { r: 2, c: 1, text: 'ID-003' },
+      { r: 3, c: 1, text: 'ID-004' },
+      { r: 2, c: 2, text: '=A3*2' },
+      { r: 3, c: 2, text: '=A4*2' },
+    ]);
+  });
+});
+
+describe('image CV annotations (YOLO / COCO / LabelMe), HSL, pixel diff & mosaic', () => {
+  it('round-trips YOLO, COCO and LabelMe bounding boxes with class labels', async () => {
+    const { exportCoco, exportLabelMe, exportYolo, parseAnnotationContent } = await import(
+      '../../src/webview/image/annotations'
+    );
+    const { rgbToHsl } = await import('../../src/webview/image/bbox');
+    const { computePixelDiff } = await import('../../src/webview/image/diff');
+    const { applyMosaicRgba } = await import('../../src/webview/image/markup');
+
+    expect(rgbToHsl(255, 0, 0)).toBe('hsl(0, 100%, 50%)');
+
+    const boxes = [
+      { id: 1, x1: 100, y1: 50, x2: 300, y2: 250, color: '#3b82f6', label: 'person' },
+      { id: 2, x1: 400, y1: 120, x2: 520, y2: 220, color: '#10b981', label: 'car' },
+    ];
+
+    const yolo = exportYolo(boxes, 800, 600);
+    expect(yolo.classesTxt.trim().split('\n')).toEqual(['person', 'car']);
+    const fromYolo = parseAnnotationContent(yolo.txt, 800, 600, { classesText: yolo.classesTxt });
+    expect(fromYolo).toHaveLength(2);
+    expect(fromYolo[0]).toMatchObject({ x1: 100, y1: 50, x2: 300, y2: 250, label: 'person' });
+    expect(fromYolo[1]).toMatchObject({ x1: 400, y1: 120, x2: 520, y2: 220, label: 'car' });
+
+    const coco = exportCoco(boxes, 'street.jpg', 800, 600);
+    const fromCoco = parseAnnotationContent(coco, 800, 600, { fileName: 'street.jpg' });
+    expect(fromCoco[0]).toMatchObject({ x1: 100, y1: 50, x2: 300, y2: 250, label: 'person' });
+    expect(fromCoco[1]).toMatchObject({ x1: 400, y1: 120, x2: 520, y2: 220, label: 'car' });
+
+    const lm = exportLabelMe(boxes, 'street.jpg', 800, 600);
+    const fromLm = parseAnnotationContent(lm, 800, 600);
+    expect(fromLm[0]).toMatchObject({ x1: 100, y1: 50, x2: 300, y2: 250, label: 'person' });
+
+    // Pixel diff: 1 of 2 pixels changed -> ratio = 0.5
+    const imgA = new Uint8ClampedArray([10, 10, 10, 255, 20, 20, 20, 255]);
+    const imgB = new Uint8ClampedArray([10, 10, 10, 255, 250, 20, 20, 255]);
+    const diff = computePixelDiff(imgA, 2, 1, imgB, 2, 1);
+    expect(diff.changedPixels).toBe(1);
+    expect(diff.ratio).toBeCloseTo(0.5);
+
+    // Mosaic averages 2x1 block in-place
+    const mosaicBuf = new Uint8ClampedArray([0, 0, 0, 255, 200, 100, 50, 255]);
+    applyMosaicRgba(mosaicBuf, 2, 1, { x1: 0, y1: 0, x2: 2, y2: 1 }, 4);
+    expect([...mosaicBuf]).toEqual([100, 50, 25, 255, 100, 50, 25, 255]);
+  });
+});
+
+describe('JSONL, EPUB & Archive engines', () => {
+  it('parses and edits .jsonl records in place while preserving typed JSON fields', async () => {
+    const { applyEdits } = await import('../../src/host/csv/csvParser');
+    const { JsonlSession } = await import('../../src/host/jsonl/jsonlSession');
+
+    const raw = '{"id":1,"name":"Alice","tags":["a"]}\n{"id":2,"score":9.5}\n';
+    const session = new JsonlSession('train.jsonl');
+    session.setText(raw);
+    const model = session.model();
+    expect(model.frozenRows).toBe(1);
+    expect(model.rows[0].map((c) => (typeof c === 'object' && c ? c.v : c))).toEqual(['id', 'name', 'tags', 'score']);
+
+    // Edit row 1 col 1 ("Alice" -> "Alicia") and row 2 col 3 (9.5 -> 12)
+    const edits = session.editCells([
+      { r: 1, c: 1, text: 'Alicia' },
+      { r: 2, c: 3, text: '12' },
+    ]);
+    const updated = applyEdits(session.currentText, edits);
+    session.setText(updated);
+    const lines = updated.trim().split('\n').map((l) => JSON.parse(l));
+    expect(lines[0]).toEqual({ id: 1, name: 'Alicia', tags: ['a'] });
+    expect(lines[1]).toEqual({ id: 2, score: 12 });
+
+    // Insert a new JSON record row
+    const afterIns = applyEdits(session.currentText, session.structure('insertRow', 2, 1));
+    expect(afterIns.trim().split('\n')).toHaveLength(3);
+  });
+
+  it('parses EPUB 2/3 books, inlines images and strips unsafe scripts', async () => {
+    const { strToU8, zipSync } = await import('fflate');
+    const { parseEpub } = await import('../../src/host/epub/epubParser');
+
+    const epubBytes = zipSync({
+      'META-INF/container.xml': strToU8(
+        '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+      ),
+      'OEBPS/content.opf': strToU8(
+        '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Deep Guide</dc:title><dc:creator>Ada</dc:creator></metadata><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="img1" href="img/pic.png" media-type="image/png"/></manifest><spine><itemref idref="c1"/></spine></package>',
+      ),
+      'OEBPS/ch1.xhtml': strToU8(
+        '<html><head><title>Chapter One</title></head><body><h1 id="intro">Welcome</h1><script>evil()</script><img src="img/pic.png" onerror="bad()"/></body></html>',
+      ),
+      'OEBPS/img/pic.png': new Uint8Array([137, 80, 78, 71]),
+    });
+
+    const book = parseEpub(epubBytes);
+    expect(book.title).toBe('Deep Guide');
+    expect(book.author).toBe('Ada');
+    expect(book.chapters).toHaveLength(1);
+    expect(book.chapters[0].title).toBe('Chapter One');
+    expect(book.chapters[0].html).toContain('data:image/png;base64,');
+    expect(book.chapters[0].html).not.toContain('<script');
+    expect(book.chapters[0].html).not.toContain('onerror');
+  });
+
+  it('inspects ZIP Central Directory entries and previews text/image payloads on demand', async () => {
+    const { strToU8, zipSync } = await import('fflate');
+    const { classifyArchiveEntry, extractArchiveEntryBytes, inspectArchive } = await import(
+      '../../src/host/archive/archiveReader'
+    );
+
+    const zipBytes = zipSync({
+      'src/hello.ts': strToU8('export const x = 42;\n'),
+      'assets/icon.png': new Uint8Array([137, 80, 78, 71]),
+    });
+    const info = inspectArchive(zipBytes, 'bundle.zip');
+    expect(info.entries.map((e) => e.path)).toEqual(['src/hello.ts', 'assets/icon.png']);
+    expect(info.totalSize).toBe(25);
+
+    const tsBytes = extractArchiveEntryBytes(zipBytes, 'bundle.zip', 'src/hello.ts')!;
+    const tsClassified = classifyArchiveEntry('src/hello.ts', tsBytes);
+    expect(tsClassified.kind).toBe('text');
+    expect(tsClassified.text).toContain('export const x = 42;');
+
+    const pngBytes = extractArchiveEntryBytes(zipBytes, 'bundle.zip', 'assets/icon.png')!;
+    expect(classifyArchiveEntry('assets/icon.png', pngBytes).kind).toBe('image');
+  });
+});

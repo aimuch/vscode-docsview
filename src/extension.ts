@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
+import { ArchivePreviewProvider } from './host/archive/provider';
 import { BinaryPreviewProvider } from './host/binaryPreviewProvider';
 import { CsvEditorProvider } from './host/csv/provider';
+import { EpubPreviewProvider } from './host/epub/provider';
 import { ExcelEditorProvider } from './host/excel/provider';
+import { JsonlEditorProvider } from './host/jsonl/provider';
 import { MarkdownPreviewProvider } from './host/markdown/provider';
 import { OfficeEditorProvider } from './host/office/provider';
 import { initHistory, listVersions, showHistory, watchTextSaves } from './host/history';
@@ -53,6 +56,17 @@ export function activate(context: vscode.ExtensionContext): {
     }),
     vscode.window.registerCustomEditorProvider(CsvEditorProvider.viewType, new CsvEditorProvider(context), {
       webviewOptions,
+    }),
+    vscode.window.registerCustomEditorProvider(JsonlEditorProvider.viewType, new JsonlEditorProvider(context), {
+      webviewOptions,
+    }),
+    vscode.window.registerCustomEditorProvider(EpubPreviewProvider.viewType, new EpubPreviewProvider(context), {
+      webviewOptions,
+      supportsMultipleEditorsPerDocument: false,
+    }),
+    vscode.window.registerCustomEditorProvider(ArchivePreviewProvider.viewType, new ArchivePreviewProvider(context), {
+      webviewOptions,
+      supportsMultipleEditorsPerDocument: false,
     }),
     vscode.window.registerCustomEditorProvider(ExcelEditorProvider.viewType, new ExcelEditorProvider(context), {
       webviewOptions,

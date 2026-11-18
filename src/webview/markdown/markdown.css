@@ -463,8 +463,34 @@ body {
 }
 
 .markdown-body .mermaid {
+  position: relative;
   text-align: center;
   overflow-x: auto;
+  cursor: zoom-in;
+}
+
+.md-mermaid-expand {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--md-border);
+  background: var(--md-bg);
+  color: var(--md-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.markdown-body .mermaid:hover .md-mermaid-expand,
+.md-mermaid-expand:focus-visible {
+  opacity: 1;
 }
 
 .markdown-body .mermaid > pre {
@@ -709,4 +735,83 @@ body[data-theme='paper'].dv-dark .hljs-string {
 .md-edit-text:focus {
   outline: 1px solid var(--vscode-focusBorder, #0078d4);
   outline-offset: -1px;
+}
+
+/* ------------------------------------------------------------------ Mermaid Lightbox & Slide Deck */
+
+.md-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 480;
+  background: rgba(9, 9, 11, 0.92);
+  backdrop-filter: blur(6px);
+  display: flex;
+  flex-direction: column;
+}
+
+.md-lightbox[hidden] {
+  display: none;
+}
+
+.md-lightbox-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+}
+
+.md-lightbox-stage:active {
+  cursor: grabbing;
+}
+
+.md-lightbox-svg {
+  transform-origin: center center;
+  padding: 28px;
+  border-radius: 10px;
+  background: var(--md-bg);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+}
+
+.md-slide-overlay {
+  padding: 32px 40px 80px;
+  box-sizing: border-box;
+}
+
+.md-slide-card {
+  width: min(1040px, calc(100vw - 64px));
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  margin: auto;
+  padding: 48px 60px;
+  border-radius: 12px;
+  background: var(--md-bg);
+  color: var(--md-fg);
+  font-size: clamp(18px, 1.8vw, 24px);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.65);
+}
+
+.md-img-inspect-pill {
+  position: fixed;
+  z-index: 160;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(15, 23, 42, 0.86);
+  color: #f8fafc;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.md-img-inspect-pill[hidden] {
+  display: none;
+}
+
+.md-img-inspect-pill:hover {
+  background: #2563eb;
 }

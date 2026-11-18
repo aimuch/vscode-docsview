@@ -16,6 +16,7 @@ import {
   attachSurfaceAnnotator,
   closeFloatingEditors,
   CommentsPanel,
+  openCommentComposer,
   renderSurfaceAnnotations,
 } from '../shared/comments';
 import { getFileState } from '../shared/fileState';
@@ -24,6 +25,7 @@ import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../sh
 import {
   customToolbar,
   iconButton,
+  moreMenu,
   noticeBanner,
   openExternalButton,
   openExternalMenuItem,
@@ -80,6 +82,7 @@ sidebar.panel('outline').append(outline.node);
 
 // ---------------------------------------------------------------- annotations / comments
 
+let docFileName = 'Document.pdf';
 let editable = false;
 let annotateMode = false;
 let comments: DocComment[] = [];
@@ -88,6 +91,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
   annotateMode = on;
   viewerEl.classList.toggle('pdf-annotating', on);
   closeFloatingEditors();
+  hideSelectionBar();
   if (on) {
     sidebar.setOpen(true);
     sidebar.setTab('comments');
@@ -96,6 +100,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
 });
 
 const commentsPanel = new CommentsPanel({
+  docName: () => docFileName,
   targetLabel: (c) => (c.page ? t('pageN', c.page) : ''),
   onSelect: (c) => {
     if (c.page && viewer.pagesCount) {
@@ -165,6 +170,131 @@ attachSurfaceAnnotator({
     post({ type: 'docMutate', mutation: { kind: 'addComment', page, rect, text } });
   },
 });
+
+// Floating mouse text-selection highlighter bar
+let pendingSel:
+  | { page: number; rect: { x: number; y: number; w: number; h: number }; quote: string; clientX: number; clientY: number }
+  | undefined;
+
+const hlYellowBtn = el('button', { class: 'pdf-sel-btn', title: t('pdfHighlightYellow') });
+hlYellowBtn.type = 'button';
+hlYellowBtn.append(el('span', { class: 'pdf-sel-dot pdf-sel-yellow' }));
+
+const hlGreenBtn = el('button', { class: 'pdf-sel-btn', title: t('pdfHighlightGreen') });
+hlGreenBtn.type = 'button';
+hlGreenBtn.append(el('span', { class: 'pdf-sel-dot pdf-sel-green' }));
+
+const hlCommentBtn = iconButton('commentPlus', t('pdfHighlightComment'), () => {
+  if (!pendingSel) {
+    return;
+  }
+  const snap = pendingSel;
+  hideSelectionBar();
+  window.getSelection()?.removeAllRanges();
+  openCommentComposer({
+    anchor: { x: snap.clientX, y: snap.clientY + 12 },
+    title: `${t('pdfHighlightComment')} · ${t('pageN', snap.page)}`,
+    onSubmit: (text) => {
+      post({
+        type: 'docMutate',
+        mutation: {
+          kind: 'addComment',
+          page: snap.page,
+          rect: snap.rect,
+          quote: snap.quote,
+          text,
+          color: '#fde047',
+          subtype: 'highlight',
+        },
+      });
+    },
+  });
+});
+hlCommentBtn.classList.add('pdf-sel-btn');
+
+function applyQuickHighlight(color: string) {
+  if (!pendingSel) {
+    return;
+  }
+  const snap = pendingSel;
+  hideSelectionBar();
+  window.getSelection()?.removeAllRanges();
+  post({
+    type: 'docMutate',
+    mutation: {
+      kind: 'addComment',
+      page: snap.page,
+      rect: snap.rect,
+      quote: snap.quote,
+      text: snap.quote,
+      color,
+      subtype: 'highlight',
+    },
+  });
+}
+hlYellowBtn.addEventListener('click', () => applyQuickHighlight('#fde047'));
+hlGreenBtn.addEventListener('click', () => applyQuickHighlight('#4ade80'));
+
+const pdfSelBar = el('div', { class: 'pdf-sel-bar' }, [hlYellowBtn, hlGreenBtn, hlCommentBtn]);
+pdfSelBar.hidden = true;
+pdfSelBar.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+});
+document.body.append(pdfSelBar);
+
+function hideSelectionBar() {
+  pendingSel = undefined;
+  pdfSelBar.hidden = true;
+}
+
+viewerEl.addEventListener('mouseup', (e) => {
+  if (!editable || annotateMode) {
+    hideSelectionBar();
+    return;
+  }
+  setTimeout(() => {
+    const sel = window.getSelection();
+    const rawText = sel?.toString().replace(/\s+/g, ' ').trim() ?? '';
+    if (!sel || sel.isCollapsed || !rawText || sel.rangeCount === 0) {
+      hideSelectionBar();
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const startNode = range.startContainer instanceof HTMLElement ? range.startContainer : range.startContainer.parentElement;
+    const pageEl = startNode?.closest<HTMLElement>('.page[data-page-number]');
+    if (!pageEl) {
+      hideSelectionBar();
+      return;
+    }
+    const page = Number(pageEl.dataset.pageNumber);
+    const pageBounds = pageEl.getBoundingClientRect();
+    const selBounds = range.getBoundingClientRect();
+    if (!page || pageBounds.width <= 0 || pageBounds.height <= 0 || selBounds.width <= 0 || selBounds.height <= 0) {
+      hideSelectionBar();
+      return;
+    }
+    const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+    const rx = clamp01((selBounds.left - pageBounds.left) / pageBounds.width);
+    const ry = clamp01((selBounds.top - pageBounds.top) / pageBounds.height);
+    const rw = clamp01(selBounds.width / pageBounds.width);
+    const rh = clamp01(selBounds.height / pageBounds.height);
+    pendingSel = {
+      page,
+      rect: { x: rx, y: ry, w: Math.max(0.01, rw), h: Math.max(0.008, rh) },
+      quote: rawText.slice(0, 180),
+      clientX: e.clientX,
+      clientY: e.clientY,
+    };
+    pdfSelBar.hidden = false;
+    const left = Math.max(8, Math.min(window.innerWidth - 130, selBounds.left + selBounds.width / 2 - 52));
+    const top = Math.max(42, selBounds.top - 36);
+    pdfSelBar.style.left = `${left}px`;
+    pdfSelBar.style.top = `${top}px`;
+  }, 10);
+});
+
+container.addEventListener('scroll', hideSelectionBar, { passive: true });
 
 let restore: { page: number; scale: string } | undefined;
 let currentDoc: pdfjs.PDFDocumentProxy | undefined;
@@ -399,8 +529,10 @@ function buildThumbnails(doc: pdfjs.PDFDocumentProxy) {
     },
     { root: thumbs, rootMargin: '300px 0px' },
   );
+  let dragFromPage = 0;
   for (let n = 1; n <= doc.numPages; n++) {
     const canvasBox = el('span', { class: 'pdf-thumb-page dv-page-invert' });
+    const wrap = el('div', { class: 'pdf-thumb-wrap' });
     const link = el('button', { class: 'pdf-thumb', title: t('pageN', n) }, [
       canvasBox,
       el('span', { class: 'pdf-thumb-num', text: String(n) }),
@@ -410,7 +542,58 @@ function buildThumbnails(doc: pdfjs.PDFDocumentProxy) {
     link.addEventListener('click', () => {
       viewer.currentPageNumber = n;
     });
-    thumbs.append(link);
+    wrap.append(link);
+
+    if (editable) {
+      wrap.draggable = true;
+      wrap.addEventListener('dragstart', (ev) => {
+        dragFromPage = n;
+        ev.dataTransfer?.setData('text/plain', String(n));
+      });
+      wrap.addEventListener('dragover', (ev) => {
+        if (dragFromPage && dragFromPage !== n) {
+          ev.preventDefault();
+          wrap.classList.add('pdf-thumb-drop');
+        }
+      });
+      wrap.addEventListener('dragleave', () => wrap.classList.remove('pdf-thumb-drop'));
+      wrap.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        wrap.classList.remove('pdf-thumb-drop');
+        if (dragFromPage && dragFromPage !== n) {
+          post({ type: 'docMutate', mutation: { kind: 'movePdfPage', fromPage: dragFromPage, toPage: n } });
+        }
+        dragFromPage = 0;
+      });
+
+      const miniBtn = (txt: string, tip: string, disabled: boolean, fn: () => void) => {
+        const b = el('button', { class: 'pdf-thumb-act', text: txt, title: tip });
+        b.type = 'button';
+        b.disabled = disabled;
+        b.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          fn();
+        });
+        return b;
+      };
+      const tools = el('div', { class: 'pdf-thumb-tools' }, [
+        miniBtn('↻', t('pdfSaveRotateCW'), false, () =>
+          post({ type: 'docMutate', mutation: { kind: 'rotatePdfPages', pages: [n], delta: 90 } }),
+        ),
+        miniBtn('↑', t('pdfMoveUp'), n === 1, () =>
+          post({ type: 'docMutate', mutation: { kind: 'movePdfPage', fromPage: n, toPage: n - 1 } }),
+        ),
+        miniBtn('↓', t('pdfMoveDown'), n === doc.numPages, () =>
+          post({ type: 'docMutate', mutation: { kind: 'movePdfPage', fromPage: n, toPage: n + 1 } }),
+        ),
+        miniBtn('✕', t('pdfDeletePage'), doc.numPages <= 1, () =>
+          post({ type: 'docMutate', mutation: { kind: 'deletePdfPage', page: n } }),
+        ),
+      ]);
+      wrap.append(tools);
+    }
+
+    thumbs.append(wrap);
     thumbObserver.observe(link);
   }
   highlightThumb(viewer.currentPageNumber || 1);
@@ -556,6 +739,47 @@ const zoomGroup = el('div', { class: 'dv-zoom' }, [
   iconButton('rotateCW', t('pdfRotateCW'), rotatePdfPages),
 ]);
 
+const pdfToolsDropdown = moreMenu(
+  t('moreTools'),
+  [
+    {
+      icon: 'rotateCW',
+      label: t('pdfSaveRotateCW'),
+      visible: () => editable,
+      onClick: () =>
+        post({
+          type: 'docMutate',
+          mutation: { kind: 'rotatePdfPages', pages: [viewer.currentPageNumber || 1], delta: 90 },
+        }),
+    },
+    {
+      icon: 'export',
+      label: t('pdfExtractPages'),
+      visible: () => editable,
+      onClick: () =>
+        post({
+          type: 'extractPdfPages',
+          currentPage: viewer.currentPageNumber || 1,
+          totalPages: viewer.pagesCount || 1,
+        }),
+    },
+    {
+      icon: 'plus',
+      label: t('pdfMerge'),
+      visible: () => editable,
+      onClick: () => post({ type: 'mergePdfs' }),
+    },
+    '-',
+    {
+      icon: 'export',
+      label: t('exportCommentsMd'),
+      visible: () => comments.length > 0,
+      onClick: () => commentsPanel.exportMarkdown(),
+    },
+  ],
+  'export',
+);
+
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
 const topBar = customToolbar({
@@ -566,13 +790,41 @@ const topBar = customToolbar({
     { id: 'pager', nodes: [pager.node] },
     { id: 'zoom', nodes: [zoomGroup] },
     { id: 'find', nodes: findWidget.nodes },
-    { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
+    { id: 'comments', nodes: [annotateToggle.node, pdfToolsDropdown], visible: () => editable },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
     openExternalMenuItem(),
     { label: t('pdfRotateCW'), icon: 'rotateCW', onClick: rotatePdfPages },
+    {
+      label: t('pdfSaveRotateCW'),
+      icon: 'rotateCW',
+      visible: () => editable,
+      onClick: () =>
+        post({
+          type: 'docMutate',
+          mutation: { kind: 'rotatePdfPages', pages: [viewer.currentPageNumber || 1], delta: 90 },
+        }),
+    },
+    {
+      label: t('pdfExtractPages'),
+      icon: 'export',
+      visible: () => editable,
+      onClick: () =>
+        post({
+          type: 'extractPdfPages',
+          currentPage: viewer.currentPageNumber || 1,
+          totalPages: viewer.pagesCount || 1,
+        }),
+    },
+    { label: t('pdfMerge'), icon: 'plus', visible: () => editable, onClick: () => post({ type: 'mergePdfs' }) },
+    {
+      label: t('exportCommentsMd'),
+      icon: 'export',
+      visible: () => comments.length > 0,
+      onClick: () => commentsPanel.exportMarkdown(),
+    },
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
 });
@@ -585,6 +837,7 @@ app.append(
 
 onMessage((message) => {
   if (message.type === 'load') {
+    docFileName = message.name || 'Document.pdf';
     editable = message.editable === true;
     comments = message.comments ?? [];
     topBar.refresh();

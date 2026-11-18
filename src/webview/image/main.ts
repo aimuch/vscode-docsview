@@ -6,7 +6,7 @@
 // - Format Conversion (PNG / JPG / WebP / BMP / ICO)
 import '../shared/base.css';
 import './image.css';
-import type { ImageExportFormat, LoupePosition } from '../../common/protocol';
+import type { AnnotationExportFormat, ImageExportFormat, LoupePosition } from '../../common/protocol';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { getAppearance, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
@@ -22,6 +22,7 @@ import {
   segmented,
   type MenuItem,
 } from '../shared/ui';
+import { exportCoco, exportLabelMe, exportYolo, parseAnnotationContent } from './annotations';
 import {
   BBOX_PALETTE,
   bboxDimensions,
@@ -32,11 +33,13 @@ import {
   parseBBoxInput,
   resizeSvgMarkup,
   rgbToHex,
+  rgbToHsl,
   transformBBoxes,
   type BBox,
   type ImageTransformOp,
   type PixelRect,
 } from './bbox';
+import { computePixelDiff } from './diff';
 import {
   encodeCanvas,
   encodeRegionFromCanvas,
@@ -46,6 +49,7 @@ import {
   renderTransformedCanvas,
 } from './encoder';
 import { LOUPE_H, LOUPE_W, paintPixelLoupe, sampleCanvasPixel } from './loupe';
+import { MARKUP_COLORS, renderMarkupToCanvas, type MarkupItem, type MarkupTool } from './markup';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const svgEl = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string> = {}) => {
@@ -58,7 +62,9 @@ const svgEl = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<strin
 
 const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32];
 
-type ToolMode = 'inspect' | 'bbox' | 'crop';
+type ToolMode = 'inspect' | 'bbox' | 'markup' | 'crop';
+type ColorFormatMode = 'rgb' | 'hex' | 'hsl';
+type DiffMode = 'slider' | 'onion' | 'pixels';
 type AspectPreset = 'free' | '1:1' | '16:9' | '4:3';
 type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
@@ -74,15 +80,33 @@ let sourceCanvas: HTMLCanvasElement | undefined;
 let sampleCtx: CanvasRenderingContext2D | undefined;
 
 const savedMode = readState().imgMode;
-let toolMode: ToolMode = savedMode === 'bbox' || savedMode === 'crop' ? savedMode : 'inspect';
-let colorMode: 'rgb' | 'hex' = readState().imgColorMode === 'hex' ? 'hex' : 'rgb';
+let toolMode: ToolMode =
+  savedMode === 'bbox' || savedMode === 'markup' || savedMode === 'crop' ? savedMode : 'inspect';
+const savedColorMode = readState().imgColorMode;
+let colorMode: ColorFormatMode =
+  savedColorMode === 'hex' || savedColorMode === 'hsl' ? savedColorMode : 'rgb';
 let showGrid = readState().imgGrid !== false;
 let checkerboard = readState().imgChecker !== false;
 let fixedLoupeOffset = readState().loupeFixedPos as { x: number; y: number } | undefined;
+let recentSwatches: string[] = Array.isArray(readState().imgSwatches)
+  ? (readState().imgSwatches as string[]).slice(0, 12)
+  : [];
 
 let boxes: BBox[] = [];
 let nextBoxId = 1;
 let selectedBoxId: number | undefined;
+
+let markupItems: MarkupItem[] = [];
+let nextMarkupId = 1;
+let markupTool: MarkupTool = 'arrow';
+let markupColor = MARKUP_COLORS[0];
+
+let diffActive = false;
+let diffMode: DiffMode = 'slider';
+let diffSliderPct = 50;
+let compareImgUrl: string | undefined;
+let diffHeatmapUrl: string | undefined;
+let diffSummaryRatio = 0;
 
 let cropRect: PixelRect = { x1: 0, y1: 0, x2: 1, y2: 1 };
 let cropAspect: AspectPreset = 'free';
@@ -90,7 +114,7 @@ let cropAspect: AspectPreset = 'free';
 let hoverPx: { x: number; y: number } | undefined;
 let lastSampledPx: { x: number; y: number } = { x: 0, y: 0 };
 let lastPointerClient: { x: number; y: number } | undefined;
-let currentColorValues: { rgbDisplay: string; rgbCopy: string; hex: string } | undefined;
+let currentColorValues: { rgbDisplay: string; rgbCopy: string; hex: string; hsl: string } | undefined;
 let spaceHeld = false;
 let pureShiftTap = false;
 
@@ -102,12 +126,19 @@ const scrollPad = el('div', { class: 'img-scroll-pad' });
 const canvasWrap = el('div', { class: 'img-canvas-wrap' });
 const imgEl = el('img', { class: 'img-el' });
 imgEl.draggable = false;
+const markupPreviewCanvas = el('canvas', { class: 'img-markup-canvas' });
+markupPreviewCanvas.hidden = true;
+const compareImgEl = el('img', { class: 'img-compare-el' });
+compareImgEl.draggable = false;
+compareImgEl.hidden = true;
+const diffCurtainLine = el('div', { class: 'img-diff-curtain' });
+diffCurtainLine.hidden = true;
 const gridOverlay = el('div', { class: 'img-grid-overlay' });
 gridOverlay.hidden = true;
 const overlaySvg = svgEl('svg', { class: 'img-overlay' });
 const badgesLayer = el('div', { class: 'img-badges-layer' });
 
-canvasWrap.append(imgEl, gridOverlay, overlaySvg, badgesLayer);
+canvasWrap.append(imgEl, markupPreviewCanvas, compareImgEl, diffCurtainLine, gridOverlay, overlaySvg, badgesLayer);
 scrollPad.append(canvasWrap);
 stage.append(scrollPad);
 canvasWrap.hidden = true;
@@ -126,7 +157,7 @@ const loupeCard = el('div', { class: 'img-loupe-card' }, [
   loupeCoord,
   loupeColorRow,
   el('div', { class: 'img-loupe-hint', text: t('loupeCopyHint') }),
-  el('div', { class: 'img-loupe-hint', text: t('loupeSwitchHint') }),
+  el('div', { class: 'img-loupe-hint', text: t('loupeSwitchHint3') }),
   loupeDragHintEl,
 ]);
 const loupe = el('div', { class: 'img-loupe' }, [loupeCanvas, loupeCard]);
@@ -171,6 +202,7 @@ loupe.addEventListener('mousedown', (e) => {
 
 // Status bar
 const metaLabel = el('span', { class: 'dv-label' });
+const recentSwatchesRow = el('div', { class: 'img-swatch-history' });
 const coordPill = el('button', { class: 'img-pill', text: '(—, —)' });
 coordPill.type = 'button';
 const swatchDot = el('span', { class: 'img-color-dot' });
@@ -179,12 +211,16 @@ const hexPill = el('button', { class: 'img-pill' }, [swatchDot, hexText]);
 hexPill.type = 'button';
 const rgbPill = el('button', { class: 'img-pill', text: '—, —, —' });
 rgbPill.type = 'button';
+const hslPill = el('button', { class: 'img-pill', text: 'hsl(—, —, —)' });
+hslPill.type = 'button';
 const statusBar = el('div', { class: 'img-statusbar' }, [
   metaLabel,
   el('div', { class: 'dv-spacer' }),
+  recentSwatchesRow,
   coordPill,
   hexPill,
   rgbPill,
+  hslPill,
 ]);
 
 const toast = el('div', { class: 'img-toast' });
@@ -207,11 +243,58 @@ function copyText(value: string) {
   void navigator.clipboard?.writeText(value).then(() => flashToast(value));
 }
 
+function renderRecentSwatches() {
+  recentSwatchesRow.hidden = recentSwatches.length === 0;
+  recentSwatchesRow.replaceChildren(
+    ...recentSwatches.map((hex) => {
+      const chip = el('button', { class: 'img-swatch-chip', title: `${t('imgSwatches')}: ${hex}` });
+      chip.type = 'button';
+      chip.style.background = hex;
+      chip.addEventListener('click', () => copyText(hex));
+      return chip;
+    }),
+  );
+}
+renderRecentSwatches();
+
+function recordRecentSwatch(hex: string) {
+  if (!hex || !hex.startsWith('#')) {
+    return;
+  }
+  recentSwatches = [hex, ...recentSwatches.filter((c) => c !== hex)].slice(0, 12);
+  writeState({ imgSwatches: recentSwatches });
+  renderRecentSwatches();
+}
+
 function copyActiveColor() {
   if (!currentColorValues) {
     return;
   }
-  copyText(colorMode === 'hex' ? currentColorValues.hex : currentColorValues.rgbCopy);
+  recordRecentSwatch(currentColorValues.hex);
+  const val =
+    colorMode === 'hex'
+      ? currentColorValues.hex
+      : colorMode === 'hsl'
+        ? currentColorValues.hsl
+        : currentColorValues.rgbCopy;
+  copyText(val);
+}
+
+async function copyImageToClipboard(): Promise<void> {
+  if (!sourceCanvas) {
+    return;
+  }
+  try {
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      sourceCanvas!.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
+    });
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      flashToast('PNG');
+    }
+  } catch (err) {
+    notice.flash(errorText(err), 3000);
+  }
 }
 
 coordPill.addEventListener('click', () => {
@@ -221,8 +304,18 @@ coordPill.addEventListener('click', () => {
   const pt = hoverPx ?? lastSampledPx;
   copyText(`${pt.x}, ${pt.y}`);
 });
-hexPill.addEventListener('click', () => copyText(currentColorValues?.hex ?? ''));
-rgbPill.addEventListener('click', () => copyText(currentColorValues?.rgbCopy ?? ''));
+hexPill.addEventListener('click', () => {
+  if (currentColorValues) recordRecentSwatch(currentColorValues.hex);
+  copyText(currentColorValues?.hex ?? '');
+});
+rgbPill.addEventListener('click', () => {
+  if (currentColorValues) recordRecentSwatch(currentColorValues.hex);
+  copyText(currentColorValues?.rgbCopy ?? '');
+});
+hslPill.addEventListener('click', () => {
+  if (currentColorValues) recordRecentSwatch(currentColorValues.hex);
+  copyText(currentColorValues?.hsl ?? '');
+});
 
 // ---------------------------------------------------------------- Crop bar
 
@@ -641,10 +734,42 @@ function copyBoxesJson() {
   const payload = boxes.map((b) => {
     const [x1, y1, x2, y2] = formatBBoxTuple(b);
     const { w, h } = bboxDimensions(b);
-    return { id: b.id, bbox: [x1, y1, x2, y2], width: w, height: h };
+    return {
+      id: b.id,
+      ...(b.label ? { label: b.label } : {}),
+      bbox: [x1, y1, x2, y2],
+      width: w,
+      height: h,
+    };
   });
   copyText(JSON.stringify(payload));
 }
+
+function exportAnnotationsAs(format: AnnotationExportFormat) {
+  if (!naturalW || !naturalH) {
+    return;
+  }
+  if (format === 'yolo') {
+    const { txt, classesTxt } = exportYolo(boxes, naturalW, naturalH);
+    post({ type: 'exportAnnotations', format: 'yolo', content: txt, classesContent: classesTxt });
+  } else if (format === 'coco') {
+    post({ type: 'exportAnnotations', format: 'coco', content: exportCoco(boxes, fileName || 'image.png', naturalW, naturalH) });
+  } else {
+    post({ type: 'exportAnnotations', format: 'labelme', content: exportLabelMe(boxes, fileName || 'image.png', naturalW, naturalH) });
+  }
+}
+
+function annotMenuItems(): (MenuItem | '-')[] {
+  return [
+    { icon: 'folder', label: t('imgImportAnnot'), onClick: () => post({ type: 'importAnnotations' }) },
+    '-',
+    { icon: 'export', label: t('imgExportYolo'), onClick: () => exportAnnotationsAs('yolo') },
+    { icon: 'export', label: t('imgExportCoco'), onClick: () => exportAnnotationsAs('coco') },
+    { icon: 'export', label: t('imgExportLabelme'), onClick: () => exportAnnotationsAs('labelme') },
+  ];
+}
+
+const sidebarAnnotDropdown = moreMenu(t('imgImportAnnot'), annotMenuItems(), 'export');
 
 const boxInput = el('input', { class: 'dv-input' });
 boxInput.type = 'text';
@@ -663,7 +788,7 @@ sidebarClearBtn.addEventListener('click', clearAllBoxes);
 const boxList = el('div', { class: 'img-box-list' });
 sidebar.panel().append(
   el('div', { class: 'img-side-wrap' }, [
-    el('div', { class: 'img-add-box-row' }, [boxInput, addBoxBtn]),
+    el('div', { class: 'img-add-box-row' }, [boxInput, addBoxBtn, sidebarAnnotDropdown]),
     el('div', { class: 'img-side-actions' }, [sidebarCopyJsonBtn, sidebarClearBtn]),
     boxList,
   ]),
@@ -693,6 +818,256 @@ boxInput.addEventListener('keydown', (e) => {
   e.stopPropagation();
 });
 
+// ---------------------------------------------------------------- Markup & Diff bars
+
+const markupToolSeg = segmented<MarkupTool>(
+  t('imgModeMarkup'),
+  [
+    ['arrow', t('imgMarkupArrow')],
+    ['rect', t('imgMarkupRect')],
+    ['mosaic', t('imgMarkupMosaic')],
+    ['text', t('imgMarkupText')],
+  ],
+  markupTool,
+  (next) => {
+    markupTool = next;
+    markupTextInput.hidden = next !== 'text';
+    if (next === 'text') {
+      markupTextInput.focus();
+    }
+  },
+);
+
+const markupTextInput = el('input', { class: 'dv-input img-markup-text-input' });
+markupTextInput.type = 'text';
+markupTextInput.placeholder = t('imgMarkupText');
+markupTextInput.value = 'Note';
+markupTextInput.hidden = true;
+markupTextInput.addEventListener('keydown', (e) => e.stopPropagation());
+
+const markupColorGroup = el(
+  'div',
+  { class: 'img-markup-colors' },
+  MARKUP_COLORS.map((c, idx) => {
+    const dot = el('button', { class: idx === 0 ? 'img-markup-color dv-active' : 'img-markup-color', title: c });
+    dot.type = 'button';
+    dot.style.background = c;
+    dot.addEventListener('click', () => {
+      markupColor = c;
+      for (const child of Array.from(markupColorGroup.children)) {
+        child.classList.toggle('dv-active', child === dot);
+      }
+    });
+    return dot;
+  }),
+);
+
+function refreshMarkupPreview(draft?: MarkupItem) {
+  if (!sourceCanvas || toolMode !== 'markup') {
+    markupPreviewCanvas.hidden = true;
+    return;
+  }
+  const all = draft ? [...markupItems, draft] : markupItems;
+  if (!all.length) {
+    markupPreviewCanvas.hidden = true;
+    return;
+  }
+  const rendered = renderMarkupToCanvas(sourceCanvas, all);
+  markupPreviewCanvas.width = rendered.width;
+  markupPreviewCanvas.height = rendered.height;
+  markupPreviewCanvas.getContext('2d')!.drawImage(rendered, 0, 0);
+  markupPreviewCanvas.hidden = false;
+}
+
+const markupUndoBtn = el('button', { class: 'dv-btn', text: '↶' });
+markupUndoBtn.type = 'button';
+markupUndoBtn.addEventListener('click', () => {
+  markupItems.pop();
+  refreshMarkupPreview();
+});
+
+const cancelMarkupBtn = el('button', { class: 'dv-btn', text: t('cancel') });
+cancelMarkupBtn.type = 'button';
+cancelMarkupBtn.addEventListener('click', () => {
+  markupItems = [];
+  setToolMode('inspect');
+});
+
+async function applyMarkupInPlace(): Promise<void> {
+  if (!sourceCanvas || !markupItems.length) {
+    setToolMode('inspect');
+    return;
+  }
+  const rendered = renderMarkupToCanvas(sourceCanvas, markupItems);
+  const ext = currentExt();
+  markupItems = [];
+  setToolMode('inspect');
+  if (ext === 'gif' || ext === 'avif' || ext === 'svg') {
+    notice.flash(t('imgCropReadonlyFmt'), 4200);
+    const pngBytes = await encodeCanvas(rendered, 'png');
+    post({ type: 'saveImageAs', format: 'png', bytes: pngBytes, suffix: '-markup' });
+    return;
+  }
+  const bytes = await encodeCanvas(rendered, currentNativeFormat());
+  post({ type: 'imageReplace', bytes, label: t('imgApplyMarkup') });
+}
+
+const applyMarkupBtn = el('button', { class: 'dv-btn dv-cm-primary', text: t('imgApplyMarkup') });
+applyMarkupBtn.type = 'button';
+applyMarkupBtn.addEventListener('click', () => void applyMarkupInPlace());
+
+const markupBar = el('div', { class: 'img-crop-bar img-markup-bar' }, [
+  markupToolSeg.node,
+  markupTextInput,
+  markupColorGroup,
+  el('div', { class: 'dv-spacer' }),
+  markupUndoBtn,
+  cancelMarkupBtn,
+  applyMarkupBtn,
+]);
+markupBar.hidden = true;
+
+// Visual Image Diff bar
+const diffModeSeg = segmented<DiffMode>(
+  t('imgCompare'),
+  [
+    ['slider', t('imgDiffSlider')],
+    ['onion', t('imgDiffOnion')],
+    ['pixels', t('imgDiffPixels')],
+  ],
+  diffMode,
+  (m) => {
+    diffMode = m;
+    syncDiffView();
+  },
+);
+
+const diffRange = el('input', { class: 'img-diff-range' });
+diffRange.type = 'range';
+diffRange.min = '0';
+diffRange.max = '100';
+diffRange.value = '50';
+diffRange.addEventListener('input', () => {
+  diffSliderPct = Number(diffRange.value);
+  syncDiffView();
+});
+
+const diffSummaryEl = el('span', { class: 'dv-label img-diff-summary' });
+const exitDiffBtn = el('button', { class: 'dv-btn', text: t('imgExitCompare') });
+exitDiffBtn.type = 'button';
+exitDiffBtn.addEventListener('click', () => exitCompareMode());
+
+const diffBar = el('div', { class: 'img-crop-bar img-diff-bar' }, [
+  diffModeSeg.node,
+  diffRange,
+  diffSummaryEl,
+  el('div', { class: 'dv-spacer' }),
+  exitDiffBtn,
+]);
+diffBar.hidden = true;
+
+function syncDiffView() {
+  diffBar.hidden = !diffActive;
+  if (!diffActive || !compareImgUrl) {
+    compareImgEl.hidden = true;
+    diffCurtainLine.hidden = true;
+    return;
+  }
+  compareImgEl.hidden = false;
+  diffRange.hidden = diffMode === 'pixels';
+  if (diffMode === 'slider') {
+    compareImgEl.src = compareImgUrl;
+    compareImgEl.style.opacity = '1';
+    compareImgEl.style.clipPath = `inset(0 0 0 ${diffSliderPct}%)`;
+    diffCurtainLine.hidden = false;
+    diffCurtainLine.style.left = `${diffSliderPct}%`;
+  } else if (diffMode === 'onion') {
+    compareImgEl.src = compareImgUrl;
+    compareImgEl.style.clipPath = '';
+    compareImgEl.style.opacity = String(diffSliderPct / 100);
+    diffCurtainLine.hidden = true;
+  } else {
+    compareImgEl.src = diffHeatmapUrl ?? compareImgUrl;
+    compareImgEl.style.clipPath = '';
+    compareImgEl.style.opacity = '1';
+    diffCurtainLine.hidden = true;
+  }
+  diffSummaryEl.textContent = t('imgDiffSummary', (diffSummaryRatio * 100).toFixed(2));
+}
+
+function exitCompareMode() {
+  diffActive = false;
+  if (compareImgUrl) {
+    URL.revokeObjectURL(compareImgUrl);
+    compareImgUrl = undefined;
+  }
+  diffHeatmapUrl = undefined;
+  syncDiffView();
+}
+
+async function activateCompareImage(_otherName: string, otherBytes: Uint8Array): Promise<void> {
+  if (!sourceCanvas || !sampleCtx) {
+    return;
+  }
+  if (compareImgUrl) {
+    URL.revokeObjectURL(compareImgUrl);
+  }
+  const blob = new Blob([toArrayBuffer(otherBytes)]);
+  const url = URL.createObjectURL(blob);
+  compareImgUrl = url;
+
+  const otherImg = new Image();
+  await new Promise<void>((resolve, reject) => {
+    otherImg.onload = () => resolve();
+    otherImg.onerror = () => reject(new Error('Compare image decode failed'));
+    otherImg.src = url;
+  });
+
+  const ow = otherImg.naturalWidth || naturalW;
+  const oh = otherImg.naturalHeight || naturalH;
+  const otherCanvas = document.createElement('canvas');
+  otherCanvas.width = ow;
+  otherCanvas.height = oh;
+  const otherCtx = otherCanvas.getContext('2d')!;
+  otherCtx.drawImage(otherImg, 0, 0, ow, oh);
+
+  const dataA = sampleCtx.getImageData(0, 0, naturalW, naturalH).data;
+  const dataB = otherCtx.getImageData(0, 0, ow, oh).data;
+  const diff = computePixelDiff(dataA, naturalW, naturalH, dataB, ow, oh);
+  diffSummaryRatio = diff.ratio;
+
+  const heatCanvas = document.createElement('canvas');
+  heatCanvas.width = diff.width;
+  heatCanvas.height = diff.height;
+  heatCanvas.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(diff.out), diff.width, diff.height), 0, 0);
+  diffHeatmapUrl = heatCanvas.toDataURL('image/png');
+
+  diffActive = true;
+  setToolMode('inspect');
+  syncDiffView();
+}
+
+diffCurtainLine.addEventListener('mousedown', (e) => {
+  if (e.button !== 0 || !diffActive || diffMode !== 'slider') {
+    return;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  const move = (ev: MouseEvent) => {
+    const rect = canvasWrap.getBoundingClientRect();
+    const pct = clamp(((ev.clientX - rect.left) / Math.max(1, rect.width)) * 100, 0, 100);
+    diffSliderPct = Math.round(pct);
+    diffRange.value = String(diffSliderPct);
+    syncDiffView();
+  };
+  const up = () => {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+});
+
 // ---------------------------------------------------------------- toolbar
 
 const modeSeg = segmented<ToolMode>(
@@ -700,6 +1075,7 @@ const modeSeg = segmented<ToolMode>(
   [
     ['inspect', t('imgModePan')],
     ['bbox', t('imgModeBbox')],
+    ['markup', t('imgModeMarkup')],
     ['crop', t('imgModeCrop')],
   ],
   toolMode,
@@ -772,6 +1148,27 @@ function convertMenuItems(): MenuItem[] {
 }
 
 const convertDropdown = moreMenu(t('convertMenu'), convertMenuItems(), 'export');
+const annotDropdown = moreMenu(t('imgImportAnnot'), annotMenuItems(), 'folder');
+const compareDropdown = moreMenu(
+  t('imgCompare'),
+  [
+    { icon: 'compare', label: t('imgCompare'), onClick: () => post({ type: 'pickCompareImage' }) },
+    {
+      icon: 'history',
+      label: t('imgCompareHistory'),
+      visible: () => getFileState().history,
+      onClick: () => post({ type: 'pickCompareImage', fromHistory: true }),
+    },
+    {
+      icon: 'close',
+      label: t('imgExitCompare'),
+      visible: () => diffActive,
+      onClick: () => exitCompareMode(),
+    },
+  ],
+  'compare',
+);
+const copyImgBtn = iconButton('copy', t('imgCopyClipboard'), () => void copyImageToClipboard());
 const rotCCWBtn = iconButton('rotateCCW', t('imgRotateCCW'), () => void applyTransform('rotCCW'));
 const rotCWBtn = iconButton('rotateCW', t('imgRotateCW'), () => void applyTransform('rotCW'));
 const flipHBtn = iconButton('flipH', t('imgFlipH'), () => void applyTransform('flipH'));
@@ -795,17 +1192,29 @@ const topBar = customToolbar({
     { id: 'zoom', nodes: [zoomGroup] },
     {
       id: 'transform',
-      nodes: [rotCCWBtn, rotCWBtn, flipHBtn, flipVBtn, resizeBtn, convertDropdown],
+      nodes: [rotCCWBtn, rotCWBtn, flipHBtn, flipVBtn, resizeBtn, copyImgBtn, compareDropdown, convertDropdown],
     },
     {
       id: 'bbox',
-      nodes: [loupePosSeg.node, copyJsonBtn, clearBtn],
+      nodes: [loupePosSeg.node, annotDropdown, copyJsonBtn, clearBtn],
     },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
     openExternalMenuItem(),
+    { label: t('imgCopyClipboard'), icon: 'copy', onClick: () => void copyImageToClipboard() },
+    { label: t('imgCompare'), icon: 'compare', onClick: () => post({ type: 'pickCompareImage' }) },
+    {
+      label: t('imgCompareHistory'),
+      icon: 'history',
+      visible: () => getFileState().history,
+      onClick: () => post({ type: 'pickCompareImage', fromHistory: true }),
+    },
+    { label: t('imgImportAnnot'), icon: 'folder', onClick: () => post({ type: 'importAnnotations' }) },
+    { label: t('imgExportYolo'), icon: 'export', onClick: () => exportAnnotationsAs('yolo') },
+    { label: t('imgExportCoco'), icon: 'export', onClick: () => exportAnnotationsAs('coco') },
+    { label: t('imgExportLabelme'), icon: 'export', onClick: () => exportAnnotationsAs('labelme') },
     { label: t('imgRotateCCW'), icon: 'rotateCCW', onClick: () => void applyTransform('rotCCW') },
     { label: t('imgRotateCW'), icon: 'rotateCW', onClick: () => void applyTransform('rotCW') },
     { label: t('imgFlipH'), icon: 'flipH', onClick: () => void applyTransform('flipH') },
@@ -851,14 +1260,23 @@ function setToolMode(mode: ToolMode, seedCrop?: PixelRect) {
   writeState({ imgMode: mode });
   stage.classList.toggle('img-mode-inspect', mode === 'inspect');
   stage.classList.toggle('img-mode-bbox', mode === 'bbox');
+  stage.classList.toggle('img-mode-markup', mode === 'markup');
   stage.classList.toggle('img-mode-crop', mode === 'crop');
   cropBar.hidden = mode !== 'crop';
-  if (mode === 'crop') {
+  markupBar.hidden = mode !== 'markup';
+  if (mode !== 'markup') {
+    markupPreviewCanvas.hidden = true;
+  } else {
+    refreshMarkupPreview();
+  }
+  if (mode === 'crop' || mode === 'markup') {
     if (resizeOpen) {
       setResizeOpen(false);
     }
-    const activeBox = seedCrop ?? boxes.find((b) => b.id === selectedBoxId);
-    initDefaultCropRect(activeBox);
+    if (mode === 'crop') {
+      const activeBox = seedCrop ?? boxes.find((b) => b.id === selectedBoxId);
+      initDefaultCropRect(activeBox);
+    }
     if (getAppearance().loupePosition === 'follow') {
       loupe.hidden = true;
     }
@@ -874,6 +1292,8 @@ canvasWrap.classList.toggle('img-checker', checkerboard);
 app.append(
   topBar.node,
   cropBar,
+  markupBar,
+  diffBar,
   resizeBar,
   notice.node,
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, stage])]),
@@ -1044,29 +1464,36 @@ function refreshLoupeColorLabel() {
   if (!currentColorValues) {
     return;
   }
-  loupeColorText.textContent = colorMode === 'hex' ? currentColorValues.hex : currentColorValues.rgbDisplay;
+  loupeColorText.textContent =
+    colorMode === 'hex'
+      ? currentColorValues.hex
+      : colorMode === 'hsl'
+        ? currentColorValues.hsl
+        : currentColorValues.rgbDisplay;
 }
 
 function updatePixelReadout(x: number, y: number) {
   lastSampledPx = { x, y };
   const [r, g, b, a] = samplePixel(x, y);
   const hex = rgbToHex(r, g, b);
+  const hsl = rgbToHsl(r, g, b);
   const rgbDisplay = a >= 255 ? `${r},  ${g},  ${b}` : `${r}, ${g}, ${b}, ${(a / 255).toFixed(2)}`;
   const rgbCopy = a >= 255 ? `${r}, ${g}, ${b}` : formatRgb(r, g, b, a);
-  currentColorValues = { rgbDisplay, rgbCopy, hex };
+  currentColorValues = { rgbDisplay, rgbCopy, hex, hsl };
 
   const coordStr = `(${x} ,  ${y})`;
   coordPill.textContent = `(${x}, ${y})`;
   swatchDot.style.background = hex;
   hexText.textContent = hex;
   rgbPill.textContent = rgbCopy;
+  hslPill.textContent = hsl;
 
   loupeCoord.textContent = coordStr;
   loupeSwatch.style.background = hex;
-  loupeColorText.textContent = colorMode === 'hex' ? hex : rgbDisplay;
+  refreshLoupeColorLabel();
   paintLoupe(x, y);
 
-  if (getAppearance().loupePosition === 'fixed' || toolMode !== 'crop') {
+  if (getAppearance().loupePosition === 'fixed' || (toolMode !== 'crop' && toolMode !== 'markup')) {
     loupe.hidden = false;
     positionLoupe();
   }
@@ -1206,7 +1633,7 @@ function renderOverlay() {
   }
 
   const drawOneBox = (
-    b: { id?: number; x1: number; y1: number; x2: number; y2: number; color: string },
+    b: { id?: number; x1: number; y1: number; x2: number; y2: number; color: string; label?: string },
     selected: boolean,
   ) => {
     const rx = b.x1 * zoom;
@@ -1258,9 +1685,10 @@ function renderOverlay() {
     const { w, h } = bboxDimensions(b);
     const tupleText = `[${tuple.join(', ')}]`;
     const prefix = b.id !== undefined ? `#${b.id} ` : '';
+    const labelPart = b.label?.trim() ? `${b.label.trim()} ` : '';
     const badge = el('div', {
       class: 'img-bbox-badge',
-      text: `${prefix}${tupleText} · ${w}×${h}`,
+      text: `${prefix}${labelPart}${tupleText} · ${w}×${h}`,
       title: tupleText,
     });
     badge.style.background = b.color;
@@ -1336,6 +1764,26 @@ function renderBoxes() {
         delBtn.classList.add('img-box-mini');
         delBtn.addEventListener('click', (e) => e.stopPropagation());
 
+        const labelInp = el('input', { class: 'dv-input img-box-label-input' });
+        labelInp.type = 'text';
+        labelInp.value = b.label ?? '';
+        labelInp.placeholder = t('imgLabelPlaceholder');
+        labelInp.addEventListener('click', (e) => e.stopPropagation());
+        labelInp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            labelInp.blur();
+          }
+          e.stopPropagation();
+        });
+        labelInp.addEventListener('input', () => {
+          b.label = labelInp.value.trim() || undefined;
+          if (fileName) {
+            writeState({ savedBoxesFile: fileName, savedBoxes: boxes });
+          }
+          renderOverlay();
+        });
+
         const card = el(
           'div',
           { class: b.id === selectedBoxId ? 'img-box-card img-box-active' : 'img-box-card' },
@@ -1346,6 +1794,7 @@ function renderBoxes() {
               el('span', { class: 'img-box-dim', text: `${w} × ${h} px` }),
               el('span', { class: 'img-box-actions' }, [cropToBtn, copyBtn, delBtn]),
             ]),
+            labelInp,
             el('div', { class: 'img-box-coords', text: tupleStr }),
           ],
         );
@@ -1410,6 +1859,58 @@ stage.addEventListener('mousedown', (e) => {
     return;
   }
   const target = e.target as Element | null;
+
+  // --- Markup Mode interactions (Arrow / Rectangle / Mosaic / Text) ---
+  if (toolMode === 'markup' && e.button === 0 && !spaceHeld) {
+    const start = clientToImageFloat(e.clientX, e.clientY);
+    if (start.x >= 0 && start.y >= 0 && start.x <= naturalW && start.y <= naturalH) {
+      e.preventDefault();
+      const sx = clamp(Math.round(start.x), 0, naturalW - 1);
+      const sy = clamp(Math.round(start.y), 0, naturalH - 1);
+      if (markupTool === 'text') {
+        const label = markupTextInput.value.trim() || 'Note';
+        markupItems.push({
+          id: nextMarkupId++,
+          kind: 'text',
+          x1: sx,
+          y1: sy,
+          x2: sx,
+          y2: sy,
+          color: markupColor,
+          text: label,
+        });
+        refreshMarkupPreview();
+        return;
+      }
+      let draft: MarkupItem | undefined;
+      const move = (ev: MouseEvent) => {
+        const cur = clientToImageFloat(ev.clientX, ev.clientY);
+        const ex = clamp(Math.round(cur.x), 0, naturalW);
+        const ey = clamp(Math.round(cur.y), 0, naturalH);
+        draft = {
+          id: 0,
+          kind: markupTool,
+          x1: sx,
+          y1: sy,
+          x2: ex,
+          y2: ey,
+          color: markupColor,
+        };
+        refreshMarkupPreview(draft);
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        if (draft && (Math.abs(draft.x2 - draft.x1) >= 2 || Math.abs(draft.y2 - draft.y1) >= 2)) {
+          markupItems.push({ ...draft, id: nextMarkupId++ });
+        }
+        refreshMarkupPreview();
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      return;
+    }
+  }
 
   // --- Crop Mode interactions (8-handle resize, move inside, or drag new crop rect) ---
   if (toolMode === 'crop' && e.button === 0 && !spaceHeld) {
@@ -1681,6 +2182,16 @@ window.addEventListener('keydown', (e) => {
   } else if (toolMode === 'crop' && e.key === 'Escape') {
     e.preventDefault();
     setToolMode('inspect');
+  } else if (toolMode === 'markup' && e.key === 'Enter') {
+    e.preventDefault();
+    void applyMarkupInPlace();
+  } else if (toolMode === 'markup' && e.key === 'Escape') {
+    e.preventDefault();
+    markupItems = [];
+    setToolMode('inspect');
+  } else if (diffActive && e.key === 'Escape') {
+    e.preventDefault();
+    exitCompareMode();
   } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'c') {
     if (hoverPx || getAppearance().loupePosition === 'fixed') {
       e.preventDefault();
@@ -1700,7 +2211,7 @@ window.addEventListener('keyup', (e) => {
   } else if (e.key === 'Shift') {
     if (pureShiftTap) {
       pureShiftTap = false;
-      colorMode = colorMode === 'rgb' ? 'hex' : 'rgb';
+      colorMode = colorMode === 'rgb' ? 'hex' : colorMode === 'hex' ? 'hsl' : 'rgb';
       writeState({ imgColorMode: colorMode });
       if (hoverPx) {
         updatePixelReadout(hoverPx.x, hoverPx.y);
@@ -1799,6 +2310,21 @@ async function loadImage(name: string, bytes: Uint8Array) {
 onMessage((message) => {
   if (message.type === 'load') {
     void loadImage(message.name, message.bytes);
+  } else if (message.type === 'compareImage') {
+    void activateCompareImage(message.name, message.bytes).catch((err) => notice.flash(errorText(err), 3500));
+  } else if (message.type === 'annotationsLoaded') {
+    if (naturalW && naturalH) {
+      const imported = parseAnnotationContent(message.content, naturalW, naturalH, {
+        classesText: message.classesText,
+        fileName,
+      });
+      boxes = imported.map((b) => ({ id: nextBoxId++, ...b }));
+      selectedBoxId = boxes[0]?.id;
+      if (boxes.length && !sidebar.open) {
+        sidebar.setOpen(true);
+      }
+      renderBoxes();
+    }
   } else if (message.type === 'viewState') {
     svgViewSeg.set(message.split ? 'split' : 'canvas');
   } else if (message.type === 'error') {

@@ -1,9 +1,15 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../common/protocol';
 import { saveConvertedImage } from './fileActions';
-import { snapshot } from './history';
+import { listVersions, snapshot } from './history';
 import { ImageSession, plainU8 } from './imageSession';
 import { configureWebview, debounce, handleCommonMessage, onWebviewMessage, parentUri, t } from './webviewHtml';
+
+function stemOf(uri: vscode.Uri): string {
+  const name = baseName(uri);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(0, dot) : name;
+}
 
 function baseName(uri: vscode.Uri): string {
   return uri.path.slice(uri.path.lastIndexOf('/') + 1);
@@ -145,6 +151,107 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
           case 'saveImageAs': {
             void saveConvertedImage(document.uri, message.format, plainU8(message.bytes), message.suffix).catch(
               (err: unknown) => vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+            );
+            break;
+          }
+          case 'pickCompareImage': {
+            void (async () => {
+              if (message.fromHistory) {
+                const versions = await listVersions(document.uri);
+                if (!versions.length) {
+                  void vscode.window.showInformationMessage(t('historyEmpty'));
+                  return;
+                }
+                const bytes = await vscode.workspace.fs.readFile(versions[0].uri);
+                post({
+                  type: 'compareImage',
+                  name: new Date(versions[0].time).toLocaleString(),
+                  bytes: plainU8(bytes),
+                });
+                return;
+              }
+              const picked = await vscode.window.showOpenDialog({
+                defaultUri: parentUri(document.uri),
+                canSelectMany: false,
+                filters: { Images: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'ico', 'avif', 'svg'] },
+              });
+              if (!picked?.[0]) {
+                return;
+              }
+              const bytes = await vscode.workspace.fs.readFile(picked[0]);
+              post({ type: 'compareImage', name: baseName(picked[0]), bytes: plainU8(bytes) });
+            })().catch((err: unknown) =>
+              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+            );
+            break;
+          }
+          case 'importAnnotations': {
+            void (async () => {
+              const picked = await vscode.window.showOpenDialog({
+                defaultUri: parentUri(document.uri),
+                canSelectMany: false,
+                filters: { 'Annotations (YOLO / COCO / LabelMe)': ['txt', 'json'] },
+              });
+              if (!picked?.[0]) {
+                return;
+              }
+              const fileUri = picked[0];
+              const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(fileUri));
+              const isTxt = fileUri.path.toLowerCase().endsWith('.txt');
+              let classesText: string | undefined;
+              if (isTxt) {
+                try {
+                  const clsUri = vscode.Uri.joinPath(parentUri(fileUri), 'classes.txt');
+                  classesText = new TextDecoder().decode(await vscode.workspace.fs.readFile(clsUri));
+                } catch {
+                  // Optional classes.txt not present.
+                }
+              }
+              post({
+                type: 'annotationsLoaded',
+                format: isTxt ? 'yolo' : 'coco',
+                content,
+                classesText,
+              });
+            })().catch((err: unknown) =>
+              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+            );
+            break;
+          }
+          case 'exportAnnotations': {
+            void (async () => {
+              const stem = stemOf(document.uri);
+              const defaultName =
+                message.format === 'yolo'
+                  ? `${stem}.txt`
+                  : message.format === 'coco'
+                    ? `${stem}.coco.json`
+                    : `${stem}.json`;
+              const target = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.joinPath(parentUri(document.uri), defaultName),
+                filters:
+                  message.format === 'yolo'
+                    ? { 'YOLO Annotations': ['txt'] }
+                    : { 'JSON Annotations': ['json'] },
+              });
+              if (!target) {
+                return;
+              }
+              await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(message.content));
+              if (message.format === 'yolo' && message.classesContent) {
+                const clsUri = vscode.Uri.joinPath(parentUri(target), 'classes.txt');
+                await vscode.workspace.fs.writeFile(clsUri, new TextEncoder().encode(message.classesContent));
+              }
+              const openLabel = t('open');
+              const choice = await vscode.window.showInformationMessage(
+                t('exportSaved', vscode.workspace.asRelativePath(target, false)),
+                openLabel,
+              );
+              if (choice === openLabel) {
+                await vscode.window.showTextDocument(target);
+              }
+            })().catch((err: unknown) =>
+              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
             );
             break;
           }

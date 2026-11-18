@@ -3,8 +3,9 @@
 // harness encodes as base64).
 import type { StringKey } from './strings';
 
-export type ViewerKind = 'markdown' | 'sheet' | 'docx' | 'pdf' | 'pptx' | 'text' | 'image';
+export type ViewerKind = 'markdown' | 'sheet' | 'docx' | 'pdf' | 'pptx' | 'text' | 'image' | 'epub' | 'archive';
 export type ImageExportFormat = 'png' | 'jpg' | 'webp' | 'bmp' | 'ico';
+export type AnnotationExportFormat = 'yolo' | 'coco' | 'labelme';
 
 // ---------------------------------------------------------------- spreadsheet model
 
@@ -103,6 +104,7 @@ export interface DocComment {
   /** Normalised [0..1] box/pin coordinates on the page or slide. */
   rect?: { x: number; y: number; w: number; h: number };
   color?: string;
+  subtype?: 'pin' | 'box' | 'highlight';
 }
 
 export type DocMutation =
@@ -115,11 +117,47 @@ export type DocMutation =
       quote?: string;
       rect?: { x: number; y: number; w: number; h: number };
       color?: string;
+      subtype?: 'pin' | 'box' | 'highlight';
     }
   | { kind: 'updateComment'; id: string; text: string }
   | { kind: 'deleteComment'; id: string }
   | { kind: 'editDocxParagraph'; pIndex: number; text: string; expected: string }
-  | { kind: 'editPptxText'; slideIndex: number; shapeIndex: number; text: string; expected: string };
+  | { kind: 'editPptxText'; slideIndex: number; shapeIndex: number; text: string; expected: string }
+  | { kind: 'editPptxNote'; slideIndex: number; text: string }
+  | { kind: 'rotatePdfPages'; pages?: number[]; delta: 90 | -90 }
+  | { kind: 'deletePdfPage'; page: number }
+  | { kind: 'movePdfPage'; fromPage: number; toPage: number }
+  | { kind: 'appendPdfBytes'; otherBytes: Uint8Array; label?: string };
+
+// ---------------------------------------------------------------- epub & archive models
+
+export interface EpubChapter {
+  id: string;
+  title: string;
+  html: string;
+}
+
+export interface EpubTocItem {
+  level: number;
+  text: string;
+  chapterIndex: number;
+  anchor?: string;
+}
+
+export interface EpubBookData {
+  title: string;
+  author: string;
+  chapters: EpubChapter[];
+  toc: EpubTocItem[];
+}
+
+export interface ArchiveEntryInfo {
+  path: string;
+  isDir: boolean;
+  size: number;
+  compressedSize: number;
+  mtime?: string;
+}
 
 // ---------------------------------------------------------------- markdown
 
@@ -287,10 +325,30 @@ export type HostMessage =
       editable?: boolean;
       docxParagraphs?: string[];
       pptxShapes?: string[][];
+      pptxNotes?: string[];
       slideAspect?: number;
     }
-  | { type: 'comments'; comments: DocComment[]; docxParagraphs?: string[] }
+  | { type: 'comments'; comments: DocComment[]; docxParagraphs?: string[]; pptxNotes?: string[] }
   | { type: 'text'; name: string; body: string }
+  | { type: 'epub'; book: EpubBookData }
+  | {
+      type: 'archive';
+      name: string;
+      totalSize: number;
+      compressedTotal: number;
+      entries: ArchiveEntryInfo[];
+    }
+  | {
+      type: 'archiveEntry';
+      path: string;
+      kind: 'text' | 'image' | 'binary';
+      text?: string;
+      mime?: string;
+      bytes?: Uint8Array;
+      size: number;
+    }
+  | { type: 'compareImage'; name: string; bytes: Uint8Array }
+  | { type: 'annotationsLoaded'; format: AnnotationExportFormat; content: string; classesText?: string }
   /** `source` is the full Markdown text, for editing a block in place. */
   | { type: 'render'; html: string; toc: TocEntry[]; source: string }
   | { type: 'scrollTo'; line: number }
@@ -337,6 +395,28 @@ export type WebviewMessage =
   | { type: 'imageReplace'; bytes: Uint8Array; label?: string }
   /** Image: save a converted or cropped copy to a user-chosen path. */
   | { type: 'saveImageAs'; format: ImageExportFormat; bytes: Uint8Array; suffix?: string }
+  /** Image: pick a second image (or latest history version) for visual Image Diff. */
+  | { type: 'pickCompareImage'; fromHistory?: boolean }
+  /** Image: load sibling or user-selected YOLO / COCO / LabelMe annotation file. */
+  | { type: 'importAnnotations' }
+  /** Image: save YOLO / COCO / LabelMe annotations next to the image. */
+  | { type: 'exportAnnotations'; format: AnnotationExportFormat; content: string; classesContent?: string }
+  /** Generic text file export (e.g. comments Markdown report, Mermaid SVG). */
+  | { type: 'saveTextExport'; ext: string; suffix?: string; content: string }
+  /** Generic binary file export (e.g. Mermaid PNG). */
+  | { type: 'saveBytesExport'; ext: string; suffix?: string; bytes: Uint8Array }
+  /** Markdown: save pasted clipboard image into `assets/` and insert markdown link. */
+  | { type: 'pasteImage'; bytes: Uint8Array; ext: string; insertAtLine?: number }
+  /** Markdown: open local image inside DocsView Image Inspector. */
+  | { type: 'inspectImage'; src: string }
+  /** PDF: extract a page range into a new PDF file. */
+  | { type: 'extractPdfPages'; currentPage: number; totalPages: number }
+  /** PDF: merge one or more external PDF files into the current PDF. */
+  | { type: 'mergePdfs' }
+  /** Archive: preview an entry inside a ZIP/TAR archive. */
+  | { type: 'previewArchiveEntry'; path: string }
+  /** Archive: extract an entry to disk and open it in VS Code. */
+  | { type: 'extractArchiveEntry'; path: string }
   /** Sent once per load: the document is on screen, or could not be rendered. */
   | { type: 'status'; ok: boolean; detail?: string };
 

@@ -22,11 +22,21 @@ import {
 import { createZoom } from '../shared/zoom';
 import './sheet.css';
 import {
+  collectColumnUniqueValues,
+  computeAutoFillChanges,
+  computeColumnNumericBounds,
   computeSelectionStats,
+  condFormatGradient,
   emptyView,
+  hasAnyFilter,
+  hasColumnFilter,
   isActive,
+  numericValue,
+  selectionToJson,
   selectionToMarkdownTable,
   viewRows,
+  type CondFormatKind,
+  type NumFilterOp,
   type SheetView,
 } from './view';
 
@@ -37,6 +47,8 @@ const models = new Map<number, SheetModel>();
 const widths = new Map<number, number[]>();
 /** Sort and filter per sheet. */
 const views = new Map<number, SheetView>();
+/** Per-sheet, per-column conditional formatting ('none' | 'bar' | 'heat'). */
+const condFormats = new Map<number, Record<number, CondFormatKind>>();
 /** Source row of each displayed row while a sort or filter is active. */
 let rowMap: number[] | undefined;
 let grid: Grid | undefined;
@@ -171,31 +183,23 @@ const excelView = segmented<'styled' | 'plain'>(
 csvView.node.hidden = true;
 excelView.node.hidden = true;
 
-// ---------------------------------------------------------------- find
+// ---------------------------------------------------------------- find & replace
 
 /** Monotonic counter incremented whenever cell data or displayed row order changes. */
 let findDataEpoch = 0;
-let findCache: { sheet: number; epoch: number; query: string; hits: number[] } | undefined;
+let findCache: { sheet: number; epoch: number; query: string; hits: number[]; hitSet: Set<number> } | undefined;
 let findMatchStatus = '';
 
-/** Selects the next (or previous) displayed cell whose text contains the query, wrapping around. */
-function findNext(backwards = false) {
+function rebuildFindCache(): { hits: number[]; hitSet: Set<number> } | undefined {
   const model = models.get(active);
   const query = sheetFindBar.input.value.trim().toLowerCase();
-  if (!model || !grid || !query) {
-    findMatchStatus = '';
-    sheetFindBar.refreshCount('');
-    return;
-  }
-  const rowCount = rowMap ? rowMap.length : model.rowCount;
-  const { colCount } = model;
-  if (!rowCount || !colCount) {
-    findMatchStatus = t('noMatch');
-    sheetFindBar.refreshCount(findMatchStatus);
-    return;
+  if (!model || !query) {
+    findCache = undefined;
+    return undefined;
   }
   if (!findCache || findCache.sheet !== active || findCache.epoch !== findDataEpoch || findCache.query !== query) {
     const hits: number[] = [];
+    const { colCount } = model;
     const maxDisplayRow = rowMap ? rowMap.length : Math.min(model.rowCount, model.rows.length);
     for (let r = 0; r < maxDisplayRow; r++) {
       const row = model.rows[toSource(r)];
@@ -210,9 +214,33 @@ function findNext(backwards = false) {
         }
       }
     }
-    findCache = { sheet: active, epoch: findDataEpoch, query, hits };
+    findCache = { sheet: active, epoch: findDataEpoch, query, hits, hitSet: new Set(hits) };
   }
-  const { hits } = findCache;
+  return findCache;
+}
+
+/** Selects the next (or previous) displayed cell whose text contains the query, wrapping around. */
+function findNext(backwards = false) {
+  const model = models.get(active);
+  const query = sheetFindBar.input.value.trim().toLowerCase();
+  if (!model || !grid || !query) {
+    findCache = undefined;
+    findMatchStatus = '';
+    sheetFindBar.refreshCount('');
+    grid?.refreshHighlights();
+    return;
+  }
+  const rowCount = rowMap ? rowMap.length : model.rowCount;
+  const { colCount } = model;
+  if (!rowCount || !colCount) {
+    findMatchStatus = t('noMatch');
+    sheetFindBar.refreshCount(findMatchStatus);
+    grid.refreshHighlights();
+    return;
+  }
+  const cache = rebuildFindCache();
+  const hits = cache?.hits ?? [];
+  grid.refreshHighlights();
   if (!hits.length) {
     findMatchStatus = t('noMatch');
     sheetFindBar.refreshCount(findMatchStatus);
@@ -242,20 +270,157 @@ const sheetFindBar = createFindBar(
   {
     onInput: (q) => {
       if (!q.trim()) {
+        findCache = undefined;
         findMatchStatus = '';
+        grid?.refreshHighlights();
         return;
       }
       findNext(false);
     },
     step: (backwards) => findNext(backwards),
     clear: () => {
+      findCache = undefined;
       findMatchStatus = '';
+      grid?.refreshHighlights();
     },
     status: () => findMatchStatus,
   },
   gridHost,
   { ariaLabel: t('findInSheet') },
 );
+
+function replaceSubstringCI(source: string, needle: string, replacement: string): string {
+  if (!needle) {
+    return source;
+  }
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return source.replace(new RegExp(escaped, 'gi'), () => replacement);
+}
+
+const replaceInput = el('input', { class: 'dv-input sheet-replace-input' });
+replaceInput.type = 'text';
+replaceInput.placeholder = t('replaceWith');
+replaceInput.setAttribute('aria-label', t('replaceWith'));
+
+function doReplaceOne() {
+  if (!canEdit()) {
+    flash(t('locked'));
+    return;
+  }
+  const model = models.get(active);
+  const query = sheetFindBar.input.value.trim();
+  if (!model || !grid || !query) {
+    sheetFindBar.input.focus();
+    return;
+  }
+  const sel = grid.selection;
+  const srcR = toSource(sel.r);
+  const curCell = srcR >= 0 ? model.rows[srcR]?.[sel.c] : undefined;
+  const curText = cellText(curCell);
+  if (
+    curText.toLowerCase().includes(query.toLowerCase()) &&
+    !(typeof curCell === 'object' && curCell?.ro)
+  ) {
+    const rawVal = cellRaw(curCell);
+    const nextText = replaceSubstringCI(rawVal, query, replaceInput.value);
+    if (nextText !== rawVal) {
+      edit([{ r: sel.r, c: sel.c, text: nextText }]);
+    }
+  }
+  findNext(false);
+}
+
+function doReplaceAll() {
+  if (!canEdit()) {
+    flash(t('locked'));
+    return;
+  }
+  const model = models.get(active);
+  const query = sheetFindBar.input.value.trim();
+  if (!model || !grid || !query) {
+    sheetFindBar.input.focus();
+    return;
+  }
+  const cache = rebuildFindCache();
+  if (!cache?.hits.length) {
+    flash(t('noMatch'));
+    return;
+  }
+  const { colCount } = model;
+  const changes: CellChange[] = [];
+  for (const hit of cache.hits) {
+    const r = Math.floor(hit / colCount);
+    const c = hit % colCount;
+    const srcR = toSource(r);
+    const cell = srcR >= 0 ? model.rows[srcR]?.[c] : undefined;
+    if (typeof cell === 'object' && cell?.ro) {
+      continue;
+    }
+    const rawVal = cellRaw(cell);
+    const nextText = replaceSubstringCI(rawVal, query, replaceInput.value);
+    if (nextText !== rawVal) {
+      changes.push({ r, c, text: nextText });
+    }
+  }
+  if (changes.length) {
+    edit(changes);
+  }
+  flash(t('replacedCount', changes.length));
+}
+
+const replaceOneBtn = textButton(t('replaceOne'), t('replaceOne'), doReplaceOne);
+const replaceAllBtn = textButton(t('replaceAll'), t('replaceAll'), doReplaceAll);
+const replaceCloseBtn = iconButton('close', t('cancel'), () => setReplaceBarOpen(false));
+const replaceBar = el('div', { class: 'sheet-replace-bar' }, [
+  el('span', { class: 'dv-label', text: t('replace') }),
+  replaceInput,
+  replaceOneBtn,
+  replaceAllBtn,
+  replaceCloseBtn,
+]);
+replaceBar.hidden = true;
+
+replaceInput.addEventListener('keydown', (e) => {
+  if (e.isComposing) {
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey || e.altKey) {
+      doReplaceAll();
+    } else {
+      doReplaceOne();
+    }
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    setReplaceBarOpen(false);
+    grid?.focus();
+  }
+});
+
+const replaceToggle = toggleButton('replace', `${t('replace')} (Ctrl/Cmd+H)`, (on) => setReplaceBarOpen(on));
+replaceToggle.node.hidden = true;
+
+function setReplaceBarOpen(on: boolean) {
+  const allowed = on && Boolean(info?.editable);
+  replaceBar.hidden = !allowed;
+  replaceToggle.set(allowed);
+  if (allowed) {
+    if (!sheetFindBar.input.value.trim()) {
+      sheetFindBar.input.focus();
+    } else {
+      replaceInput.focus();
+      replaceInput.select();
+    }
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'h' && info?.editable) {
+    e.preventDefault();
+    setReplaceBarOpen(true);
+  }
+});
 
 // ---------------------------------------------------------------- sort & filter status
 
@@ -279,13 +444,37 @@ function updateFilterChip(model: SheetModel) {
   }
   const fixed = fixedRows(model, view);
   const parts: string[] = [];
-  if (Object.values(view.filters).some((q) => q.trim())) {
+  if (hasAnyFilter(view)) {
     parts.push(t('filtered', rowMap.length - Math.min(fixed, model.rows.length), Math.max(0, model.rows.length - fixed)));
   }
   if (view.sortCol !== undefined) {
     parts.push(t('sortedBy', columnName(view.sortCol), t(view.sortDir === -1 ? 'desc' : 'asc')));
   }
   filterChipText.textContent = parts.join(' · ');
+}
+
+function condMapOf(index: number): Record<number, CondFormatKind> {
+  let map = condFormats.get(index);
+  if (!map) {
+    condFormats.set(index, (map = {}));
+  }
+  return map;
+}
+
+function setCondFormatForSelection(kind: CondFormatKind) {
+  const sel = grid?.selection;
+  if (!sel) {
+    return;
+  }
+  const map = condMapOf(active);
+  for (let c = sel.c0; c <= sel.c1; c++) {
+    if (kind === 'none') {
+      delete map[c];
+    } else {
+      map[c] = kind;
+    }
+  }
+  show(active, true);
 }
 
 // ---------------------------------------------------------------- column menu
@@ -315,12 +504,14 @@ columnMenu.addEventListener('keydown', (e) => {
   }
 });
 
-function menuRow(icon: keyof typeof icons | '', label: string, onClick: () => void): HTMLButtonElement {
+function menuRow(icon: keyof typeof icons | '', label: string, onClick: () => void, checked = false): HTMLButtonElement {
   const row = el('button', { class: 'dv-menu-item' });
   row.type = 'button';
   row.setAttribute('role', 'menuitem');
   const mark = el('span', { class: 'dv-menu-check' });
-  if (icon) {
+  if (checked) {
+    mark.innerHTML = icons.check;
+  } else if (icon) {
     mark.innerHTML = icons[icon];
   }
   row.append(mark, el('span', { class: 'dv-menu-label', text: label }));
@@ -334,6 +525,11 @@ function openColumnMenu(col: number, anchor: DOMRect) {
     return;
   }
   const view = viewOf(active);
+  if (!view.valueFilters) view.valueFilters = {};
+  if (!view.numFilters) view.numFilters = {};
+  const condMap = condMapOf(active);
+  const curCond: CondFormatKind = condMap[col] ?? 'none';
+
   const apply = (close = true) => {
     if (close) {
       closeColumnMenu();
@@ -345,6 +541,15 @@ function openColumnMenu(col: number, anchor: DOMRect) {
     view.sortDir = dir;
     apply();
   };
+  const setColCond = (kind: CondFormatKind) => {
+    if (kind === 'none') {
+      delete condMap[col];
+    } else {
+      condMap[col] = kind;
+    }
+    apply();
+  };
+
   const items: HTMLElement[] = [
     menuRow('sortUp', t('sortAsc'), () => sort(1)),
     menuRow('sortDown', t('sortDesc'), () => sort(-1)),
@@ -358,12 +563,146 @@ function openColumnMenu(col: number, anchor: DOMRect) {
       }),
     );
   }
+
+  // Conditional formatting options per column
+  items.push(
+    el('div', { class: 'dv-menu-sep' }),
+    menuRow('', t('condFormatNone'), () => setColCond('none'), curCond === 'none'),
+    menuRow('bars', t('condFormatBar'), () => setColCond('bar'), curCond === 'bar'),
+    menuRow('', t('condFormatHeat'), () => setColCond('heat'), curCond === 'heat'),
+  );
+
+  // Numeric comparison filter
+  const curNum = view.numFilters[col];
+  const numOpSelect = el('select', { class: 'dv-select sheet-num-op' });
+  const opOptions: [string, string][] = [
+    ['', t('numFilterNone')],
+    ['>', '>'],
+    ['>=', '≥'],
+    ['<', '<'],
+    ['<=', '≤'],
+    ['=', '='],
+    ['between', t('numFilterBetween')],
+    ['topN', t('numFilterTopN')],
+  ];
+  for (const [val, label] of opOptions) {
+    const opt = el('option', { text: label });
+    opt.value = val;
+    if ((curNum?.op ?? '') === val) {
+      opt.selected = true;
+    }
+    numOpSelect.append(opt);
+  }
+  const numA = el('input', { class: 'dv-input sheet-num-val' });
+  numA.type = 'number';
+  numA.step = 'any';
+  numA.value = curNum ? String(curNum.a) : '';
+  numA.placeholder = '0';
+  numA.hidden = !curNum;
+
+  const numB = el('input', { class: 'dv-input sheet-num-val' });
+  numB.type = 'number';
+  numB.step = 'any';
+  numB.value = curNum?.b !== undefined ? String(curNum.b) : '';
+  numB.placeholder = '100';
+  numB.hidden = curNum?.op !== 'between';
+
+  const applyNumFilter = () => {
+    const op = numOpSelect.value as NumFilterOp | '';
+    numA.hidden = !op;
+    numB.hidden = op !== 'between';
+    if (!op) {
+      delete view.numFilters![col];
+      apply(false);
+      return;
+    }
+    const a = Number(numA.value);
+    if (numA.value.trim() === '' || !Number.isFinite(a)) {
+      return;
+    }
+    const b = op === 'between' ? Number(numB.value || numA.value) : undefined;
+    view.numFilters![col] = { op, a, b: Number.isFinite(b as number) ? b : undefined };
+    apply(false);
+  };
+  numOpSelect.addEventListener('change', applyNumFilter);
+  numA.addEventListener('input', applyNumFilter);
+  numB.addEventListener('input', applyNumFilter);
+
+  items.push(
+    el('div', { class: 'dv-menu-sep' }),
+    el('div', { class: 'dv-menu-title sheet-col-menu-title', text: t('numFilterTitle') }),
+    el('div', { class: 'sheet-num-row' }, [numOpSelect, numA, numB]),
+  );
+
+  // Substring text filter
   const filter = el('input', { class: 'dv-input sheet-col-filter' });
   filter.type = 'text';
   filter.value = view.filters[col] ?? '';
+  filter.placeholder = t('filterContains');
   filter.setAttribute('aria-label', `${columnName(col)} ${t('filterContains')}`);
+
+  // Unique values multi-select checklist
+  const fixed = fixedRows(model, view);
+  const uniques = collectColumnUniqueValues(model.rows, model.rows.length, fixed, col);
+  const allValues = uniques.map((u) => u.value);
+  let selectedSet = new Set<string>(view.valueFilters[col] ?? allValues);
+
+  const uniqueList = el('div', { class: 'sheet-unique-list' });
+  const selectAllInput = el('input');
+  selectAllInput.type = 'checkbox';
+
+  const commitSelectedSet = () => {
+    if (selectedSet.size >= allValues.length) {
+      delete view.valueFilters![col];
+    } else {
+      view.valueFilters![col] = Array.from(selectedSet);
+    }
+    selectAllInput.checked = selectedSet.size === allValues.length;
+    selectAllInput.indeterminate = selectedSet.size > 0 && selectedSet.size < allValues.length;
+    apply(false);
+  };
+
+  const renderUniqueChecklist = (searchQuery: string) => {
+    const q = searchQuery.trim().toLowerCase();
+    const visibleItems = q
+      ? uniques.filter((u) => (u.value || t('blanksLabel')).toLowerCase().includes(q))
+      : uniques;
+    uniqueList.replaceChildren(
+      ...visibleItems.slice(0, 200).map((u) => {
+        const cb = el('input');
+        cb.type = 'checkbox';
+        cb.checked = selectedSet.has(u.value);
+        cb.addEventListener('change', () => {
+          if (cb.checked) {
+            selectedSet.add(u.value);
+          } else {
+            selectedSet.delete(u.value);
+          }
+          commitSelectedSet();
+        });
+        const labelText = u.value === '' ? t('blanksLabel') : u.value;
+        return el('label', { class: 'dv-check sheet-unique-item' }, [
+          cb,
+          el('span', { class: 'sheet-unique-val', text: labelText, title: labelText }),
+          el('span', { class: 'sheet-unique-cnt', text: String(u.count) }),
+        ]);
+      }),
+    );
+  };
+
+  selectAllInput.checked = selectedSet.size === allValues.length;
+  selectAllInput.indeterminate = selectedSet.size > 0 && selectedSet.size < allValues.length;
+  selectAllInput.addEventListener('change', () => {
+    selectedSet = selectAllInput.checked ? new Set(allValues) : new Set();
+    renderUniqueChecklist(filter.value);
+    commitSelectedSet();
+  });
+
+  renderUniqueChecklist(filter.value);
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   filter.addEventListener('input', () => {
+    renderUniqueChecklist(filter.value);
     clearTimeout(timer);
     timer = setTimeout(() => {
       view.filters[col] = filter.value;
@@ -376,11 +715,15 @@ function openColumnMenu(col: number, anchor: DOMRect) {
       apply();
     }
   });
+
   items.push(
     el('div', { class: 'dv-menu-sep' }),
-    el('div', { class: 'dv-menu-title sheet-col-menu-title', text: t('filterContains') }),
+    el('div', { class: 'dv-menu-title sheet-col-menu-title', text: t('uniqueValuesTitle') }),
     filter,
+    el('label', { class: 'dv-check sheet-col-check' }, [selectAllInput, el('span', { text: t('selectAll') })]),
+    uniqueList,
   );
+
   if (!model.frozenRows) {
     const header = el('input');
     header.type = 'checkbox';
@@ -389,13 +732,18 @@ function openColumnMenu(col: number, anchor: DOMRect) {
       view.headerRow = header.checked;
       apply(false);
     });
-    items.push(el('label', { class: 'dv-check sheet-col-check' }, [header, el('span', { text: t('headerRow') })]));
+    items.push(
+      el('div', { class: 'dv-menu-sep' }),
+      el('label', { class: 'dv-check sheet-col-check' }, [header, el('span', { text: t('headerRow') })]),
+    );
   }
-  if (view.filters[col]) {
+  if (hasColumnFilter(view, col)) {
     items.push(
       el('div', { class: 'dv-menu-sep' }),
       menuRow('', t('clearColumnFilter'), () => {
         delete view.filters[col];
+        delete view.valueFilters![col];
+        delete view.numFilters![col];
         apply();
       }),
     );
@@ -407,8 +755,9 @@ function openColumnMenu(col: number, anchor: DOMRect) {
     document.addEventListener('mousedown', onColumnMenuOutside);
   }
   const left = Math.min(anchor.left, window.innerWidth - columnMenu.offsetWidth - 8);
+  const top = Math.min(anchor.bottom + 4, Math.max(8, window.innerHeight - columnMenu.offsetHeight - 8));
   columnMenu.style.left = `${Math.max(8, left)}px`;
-  columnMenu.style.top = `${anchor.bottom + 4}px`;
+  columnMenu.style.top = `${top}px`;
   columnMenu.style.right = 'auto';
   filter.focus();
 }
@@ -455,8 +804,34 @@ function copySelectionMarkdown() {
   }
 }
 
+function copySelectionJson() {
+  const model = models.get(active);
+  const sel = grid?.selection;
+  if (!model || !sel) {
+    return;
+  }
+  const json = selectionToJson((r, c) => {
+    const srcR = toSource(r);
+    return srcR >= 0 ? model.rows[srcR]?.[c] : undefined;
+  }, sel.r0, sel.c0, sel.r1, sel.c1);
+  if (json) {
+    void navigator.clipboard?.writeText(json).then(() => flash(t('copied')));
+  }
+}
+
 const convertDropdown = moreMenu(t('convertMenu'), convertItems(), 'export');
+const condFormatDropdown = moreMenu(
+  t('condFormatBar'),
+  [
+    { label: t('condFormatBar'), icon: 'bars', onClick: () => setCondFormatForSelection('bar') },
+    { label: t('condFormatHeat'), onClick: () => setCondFormatForSelection('heat') },
+    '-',
+    { label: t('condFormatNone'), onClick: () => setCondFormatForSelection('none') },
+  ],
+  'bars',
+);
 const copyMdBtn = iconButton('copyMd', t('copyAsMarkdown'), copySelectionMarkdown);
+const copyJsonBtn = iconButton('copy', t('copyAsJson'), copySelectionJson);
 const historyBtn = iconButton('history', t('slotHistory'), () => post({ type: 'history' }));
 
 const lock = lockToggle();
@@ -475,9 +850,9 @@ const topBar = customToolbar({
     { id: 'view', nodes: [csvView.node, excelView.node] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'cellBar', nodes: [address, formulaBar] },
-    { id: 'find', nodes: sheetFindBar.nodes },
+    { id: 'find', nodes: [...sheetFindBar.nodes, replaceToggle.node] },
     { id: 'edit', label: t('lockEdits'), nodes: [lock] },
-    { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node, freezeColBtn.node, copyMdBtn] },
+    { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node, freezeColBtn.node, condFormatDropdown, copyMdBtn, copyJsonBtn] },
     { id: 'structure', nodes: [structureGroup] },
     {
       id: 'actions',
@@ -492,6 +867,7 @@ const topBar = customToolbar({
   documentActions: [
     openExternalMenuItem(),
     { label: t('copyAsMarkdown'), icon: 'copyMd', onClick: copySelectionMarkdown },
+    { label: t('copyAsJson'), icon: 'copy', onClick: copySelectionJson },
     ...convertItems(),
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
@@ -539,7 +915,7 @@ const topBar = customToolbar({
   ],
 });
 
-app.append(topBar.node, notice.node, gridHost, statusBar);
+app.append(topBar.node, replaceBar, notice.node, gridHost, statusBar);
 showStatus(gridHost, t('loading'));
 
 // ---------------------------------------------------------------- helpers
@@ -621,10 +997,22 @@ function sourceFor(index: number, model: SheetModel): GridSource {
   const frozenC = effectiveFrozenCols(index, model);
   freezeBtn.set(frozenR > 0);
   freezeColBtn.set(frozenC > 0);
+
+  const fixed = fixedRows(model, view);
+  const condMap = condMapOf(index);
+  const condBounds = new Map<number, { min: number; max: number } | undefined>();
+  for (const [colKey, kind] of Object.entries(condMap)) {
+    const col = Number(colKey);
+    if (kind && kind !== 'none') {
+      condBounds.set(col, computeColumnNumericBounds(model.rows, map, fixed, col));
+    }
+  }
+  const cellGetter = map ? (r: number, c: number) => model.rows[map[r]]?.[c] : (r: number, c: number) => model.rows[r]?.[c];
+
   return {
     rowCount: map ? map.length : model.rowCount,
     colCount: model.colCount,
-    cell: map ? (r, c) => model.rows[map[r]]?.[c] : (r, c) => model.rows[r]?.[c],
+    cell: cellGetter,
     styles: plain ? undefined : model.styles,
     colWidths,
     rowHeights,
@@ -635,8 +1023,27 @@ function sourceFor(index: number, model: SheetModel): GridSource {
     rowLabel: map ? (r) => String(map[r] + 1) : undefined,
     colBadge: (c) => {
       const badges = view.sortCol === c ? (view.sortDir === -1 ? ' ↓' : ' ↑') : '';
-      return badges + (view.filters[c]?.trim() ? ' ⧩' : '');
+      return badges + (hasColumnFilter(view, c) ? ' ⧩' : '');
     },
+    isSearchHit: (r, c) => {
+      if (!sheetFindBar.input.value.trim()) {
+        return false;
+      }
+      const cache = rebuildFindCache();
+      return Boolean(cache?.hitSet.has(r * model.colCount + c));
+    },
+    cellBgOverlay: condBounds.size
+      ? (r, c) => {
+          if (r < fixed) {
+            return undefined;
+          }
+          const kind = condMap[c];
+          if (!kind || kind === 'none') {
+            return undefined;
+          }
+          return condFormatGradient(kind, numericValue(cellGetter(r, c)), condBounds.get(c));
+        }
+      : undefined,
   };
 }
 
@@ -873,6 +1280,11 @@ function openGridContextMenu(x: number, y: number) {
   }
   const items: (HTMLElement | '-')[] = [
     ctxAction(t('copyAsMarkdown'), copySelectionMarkdown),
+    ctxAction(t('copyAsJson'), copySelectionJson),
+    '-',
+    ctxAction(t('condFormatBar'), () => setCondFormatForSelection('bar')),
+    ctxAction(t('condFormatHeat'), () => setCondFormatForSelection('heat')),
+    ctxAction(t('condFormatNone'), () => setCondFormatForSelection('none')),
   ];
   if (info?.editable) {
     const locked = getAppearance().lockEdits;
@@ -942,6 +1354,31 @@ function ensureGrid(): Grid {
       editable: canEdit(),
       canGrowRows: info?.canStructure ?? false,
       onEdit: (changes) => edit(changes),
+      onAutoFill: (src, dst) => {
+        if (!canEdit()) {
+          flash(t('locked'));
+          return;
+        }
+        const model = models.get(active);
+        if (!model) {
+          return;
+        }
+        const changes = computeAutoFillChanges(
+          (r, c) => {
+            const srcR = toSource(r);
+            return srcR >= 0 ? cellRaw(model.rows[srcR]?.[c]) : '';
+          },
+          src,
+          dst,
+        ).filter(({ r, c }) => {
+          const srcR = toSource(r);
+          const cell = srcR >= 0 ? model.rows[srcR]?.[c] : undefined;
+          return !(typeof cell === 'object' && cell?.ro);
+        });
+        if (changes.length) {
+          edit(changes);
+        }
+      },
       onSelection,
       onEditorInput: (val) => {
         if (document.activeElement !== formula) {
@@ -1134,6 +1571,10 @@ onMessage((message) => {
       excelView.node.hidden = isCsv;
       structureGroup.hidden = !info.canStructure;
       lock.hidden = !info.editable;
+      replaceToggle.node.hidden = !info.editable;
+      if (!info.editable) {
+        setReplaceBarOpen(false);
+      }
       topBar.refresh();
       renderTabs();
       show(active, false);

@@ -26,17 +26,23 @@ export interface GridSource {
   rowLabel?(r: number): string;
   /** Marker appended to a column header, e.g. a sort arrow. */
   colBadge?(c: number): string;
+  /** Whether displayed cell (r, c) currently matches the active search query. */
+  isSearchHit?(r: number, c: number): boolean;
+  /** Optional CSS background-image gradient for conditional formatting (Data Bars / Color Scales). */
+  cellBgOverlay?(r: number, c: number): string | undefined;
 }
 
-export interface Selection {
-  /** Active cell. */
-  r: number;
-  c: number;
-  /** Normalised range. */
+export interface CellRect {
   r0: number;
   c0: number;
   r1: number;
   c1: number;
+}
+
+export interface Selection extends CellRect {
+  /** Active cell. */
+  r: number;
+  c: number;
 }
 
 export interface GridOptions {
@@ -44,6 +50,8 @@ export interface GridOptions {
   /** Paste may extend past the last row (the host appends rows). */
   canGrowRows?: boolean;
   onEdit(changes: CellChange[]): void;
+  /** Drag-fill from the bottom-right selection handle (`src` into expanded `dst`). */
+  onAutoFill?(src: CellRect, dst: CellRect): void;
   onSelection?(selection: Selection): void;
   onReadonlyCell?(): void;
   /** The user tried to edit while editing is switched off (see setEditable). */
@@ -138,6 +146,8 @@ export class Grid {
   private active = { r: 0, c: 0 };
   private anchor = { r: 0, c: 0 };
   private dragging = false;
+  private fillPreview: CellRect | undefined;
+  private readonly fillHandle: HTMLDivElement;
 
   private editor: HTMLTextAreaElement | undefined;
   private editing: { r: number; c: number } | undefined;
@@ -163,6 +173,10 @@ export class Grid {
     this.cornerBox = document.createElement('div');
     this.cornerBox.className = 'grid-header grid-corner-box';
     this.layers.corner.append(this.cornerBox);
+    this.fillHandle = document.createElement('div');
+    this.fillHandle.className = 'grid-fill-handle';
+    this.fillHandle.hidden = true;
+    this.fillHandle.addEventListener('mousedown', (e) => this.onFillHandleDown(e));
     this.content.append(this.layers.corner, this.layers.top, this.layers.left, this.layers.body);
     this.viewport.append(this.content);
     this.root.append(this.viewport);
@@ -225,6 +239,11 @@ export class Grid {
     this.schedule();
   }
 
+  /** Repaints search hits and selection highlights without recreating pooled cell nodes. */
+  refreshHighlights(): void {
+    this.paintSelection();
+  }
+
   get selection(): Selection {
     return {
       r: this.active.r,
@@ -242,6 +261,7 @@ export class Grid {
       this.cancelEdit();
     }
     this.opts.editable = on;
+    this.paintSelection();
   }
 
   get editable(): boolean {
@@ -498,6 +518,10 @@ export class Grid {
         }
       }
     }
+    const condBg = this.source.cellBgOverlay?.(r, c);
+    if (condBg) {
+      s.setProperty('--cell-cond-bg', condBg);
+    }
     this.layers[layer].append(node);
     this.pool.set(key, node);
   }
@@ -603,11 +627,22 @@ export class Grid {
   private paintSelection(): void {
     const sel = this.selection;
     const single = sel.r0 === sel.r1 && sel.c0 === sel.c1;
+    const isHit = this.source.isSearchHit;
+    const fp = this.fillPreview;
     for (const node of this.pool.values()) {
       if (node._kind === 'cell') {
         const inside = node._r >= sel.r0 && node._r <= sel.r1 && node._c >= sel.c0 && node._c <= sel.c1;
         node.classList.toggle('grid-sel', inside && !single);
         node.classList.toggle('grid-active', node._r === sel.r && node._c === sel.c);
+        node.classList.toggle('grid-find-hit', Boolean(isHit?.(node._r, node._c)));
+        const inFill =
+          Boolean(fp) &&
+          !inside &&
+          node._r >= fp!.r0 &&
+          node._r <= fp!.r1 &&
+          node._c >= fp!.c0 &&
+          node._c <= fp!.c1;
+        node.classList.toggle('grid-fill-preview', inFill);
         // Row/column highlight ("reading mode"): shown only while the body has dv-highlight.
         const lastRow = node._r + (node._rs ?? 1) - 1;
         const lastCol = node._c + (node._cs ?? 1) - 1;
@@ -620,6 +655,76 @@ export class Grid {
         node.classList.toggle('grid-hl', node._r >= sel.r0 && node._r <= sel.r1);
       }
     }
+    this.positionFillHandle(sel);
+  }
+
+  private positionFillHandle(sel: Selection): void {
+    if (!this.opts.editable || !this.opts.onAutoFill || this.editing || !this.source.rowCount || !this.source.colCount) {
+      this.fillHandle.hidden = true;
+      return;
+    }
+    const targetLayer = this.layers[this.layerOf(sel.r1, sel.c1)];
+    if (this.fillHandle.parentElement !== targetLayer) {
+      targetLayer.append(this.fillHandle);
+    }
+    const x = this.headerW + this.colX[Math.min(this.source.colCount, sel.c1 + 1)];
+    const y = this.headerH + this.rowY[Math.min(this.source.rowCount, sel.r1 + 1)];
+    this.fillHandle.style.left = `${x - 4}px`;
+    this.fillHandle.style.top = `${y - 4}px`;
+    this.fillHandle.hidden = false;
+  }
+
+  private onFillHandleDown(e: MouseEvent): void {
+    if (e.button !== 0 || !this.opts.editable || !this.opts.onAutoFill || !this.source.rowCount || !this.source.colCount) {
+      return;
+    }
+    e.stopPropagation();
+    e.preventDefault();
+    this.commitEdit();
+    const src: CellRect = {
+      r0: this.selection.r0,
+      c0: this.selection.c0,
+      r1: this.selection.r1,
+      c1: this.selection.c1,
+    };
+    this.fillPreview = undefined;
+    const move = (ev: MouseEvent) => {
+      const next = this.hitTest(ev.clientX, ev.clientY);
+      const dr = next.r > src.r1 ? next.r - src.r1 : next.r < src.r0 ? src.r0 - next.r : 0;
+      const dc = next.c > src.c1 ? next.c - src.c1 : next.c < src.c0 ? src.c0 - next.c : 0;
+      if (dr === 0 && dc === 0) {
+        this.fillPreview = undefined;
+      } else if (dr >= dc) {
+        this.fillPreview =
+          next.r > src.r1
+            ? { r0: src.r0, c0: src.c0, r1: next.r, c1: src.c1 }
+            : { r0: next.r, c0: src.c0, r1: src.r1, c1: src.c1 };
+        this.reveal(next.r, src.c1);
+      } else {
+        this.fillPreview =
+          next.c > src.c1
+            ? { r0: src.r0, c0: src.c0, r1: src.r1, c1: next.c }
+            : { r0: src.r0, c0: next.c, r1: src.r1, c1: src.c1 };
+        this.reveal(src.r1, next.c);
+      }
+      this.paintSelection();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      const dst = this.fillPreview;
+      this.fillPreview = undefined;
+      if (dst && (dst.r0 !== src.r0 || dst.r1 !== src.r1 || dst.c0 !== src.c0 || dst.c1 !== src.c1)) {
+        this.anchor = { r: dst.r0, c: dst.c0 };
+        this.active = { r: dst.r1, c: dst.c1 };
+        this.opts.onAutoFill?.(src, dst);
+        this.emitSelection();
+      }
+      this.paintSelection();
+      this.focus();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
   }
 
   // ------------------------------------------------------------------ selection
@@ -1110,6 +1215,7 @@ export class Grid {
     this.layers[this.layerOf(r, c)].append(input);
     this.editor = input;
     this.editing = { r, c };
+    this.fillHandle.hidden = true;
 
     input.addEventListener('keydown', (e) => {
       if (e.isComposing) {
@@ -1160,6 +1266,7 @@ export class Grid {
     if (value !== cellRaw(this.source.cell(editing.r, editing.c))) {
       this.opts.onEdit([{ r: editing.r, c: editing.c, text: value }]);
     }
+    this.paintSelection();
   }
 
   private cancelEdit(): void {
@@ -1167,6 +1274,7 @@ export class Grid {
     this.editing = undefined;
     this.editor = undefined;
     input?.remove();
+    this.paintSelection();
   }
 }
 

@@ -10,7 +10,7 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 /** Cap total history storage across all files; oldest snapshots are pruned first. */
 const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
 const ORPHAN_TTL_MS = 7 * 24 * 3600 * 1000;
-const TEXT_EXTENSIONS = new Set(['md', 'markdown', 'csv', 'tsv', 'svg']);
+const TEXT_EXTENSIONS = new Set(['md', 'markdown', 'csv', 'tsv', 'jsonl', 'ndjson', 'svg']);
 const HISTORY_EXTENSIONS = new Set([
   ...TEXT_EXTENSIONS,
   'xlsx',

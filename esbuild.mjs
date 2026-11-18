@@ -26,6 +26,7 @@ const lazyHostMap = new Map([
   [join(root, 'src/host/spreadsheet.ts'), './host/spreadsheet.cjs'],
   [join(root, 'src/host/office.ts'), './host/office.cjs'],
   [join(root, 'src/host/doc/docExtractor.ts'), './host/doc-extractor.cjs'],
+  [join(root, 'src/host/containers.ts'), './host/containers.cjs'],
 ]);
 
 const externalLazyHostPlugin = {
@@ -64,7 +65,7 @@ const hostChunks = [...lazyHostMap.entries()].map(([entry, outRel]) => ({
   external: ['vscode'],
 }));
 
-const viewers = ['markdown', 'sheet', 'docx', 'pdf', 'pptx', 'text', 'image'];
+const viewers = ['markdown', 'sheet', 'docx', 'pdf', 'pptx', 'text', 'image', 'epub', 'archive'];
 
 const webview = {
   ...common,

@@ -20,8 +20,10 @@ import { renderShell } from '../src/common/shell';
 import type { Lang } from '../src/common/strings';
 import { applyEdits } from '../src/host/csv/csvParser';
 import { CsvSession } from '../src/host/csv/csvSession';
+import { classifyArchiveEntry, extractArchiveEntryBytes, inspectArchive, parseEpub } from '../src/host/containers';
 import { extractDocText } from '../src/host/doc/docExtractor';
 import { ExcelSession, type EditResult } from '../src/host/excel/excelSession';
+import { JsonlSession } from '../src/host/jsonl/jsonlSession';
 import { MarkdownRenderer } from '../src/host/markdown/renderer';
 import { OfficeSession, type OfficeEditResult, type OfficeFormat } from '../src/host/office';
 
@@ -45,7 +47,13 @@ const MIME: Record<string, string> = {
   '.wasm': 'application/wasm',
 };
 
-function kindFor(file: string): { kind: ViewerKind; engine: 'markdown' | 'csv' | 'excel' | 'office' | 'binary' | 'doc' } | undefined {
+function kindFor(
+  file: string,
+): { kind: ViewerKind; engine: 'markdown' | 'csv' | 'jsonl' | 'excel' | 'office' | 'binary' | 'doc' | 'epub' | 'archive' } | undefined {
+  const lower = file.toLowerCase();
+  if (lower.endsWith('.tar.gz')) {
+    return { kind: 'archive', engine: 'archive' };
+  }
   switch (extname(file).toLowerCase()) {
     case '.md':
     case '.markdown':
@@ -53,6 +61,9 @@ function kindFor(file: string): { kind: ViewerKind; engine: 'markdown' | 'csv' |
     case '.csv':
     case '.tsv':
       return { kind: 'sheet', engine: 'csv' };
+    case '.jsonl':
+    case '.ndjson':
+      return { kind: 'sheet', engine: 'jsonl' };
     case '.xlsx':
     case '.xlsm':
     case '.xls':
@@ -66,6 +77,12 @@ function kindFor(file: string): { kind: ViewerKind; engine: 'markdown' | 'csv' |
       return { kind: 'pdf', engine: 'office' };
     case '.pptx':
       return { kind: 'pptx', engine: 'office' };
+    case '.epub':
+      return { kind: 'epub', engine: 'epub' };
+    case '.zip':
+    case '.tar':
+    case '.tgz':
+      return { kind: 'archive', engine: 'archive' };
     case '.png':
     case '.jpg':
     case '.jpeg':
@@ -168,6 +185,66 @@ function createSession(file: string): Session {
           default:
             return [];
         }
+      },
+    };
+  }
+
+  if (engine === 'jsonl') {
+    const session = new JsonlSession(name);
+    return {
+      text: () => session.currentText,
+      async handle(message) {
+        switch (message.type) {
+          case 'ready':
+            session.setText(readFileSync(full, 'utf8'));
+            return [{ type: 'workbook', info: session.info, active: 0 }];
+          case 'getSheet':
+            return [{ type: 'sheet', index: 0, model: session.model() }];
+          case 'edit':
+            return [session.setText(applyEdits(session.currentText, session.editCells(message.changes)))];
+          case 'structure':
+            return [
+              session.setText(
+                applyEdits(session.currentText, session.structure(message.op, message.at, message.count)),
+              ),
+            ];
+          case 'dev-save':
+            mkdirSync(savedDir, { recursive: true });
+            writeFileSync(join(savedDir, name), session.currentText);
+            return [];
+          default:
+            return [];
+        }
+      },
+    };
+  }
+
+  if (engine === 'epub') {
+    return {
+      async handle(message) {
+        if (message.type === 'ready') {
+          return [{ type: 'epub', book: parseEpub(bytes()) }];
+        }
+        return [];
+      },
+    };
+  }
+
+  if (engine === 'archive') {
+    return {
+      async handle(message) {
+        if (message.type === 'ready') {
+          const info = inspectArchive(bytes(), name);
+          return [{ type: 'archive', name, ...info }];
+        }
+        if (message.type === 'previewArchiveEntry') {
+          const payload = extractArchiveEntryBytes(bytes(), name, message.path);
+          if (!payload) {
+            return [];
+          }
+          return [{ type: 'archiveEntry', path: message.path, ...classifyArchiveEntry(message.path, payload) }];
+        }
+        return [];
       },
     };
   }

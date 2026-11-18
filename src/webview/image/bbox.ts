@@ -8,6 +8,8 @@ export interface BBox {
   x2: number;
   y2: number;
   color: string;
+  /** Optional object detection class / category label (e.g. "person", "car"). */
+  label?: string;
 }
 
 export interface PixelRect {
@@ -33,6 +35,32 @@ export function formatRgb(r: number, g: number, b: number, a = 255): string {
     return `rgb(${r}, ${g}, ${b})`;
   }
   return `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(2)})`;
+}
+
+export function rgbToHsl(r: number, g: number, b: number): string {
+  const nr = clamp(r, 0, 255) / 255;
+  const ng = clamp(g, 0, 255) / 255;
+  const nb = clamp(b, 0, 255) / 255;
+  const max = Math.max(nr, ng, nb);
+  const min = Math.min(nr, ng, nb);
+  const l = (max + min) / 2;
+  let h = 0;
+  let s = 0;
+  const d = max - min;
+  if (d > 0) {
+    s = d / (1 - Math.abs(2 * l - 1));
+    if (max === nr) {
+      h = 60 * (((ng - nb) / d) % 6);
+    } else if (max === ng) {
+      h = 60 * ((nb - nr) / d + 2);
+    } else {
+      h = 60 * ((nr - ng) / d + 4);
+    }
+    if (h < 0) {
+      h += 360;
+    }
+  }
+  return `hsl(${Math.round(h)}, ${Math.round(s * 100)}%, ${Math.round(l * 100)}%)`;
 }
 
 export function formatBBoxTuple(box: Pick<BBox, 'x1' | 'y1' | 'x2' | 'y2'>): [number, number, number, number] {

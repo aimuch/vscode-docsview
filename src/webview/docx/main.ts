@@ -35,6 +35,7 @@ const outline = new Outline((key) => {
 });
 sidebar.panel('outline').append(outline.node);
 
+let docFileName = 'Document.docx';
 let editable = false;
 let editMode = false;
 let annotateMode = false;
@@ -73,6 +74,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
 });
 
 const commentsPanel = new CommentsPanel({
+  docName: () => docFileName,
   targetLabel: (c) => {
     const pLabel = c.pIndex !== undefined ? `¶${c.pIndex + 1}` : '';
     const quote = c.quote ? ` “${c.quote}”` : '';
@@ -149,6 +151,12 @@ const topBar = customToolbar({
   ],
   documentActions: [
     openExternalMenuItem(),
+    {
+      label: t('exportCommentsMd'),
+      icon: 'export',
+      visible: () => comments.length > 0,
+      onClick: () => commentsPanel.exportMarkdown(),
+    },
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
 });
@@ -432,6 +440,7 @@ async function load(bytes: Uint8Array) {
 
 onMessage((message) => {
   if (message.type === 'load') {
+    docFileName = message.name || 'Document.docx';
     editable = message.editable === true;
     comments = message.comments ?? [];
     docxParagraphs = message.docxParagraphs ?? [];

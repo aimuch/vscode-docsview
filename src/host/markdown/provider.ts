@@ -96,6 +96,51 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
           case 'editBlock':
             void this.editBlock(document, message.start, message.end, message.text, message.expected);
             break;
+          case 'pasteImage': {
+            void (async () => {
+              const safeExt = /^(png|jpg|webp|gif)$/i.test(message.ext) ? message.ext.toLowerCase() : 'png';
+              const assetsDir = vscode.Uri.joinPath(parentUri(document.uri), 'assets');
+              await vscode.workspace.fs.createDirectory(assetsDir);
+              const stamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 15);
+              const fileName = `paste-${stamp}.${safeExt}`;
+              const fileUri = vscode.Uri.joinPath(assetsDir, fileName);
+              const bytes =
+                message.bytes instanceof Uint8Array
+                  ? message.bytes
+                  : Uint8Array.from(Object.values(message.bytes as Record<string, number>));
+              await vscode.workspace.fs.writeFile(fileUri, bytes);
+              const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
+              const snippet = `${eol}![](assets/${fileName})${eol}`;
+              const lineIdx =
+                message.insertAtLine !== undefined && Number.isFinite(message.insertAtLine)
+                  ? Math.max(0, Math.min(document.lineCount - 1, Math.floor(message.insertAtLine)))
+                  : Math.max(0, document.lineCount - 1);
+              const pos = new vscode.Position(lineIdx, document.lineAt(lineIdx).text.length);
+              const wsEdit = new vscode.WorkspaceEdit();
+              wsEdit.insert(document.uri, pos, snippet);
+              await vscode.workspace.applyEdit(wsEdit);
+            })().catch((err: unknown) =>
+              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+            );
+            break;
+          }
+          case 'inspectImage': {
+            void (async () => {
+              const rawPath = safeDecode(message.src.split('?')[0].split('#')[0]);
+              if (!rawPath || /^[a-z][a-z0-9+.-]*:/i.test(rawPath)) {
+                return;
+              }
+              const root = vscode.workspace.getWorkspaceFolder(document.uri)?.uri ?? parentUri(document.uri);
+              const target = rawPath.startsWith('/')
+                ? vscode.Uri.joinPath(root, rawPath)
+                : vscode.Uri.joinPath(parentUri(document.uri), rawPath);
+              await vscode.workspace.fs.stat(target);
+              await vscode.commands.executeCommand('vscode.openWith', target, 'docsview.image');
+            })().catch((err: unknown) =>
+              vscode.window.showWarningMessage(String(err instanceof Error ? err.message : err)),
+            );
+            break;
+          }
           case 'revealLine': {
             if (!scrollSync()) {
               break;

@@ -11,6 +11,8 @@ const VIEW_FOR_EXTENSION: Record<string, string> = {
   markdown: 'docsview.markdown',
   csv: 'docsview.csv',
   tsv: 'docsview.csv',
+  jsonl: 'docsview.jsonl',
+  ndjson: 'docsview.jsonl',
 };
 
 export function extensionOf(uri: vscode.Uri): string {

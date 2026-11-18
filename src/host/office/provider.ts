@@ -165,6 +165,73 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
             .catch((err: unknown) => {
               void vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err));
             });
+          return;
+        }
+        if (message.type === 'extractPdfPages' && document.officeFormat === 'pdf' && document.session) {
+          const session = document.session;
+          void (async () => {
+            const spec = await vscode.window.showInputBox({
+              prompt: t('pdfExtractPrompt'),
+              value: `${message.currentPage}-${message.totalPages}`,
+            });
+            if (!spec) {
+              return;
+            }
+            const { extractPdfPagesToBytes, parsePageRangeSpec } = await import('../office');
+            const pages = parsePageRangeSpec(spec, message.totalPages);
+            if (!pages.length) {
+              return;
+            }
+            const stem = baseName(document.uri).replace(/\.pdf$/i, '');
+            const target = await vscode.window.showSaveDialog({
+              defaultUri: vscode.Uri.joinPath(parentUri(document.uri), `${stem}-pages.pdf`),
+              filters: { PDF: ['pdf'] },
+            });
+            if (!target) {
+              return;
+            }
+            const outBytes = await extractPdfPagesToBytes(session.export(), pages);
+            await vscode.workspace.fs.writeFile(target, outBytes);
+            await vscode.commands.executeCommand('vscode.openWith', target, 'docsview.pdf');
+          })().catch((err: unknown) =>
+            vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+          );
+          return;
+        }
+        if (message.type === 'mergePdfs' && document.officeFormat === 'pdf' && document.session) {
+          const session = document.session;
+          void (async () => {
+            const picked = await vscode.window.showOpenDialog({
+              defaultUri: parentUri(document.uri),
+              canSelectMany: true,
+              filters: { PDF: ['pdf'] },
+            });
+            if (!picked?.length) {
+              return;
+            }
+            for (const uri of picked) {
+              const otherBytes = await vscode.workspace.fs.readFile(uri);
+              document.mutationQueue = document.mutationQueue.then(async () => {
+                const res = await session.apply({
+                  kind: 'appendPdfBytes',
+                  otherBytes: new Uint8Array(otherBytes.buffer, otherBytes.byteOffset, otherBytes.byteLength),
+                  label: baseName(uri),
+                });
+                if (res) {
+                  post(res.message);
+                  this.changeEmitter.fire({
+                    document,
+                    label: 'Merge PDF',
+                    undo: () => Promise.resolve(res.undo()).then((m) => document.post(m)),
+                    redo: () => Promise.resolve(res.redo()).then((m) => document.post(m)),
+                  });
+                }
+              });
+            }
+            await document.mutationQueue;
+          })().catch((err: unknown) =>
+            vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+          );
         }
       }),
     ];

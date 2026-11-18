@@ -1,8 +1,9 @@
 // Shared Comments & Annotations UI for Word (.docx), PowerPoint (.pptx) and PDF (.pdf):
 // sidebar comment cards, floating comment composer, inline text editor modal, and page/slide
 // pin & box overlays.
+import { formatCommentsAsMarkdown } from '../../common/commentsMarkdown';
 import type { DocComment } from '../../common/protocol';
-import { el, t } from './api';
+import { el, post, t } from './api';
 import { icons } from './icons';
 import { iconButton } from './ui';
 
@@ -25,6 +26,7 @@ function formatShortDate(raw: string | undefined): string {
 }
 
 export interface CommentsPanelOptions {
+  docName?: () => string;
   targetLabel?: (comment: DocComment) => string;
   onSelect: (comment: DocComment) => void;
   onUpdate: (id: string, text: string) => void;
@@ -35,6 +37,7 @@ export interface CommentsPanelOptions {
 export class CommentsPanel {
   readonly node: HTMLElement;
   private readonly countEl: HTMLElement;
+  private readonly exportBtn: HTMLButtonElement;
   private readonly listEl: HTMLElement;
   private items: DocComment[] = [];
   private activeId: string | undefined;
@@ -42,18 +45,28 @@ export class CommentsPanel {
 
   constructor(private readonly opts: CommentsPanelOptions) {
     this.countEl = el('span', { class: 'dv-ol-count' });
-    const headChildren: HTMLElement[] = [this.countEl];
+    this.exportBtn = iconButton('export', t('exportCommentsMd'), () => this.exportMarkdown());
+    this.exportBtn.classList.add('dv-cm-mini');
+    const rightGroup = el('span', { class: 'dv-cm-head-actions' }, [this.exportBtn]);
     if (opts.onToggleAddMode) {
       const addBtn = el('button', { class: 'dv-cm-head-add', title: t('addComment') });
       addBtn.type = 'button';
       addBtn.innerHTML = `${icons.plus}<span>${t('addComment')}</span>`;
       addBtn.addEventListener('click', () => opts.onToggleAddMode?.());
-      headChildren.push(addBtn);
+      rightGroup.append(addBtn);
     }
-    const head = el('div', { class: 'dv-cm-head' }, headChildren);
+    const head = el('div', { class: 'dv-cm-head' }, [this.countEl, rightGroup]);
     this.listEl = el('div', { class: 'dv-cm-list' });
     this.node = el('div', { class: 'dv-cm-panel' }, [head, this.listEl]);
     this.render();
+  }
+
+  exportMarkdown(): void {
+    if (!this.items.length) {
+      return;
+    }
+    const md = formatCommentsAsMarkdown(this.opts.docName?.() ?? 'Document', this.items, this.opts.targetLabel);
+    post({ type: 'saveTextExport', ext: 'md', suffix: '-comments', content: md });
   }
 
   get count(): number {
@@ -88,6 +101,7 @@ export class CommentsPanel {
 
   private render(): void {
     this.countEl.textContent = t('commentsCount', this.items.length);
+    this.exportBtn.disabled = this.items.length === 0;
     if (!this.items.length) {
       this.listEl.replaceChildren(el('div', { class: 'dv-ol-empty', text: t('noComments') }));
       return;
@@ -344,8 +358,27 @@ export function renderSurfaceAnnotations(
   }
   const nodes = entries.map(({ comment, badgeIndex }) => {
     const r = comment.rect ?? { x: 0.1, y: 0.1, w: 0, h: 0 };
-    const isBox = r.w > 0.005 && r.h > 0.005;
+    const isHighlight = comment.subtype === 'highlight';
+    const isBox = !isHighlight && r.w > 0.005 && r.h > 0.005;
     const tip = `${comment.author}: ${comment.text}`;
+    if (isHighlight) {
+      const hl = el('div', { class: 'dv-annot-highlight', title: tip });
+      hl.style.left = `${r.x * 100}%`;
+      hl.style.top = `${r.y * 100}%`;
+      hl.style.width = `${Math.max(0.01, r.w) * 100}%`;
+      hl.style.height = `${Math.max(0.01, r.h) * 100}%`;
+      const col = comment.color ?? '#fde047';
+      hl.style.background = col.toLowerCase() === '#4ade80' ? 'rgba(74, 222, 128, 0.38)' : 'rgba(250, 204, 21, 0.42)';
+      if (comment.id === activeId) {
+        hl.classList.add('dv-annot-active');
+      }
+      hl.addEventListener('pointerdown', (e) => e.stopPropagation());
+      hl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onSelect(comment);
+      });
+      return hl;
+    }
     if (isBox) {
       const box = el('div', { class: 'dv-annot-box', title: tip }, [
         el('span', { class: 'dv-annot-tag', text: String(badgeIndex) }),

@@ -30,3 +30,52 @@
   outline-offset: 2px;
   cursor: text;
 }
+
+.pptx-notes-panel {
+  flex: none;
+  max-height: 170px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--dv-border);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+}
+
+.pptx-notes-panel[hidden] {
+  display: none;
+}
+
+.pptx-notes-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--dv-border);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.pptx-notes-body {
+  flex: 1;
+  min-height: 52px;
+  overflow-y: auto;
+  padding: 8px 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  color: var(--vscode-foreground);
+}
+
+.pptx-notes-body.pptx-notes-empty {
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  font-style: italic;
+}
+
+.pptx-present-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}

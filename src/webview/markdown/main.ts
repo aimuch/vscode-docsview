@@ -11,6 +11,8 @@ import { createFindWidget } from '../shared/find';
 import { customToolbar, iconButton, moreMenu, segmented, toggleButton } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 import { PreviewFind } from './find';
+import { decorateMermaidDiagrams, openMermaidLightbox } from './lightbox';
+import { MarkdownSlideDeck } from './slides';
 import { attachTableHighlight } from './tableHighlight';
 
 const scroller = el('div', { class: 'md-scroll' });
@@ -192,7 +194,7 @@ function setRtl(on: boolean) {
 
 function exportAs(format: 'html' | 'pdf') {
   const copy = article.cloneNode(true) as HTMLElement;
-  copy.querySelectorAll('.md-copy, .md-edit').forEach((n) => n.remove());
+  copy.querySelectorAll('.md-copy, .md-edit, .md-mermaid-expand').forEach((n) => n.remove());
   copy.querySelectorAll<HTMLInputElement>('li.task-list-item input[type="checkbox"]').forEach((c) => {
     c.disabled = true;
   });
@@ -212,13 +214,15 @@ const exportDropdown = moreMenu(
   'export',
 );
 
+const slideDeck = new MarkdownSlideDeck(article);
+const slideModeBtn = iconButton('play', `${t('mdSlideMode')} (F5)`, () => slideDeck.open());
 const historyBtn = iconButton('history', t('slotHistory'), () => post({ type: 'history' }));
 
 const topBar = customToolbar({
   subtitle: 'Markdown',
   slots: [
     { id: 'nav', nodes: [sidebar.toggle] },
-    { id: 'view', nodes: [view.node] },
+    { id: 'view', nodes: [view.node, slideModeBtn] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'find', nodes: findWidget.nodes },
     { id: 'edit', label: t('editMode'), nodes: [editToggle.node] },
@@ -228,6 +232,7 @@ const topBar = customToolbar({
     { id: 'rtl', nodes: [rtlToggle.node] },
   ],
   documentActions: [
+    { label: t('mdSlideMode'), icon: 'play', onClick: () => slideDeck.open() },
     { label: t('exportHtml'), icon: 'export', onClick: () => exportAs('html') },
     { label: t('exportPdf'), hint: t('exportPdfHint'), icon: 'export', onClick: () => exportAs('pdf') },
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
@@ -268,6 +273,80 @@ app.append(
 );
 setEditMode(readState().mdEdit === true);
 setRtl(rtl);
+
+// Clipboard Image Paste in Edit Mode -> saves to `assets/paste-*.png` and inserts `![](assets/...)`.
+window.addEventListener('paste', (e) => {
+  if (!scroller.classList.contains('md-editing') || !e.clipboardData) {
+    return;
+  }
+  const imgItem = Array.from(e.clipboardData.items).find((it) => it.type.startsWith('image/'));
+  const file = imgItem?.getAsFile();
+  if (!file) {
+    return;
+  }
+  e.preventDefault();
+  const ext = file.type.includes('jpeg') ? 'jpg' : file.type.includes('webp') ? 'webp' : file.type.includes('gif') ? 'gif' : 'png';
+  let insertAtLine: number | undefined;
+  if (editing) {
+    insertAtLine = Number(editing.block.dataset.lineEnd);
+    closeEditor();
+  }
+  void file.arrayBuffer().then((buf) => {
+    post({ type: 'pasteImage', bytes: new Uint8Array(buf), ext, insertAtLine });
+  });
+});
+
+// Floating "Inspect in DocsView Image" pill on hovered local images + Mermaid click-to-zoom
+let hoveredImgSrc = '';
+const inspectImgBtn = el('button', { class: 'md-img-inspect-pill', title: t('mdInspectImage') });
+inspectImgBtn.type = 'button';
+inspectImgBtn.textContent = '🔍 BBox / RGB';
+inspectImgBtn.hidden = true;
+inspectImgBtn.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (hoveredImgSrc) {
+    post({ type: 'inspectImage', src: hoveredImgSrc });
+  }
+});
+document.body.append(inspectImgBtn);
+
+scroller.addEventListener('mousemove', (e) => {
+  const target = e.target as HTMLElement | null;
+  if (target === inspectImgBtn) {
+    return;
+  }
+  const img = target instanceof HTMLImageElement && article.contains(target) ? target : undefined;
+  const rawSrc = img?.getAttribute('src')?.trim() ?? '';
+  if (img && rawSrc && !/^(?:https?:|data:|blob:)/i.test(rawSrc)) {
+    hoveredImgSrc = rawSrc;
+    const r = img.getBoundingClientRect();
+    inspectImgBtn.style.left = `${Math.max(8, r.right - 98)}px`;
+    inspectImgBtn.style.top = `${Math.max(42, r.top + 6)}px`;
+    inspectImgBtn.hidden = false;
+  } else if (!inspectImgBtn.matches(':hover')) {
+    inspectImgBtn.hidden = true;
+  }
+});
+
+scroller.addEventListener('scroll', () => {
+  inspectImgBtn.hidden = true;
+}, { passive: true });
+
+article.addEventListener('click', (e) => {
+  if (scroller.classList.contains('md-editing')) {
+    return;
+  }
+  const target = e.target as Element | null;
+  if (target?.closest('.md-mermaid-expand')) {
+    return;
+  }
+  const mermaidBox = target?.closest<HTMLElement>('.mermaid:not(.mermaid-error)');
+  if (mermaidBox?.querySelector('svg')) {
+    e.preventDefault();
+    openMermaidLightbox(mermaidBox);
+  }
+});
 
 // Interactive task-list checkboxes: toggle "- [ ]" <-> "- [x]" directly in the source document.
 article.addEventListener('change', (e) => {
@@ -351,6 +430,7 @@ function render(html: string, toc: TocEntry[]) {
   renderToc(toc);
   updateDocStats();
   addCopyButtons();
+  decorateMermaidDiagrams(article);
   article.querySelectorAll<HTMLInputElement>('li.task-list-item input[type="checkbox"]').forEach((box) => {
     box.disabled = false;
   });
@@ -456,6 +536,7 @@ async function renderMermaid(force = false) {
       node.classList.add('mermaid-error');
     }
     node.dataset.rendered = theme;
+    decorateMermaidDiagrams(article);
     invalidateLineIndex();
   }
 }

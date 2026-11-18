@@ -16,8 +16,11 @@ const REL_PKG_NS = 'http://schemas.openxmlformats.org/package/2006/relationships
 const CT_NS = 'http://schemas.openxmlformats.org/package/2006/content-types';
 const COMMENTS_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments';
 const COMMENT_AUTHORS_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors';
+const NOTES_SLIDE_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide';
+const SLIDE_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide';
 const COMMENTS_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.comments+xml';
 const COMMENT_AUTHORS_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.commentAuthors+xml';
+const NOTES_SLIDE_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml';
 const PRECOMPRESSED_MEDIA = /\.(?:png|jpe?g|gif|webp|avif|mp4|m4v|mov|mp3|wav|ogg|zip|gz)$/i;
 
 /** Default 16:9 widescreen dimensions in EMUs (960x540 pt). */
@@ -251,7 +254,12 @@ function replaceTxBodyText(slideDoc: XDocument, txBody: XElement, nextText: stri
   }
 }
 
-function findSlideCommentsPath(files: Record<string, Uint8Array>, slidePath: string, parser: DOMParser): string | undefined {
+function findSlideRelTarget(
+  files: Record<string, Uint8Array>,
+  slidePath: string,
+  relType: string,
+  parser: DOMParser,
+): string | undefined {
   const rPath = relsPathFor(slidePath);
   const rBytes = files[rPath];
   if (!rBytes) {
@@ -263,7 +271,7 @@ function findSlideCommentsPath(files: Record<string, Uint8Array>, slidePath: str
   const rels = rDoc.getElementsByTagName('Relationship');
   for (let i = 0; i < rels.length; i++) {
     const r = rels.item(i)!;
-    if (r.getAttribute('Type') === COMMENTS_REL_TYPE) {
+    if (r.getAttribute('Type') === relType) {
       const target = r.getAttribute('Target');
       if (target) {
         return resolveRelativePath(baseDir, target);
@@ -273,9 +281,39 @@ function findSlideCommentsPath(files: Record<string, Uint8Array>, slidePath: str
   return undefined;
 }
 
+function findSlideCommentsPath(files: Record<string, Uint8Array>, slidePath: string, parser: DOMParser): string | undefined {
+  return findSlideRelTarget(files, slidePath, COMMENTS_REL_TYPE, parser);
+}
+
+function findSlideNotesPath(files: Record<string, Uint8Array>, slidePath: string, parser: DOMParser): string | undefined {
+  return findSlideRelTarget(files, slidePath, NOTES_SLIDE_REL_TYPE, parser);
+}
+
+function findNotesBodyTxBody(notesDoc: XDocument): XElement | undefined {
+  const sps = notesDoc.getElementsByTagNameNS('*', 'sp');
+  let fallback: XElement | undefined;
+  for (let i = 0; i < sps.length; i++) {
+    const sp = sps.item(i)!;
+    const txBody = sp.getElementsByTagNameNS('*', 'txBody').item(0) as XElement | null;
+    if (!txBody) {
+      continue;
+    }
+    const ph = sp.getElementsByTagNameNS('*', 'ph').item(0);
+    const phType = ph?.getAttribute('type') ?? '';
+    if (phType === 'body') {
+      return txBody;
+    }
+    if (!ph && !fallback) {
+      fallback = txBody;
+    }
+  }
+  return fallback;
+}
+
 export interface PptxInspection {
   slideAspect: number;
   shapes: string[][];
+  notes: string[];
   comments: DocComment[];
 }
 
@@ -310,6 +348,7 @@ export function inspectPptx(bytes: Uint8Array): PptxInspection {
       f.name === 'ppt/presentation.xml' ||
       f.name === 'ppt/_rels/presentation.xml.rels' ||
       f.name.startsWith('ppt/slides/') ||
+      f.name.startsWith('ppt/notesSlides/') ||
       f.name.startsWith('ppt/comments/') ||
       f.name.endsWith('commentAuthors.xml'),
   });
@@ -333,17 +372,28 @@ export function inspectPptx(bytes: Uint8Array): PptxInspection {
   }
 
   const shapes: string[][] = [];
+  const notes: string[] = [];
   const comments: DocComment[] = [];
 
   slidePaths.forEach((slidePath, slideIdx) => {
     const sBytes = files[slidePath];
     if (!sBytes) {
       shapes.push([]);
+      notes.push('');
       return;
     }
     const sDoc = parser.parseFromString(strFromU8(sBytes), XML);
     const txBodies = collectSlideTxBodies(sDoc);
     shapes.push(txBodies.map(extractTxBodyText));
+
+    const nPath = findSlideNotesPath(files, slidePath, parser);
+    if (nPath && files[nPath]) {
+      const nDoc = parser.parseFromString(strFromU8(files[nPath]), XML);
+      const bodyTx = findNotesBodyTxBody(nDoc);
+      notes.push(bodyTx ? extractTxBodyText(bodyTx).trim() : '');
+    } else {
+      notes.push('');
+    }
 
     const cPath = findSlideCommentsPath(files, slidePath, parser);
     if (cPath && files[cPath]) {
@@ -376,6 +426,7 @@ export function inspectPptx(bytes: Uint8Array): PptxInspection {
   return {
     slideAspect: cx / cy,
     shapes,
+    notes,
     comments,
   };
 }
@@ -612,6 +663,51 @@ export function applyPptxMutations(bytes: Uint8Array, mutations: readonly DocMut
       if (target) {
         replaceTxBodyText(sDoc, target, mut.text);
         files[slidePath] = strToU8(serializeXml(sDoc));
+      }
+    } else if (mut.kind === 'editPptxNote') {
+      const slidePath = slidePaths[mut.slideIndex];
+      if (!slidePath || !files[slidePath]) {
+        continue;
+      }
+      let nPath = findSlideNotesPath(files, slidePath, parser);
+      let nDoc: XDocument;
+      if (nPath && files[nPath]) {
+        nDoc = parser.parseFromString(strFromU8(files[nPath]), XML);
+      } else {
+        let num = mut.slideIndex + 1;
+        nPath = nPath ?? `ppt/notesSlides/notesSlide${num}.xml`;
+        while (files[nPath]) {
+          num++;
+          nPath = `ppt/notesSlides/notesSlide${num}.xml`;
+        }
+        const sRelsPath = relsPathFor(slidePath);
+        const sRelsDoc = files[sRelsPath]
+          ? parser.parseFromString(strFromU8(files[sRelsPath]), XML)
+          : parser.parseFromString(
+              `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${REL_PKG_NS}"/>`,
+              XML,
+            );
+        const relTarget = nPath.startsWith('ppt/') ? `../${nPath.slice(4)}` : `/${nPath}`;
+        ensureRelationship(sRelsDoc, NOTES_SLIDE_REL_TYPE, relTarget);
+        files[sRelsPath] = strToU8(serializeXml(sRelsDoc));
+
+        const nRelsPath = relsPathFor(nPath);
+        const slideBase = slidePath.startsWith('ppt/') ? `../${slidePath.slice(4)}` : `/${slidePath}`;
+        files[nRelsPath] = strToU8(
+          `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${REL_PKG_NS}"><Relationship Id="rId1" Type="${SLIDE_REL_TYPE}" Target="${slideBase}"/></Relationships>`,
+        );
+        if (ctDoc && ensureContentTypeOverride(ctDoc, `/${nPath}`, NOTES_SLIDE_CONTENT_TYPE)) {
+          ctDirty = true;
+        }
+        nDoc = parser.parseFromString(
+          `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<p:notes xmlns:a="${A_NS}" xmlns:r="${REL_NS}" xmlns:p="${P_NS}"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes Placeholder"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t/></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>`,
+          XML,
+        );
+      }
+      const bodyTx = findNotesBodyTxBody(nDoc);
+      if (bodyTx) {
+        replaceTxBodyText(nDoc, bodyTx, mut.text);
+        files[nPath] = strToU8(serializeXml(nDoc));
       }
     }
   }

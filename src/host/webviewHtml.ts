@@ -101,7 +101,7 @@ export function parentUri(uri: vscode.Uri): vscode.Uri {
   return vscode.Uri.joinPath(uri, '..');
 }
 
-/** Custom editor viewType for text-backed formats (Markdown, CSV/TSV, SVG). */
+/** Custom editor viewType for text-backed formats (Markdown, CSV/TSV, JSONL/NDJSON, SVG). */
 export function previewViewTypeFor(uri: vscode.Uri): string | undefined {
   const path = uri.path.toLowerCase();
   if (path.endsWith('.md') || path.endsWith('.markdown')) {
@@ -109,6 +109,9 @@ export function previewViewTypeFor(uri: vscode.Uri): string | undefined {
   }
   if (path.endsWith('.csv') || path.endsWith('.tsv')) {
     return 'docsview.csv';
+  }
+  if (path.endsWith('.jsonl') || path.endsWith('.ndjson')) {
+    return 'docsview.jsonl';
   }
   if (path.endsWith('.svg')) {
     return 'docsview.image';
@@ -504,6 +507,39 @@ export function handleCommonMessage(
       if (tabs.length) {
         void vscode.window.tabGroups.close(tabs);
       }
+      break;
+    }
+    case 'saveTextExport': {
+      const base = uri.path.slice(uri.path.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+      const ext = message.ext.replace(/^\./, '');
+      void vscode.window
+        .showSaveDialog({
+          defaultUri: vscode.Uri.joinPath(parentUri(uri), `${base}${message.suffix ?? ''}.${ext}`),
+          filters: { [ext.toUpperCase()]: [ext] },
+        })
+        .then(async (target) => {
+          if (!target) return;
+          await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(message.content));
+          await vscode.commands.executeCommand('vscode.open', target);
+          void vscode.window.showInformationMessage(t('exportSaved', target.fsPath));
+        });
+      break;
+    }
+    case 'saveBytesExport': {
+      const base = uri.path.slice(uri.path.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+      const ext = message.ext.replace(/^\./, '');
+      void vscode.window
+        .showSaveDialog({
+          defaultUri: vscode.Uri.joinPath(parentUri(uri), `${base}${message.suffix ?? ''}.${ext}`),
+          filters: { [ext.toUpperCase()]: [ext] },
+        })
+        .then(async (target) => {
+          if (!target) return;
+          const clean =
+            message.bytes.constructor === Uint8Array ? message.bytes : new Uint8Array(message.bytes);
+          await vscode.workspace.fs.writeFile(target, clean);
+          void vscode.window.showInformationMessage(t('exportSaved', target.fsPath));
+        });
       break;
     }
   }
