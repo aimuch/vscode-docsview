@@ -2,6 +2,8 @@
 import {
   DEFAULT_TOOLBAR,
   normalizeToolbarConfig,
+  type AiProviderId,
+  type AiSettingsSnapshot,
   type ToolbarConfig,
   type ToolbarItemId,
 } from '../../common/protocol';
@@ -20,6 +22,7 @@ import {
 } from './appearance';
 import { onFileState } from './fileState';
 import { icons, type IconName } from './icons';
+import { overlayStack } from './overlayStack';
 
 export function iconButton(icon: IconName, title: string, onClick: () => void): HTMLButtonElement {
   const b = el('button', { class: 'dv-btn dv-icon-btn', title });
@@ -217,6 +220,8 @@ export interface MenuItem {
   onClick: () => void;
 }
 
+let moreMenuSeq = 0;
+
 /** A compact button with a drop-down menu of actions. Items are re-evaluated on every open. */
 export function moreMenu(
   label: string,
@@ -224,6 +229,7 @@ export function moreMenu(
   icon: IconName = 'more',
   opts: { compact?: boolean } = {},
 ): HTMLElement {
+  const overlayId = `moreMenu-${++moreMenuSeq}`;
   const button = el('button', {
     class: opts.compact ? 'dv-btn dv-more-btn dv-more-compact' : 'dv-btn dv-more-btn',
     title: label,
@@ -257,6 +263,7 @@ export function moreMenu(
       menu.hidden = true;
       button.setAttribute('aria-expanded', 'false');
       document.removeEventListener('mousedown', onOutside);
+      overlayStack.remove(overlayId);
     }
   };
 
@@ -306,6 +313,12 @@ export function moreMenu(
     menu.hidden = false;
     button.setAttribute('aria-expanded', 'true');
     document.addEventListener('mousedown', onOutside);
+    overlayStack.push({
+      id: overlayId,
+      isOpen: () => !menu.hidden,
+      close,
+      restoreFocus: () => button,
+    });
     const rect = button.getBoundingClientRect();
     const mw = menu.offsetWidth || 270;
     const mh = menu.offsetHeight || 220;
@@ -347,6 +360,7 @@ const SLOT_LABELS: Record<ToolbarItemId, StringKey> = {
   openApp: 'slotOpenApp',
   highlight: 'slotHighlight',
   structure: 'slotStructure',
+  ai: 'slotAi',
   actions: 'slotActions',
   history: 'slotHistory',
   rtl: 'slotRtl',
@@ -375,6 +389,31 @@ onMessage((message) => {
   if (message.type === 'toolbar') {
     currentToolbar = normalizeToolbarConfig(message.toolbar);
     toolbarListeners.forEach((l) => l(currentToolbar));
+  }
+});
+
+// ---------------------------------------------------------------- shared AI settings state
+
+let currentAiSettings: AiSettingsSnapshot | undefined;
+let currentAiModels: string[] = [];
+const aiSettingsListeners = new Set<() => void>();
+
+export function getAiSettings(): { settings: AiSettingsSnapshot | undefined; models: readonly string[] } {
+  return { settings: currentAiSettings, models: currentAiModels };
+}
+
+export function onAiSettingsChange(listener: () => void): () => void {
+  aiSettingsListeners.add(listener);
+  return () => aiSettingsListeners.delete(listener);
+}
+
+onMessage((message) => {
+  if (message.type === 'aiSettings') {
+    currentAiSettings = message.settings;
+    if (message.models !== undefined) {
+      currentAiModels = message.models;
+    }
+    aiSettingsListeners.forEach((l) => l());
   }
 });
 
@@ -504,7 +543,7 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
       overflowBtn.setAttribute('aria-expanded', 'false');
       overflowBtn.classList.remove('dv-active');
       document.removeEventListener('mousedown', onOverflowOutside);
-      window.removeEventListener('keydown', onOverflowKeyDown, true);
+      overlayStack.remove('toolbarOverflow');
     }
   };
   const onOverflowOutside = (e: MouseEvent) => {
@@ -516,14 +555,6 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
       closeOverflow();
     }
   };
-  const onOverflowKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && !overflowPop.hidden) {
-      e.preventDefault();
-      e.stopPropagation();
-      closeOverflow();
-      overflowBtn.focus();
-    }
-  };
 
   const openOverflow = () => {
     if (!overflowPop.isConnected) {
@@ -533,7 +564,12 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     overflowBtn.setAttribute('aria-expanded', 'true');
     overflowBtn.classList.add('dv-active');
     document.addEventListener('mousedown', onOverflowOutside);
-    window.addEventListener('keydown', onOverflowKeyDown, true);
+    overlayStack.push({
+      id: 'toolbarOverflow',
+      isOpen: () => !overflowPop.hidden,
+      close: closeOverflow,
+      restoreFocus: () => overflowBtn,
+    });
     const rect = overflowBtn.getBoundingClientRect();
     overflowPop.style.top = `${rect.bottom + 6}px`;
     overflowPop.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
@@ -709,16 +745,11 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     if (!drawerOpen) {
       return;
     }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      closeDrawer();
-      gearBtn.focus();
-      return;
-    }
     if (e.key === 'Tab') {
       const focusables = [
-        ...drawer.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+        ...drawer.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
       ].filter((n) => !n.hidden && !n.closest('[hidden]'));
       if (!focusables.length) {
         return;
@@ -1020,6 +1051,128 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     return el('section', { class: 'dv-st-section' }, children);
   }
 
+  let aiDatalistSeq = 0;
+
+  function buildAiProviderSection(): HTMLElement {
+    const snap = currentAiSettings;
+    const provider: AiProviderId = snap?.provider ?? 'VS Code';
+    const presets = snap?.presets ?? [
+      { id: 'VS Code' as const, name: 'VS Code (Copilot / LM API)', defaultBaseUrl: '', defaultModel: '', requiresApiKey: false },
+      { id: 'DeepSeek' as const, name: 'DeepSeek', defaultBaseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-chat', requiresApiKey: true },
+      { id: 'Kimi' as const, name: 'Kimi (Moonshot AI)', defaultBaseUrl: 'https://api.moonshot.cn/v1', defaultModel: 'moonshot-v1-auto', requiresApiKey: true },
+      { id: 'Doubao' as const, name: 'Doubao (Volcengine Ark)', defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3', defaultModel: '', requiresApiKey: true },
+      { id: 'Qwen' as const, name: 'Qwen (Alibaba Cloud Model Studio)', defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', defaultModel: 'qwen-plus', requiresApiKey: true },
+      { id: 'OpenAI' as const, name: 'OpenAI', defaultBaseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o-mini', requiresApiKey: true },
+      { id: 'Ollama' as const, name: 'Ollama', defaultBaseUrl: 'http://localhost:11434/v1', defaultModel: '', requiresApiKey: false },
+      { id: 'Magpie' as const, name: 'Magpie', defaultBaseUrl: 'http://127.0.0.1:3425/v1', defaultModel: '', requiresApiKey: false },
+      { id: 'CC Switch' as const, name: 'CC Switch', defaultBaseUrl: 'http://127.0.0.1:15721/v1', defaultModel: '', requiresApiKey: false },
+      { id: 'OpenAI Compatible' as const, name: 'OpenAI Compatible', defaultBaseUrl: '', defaultModel: '', requiresApiKey: false },
+    ];
+    const activePreset = presets.find((p) => p.id === provider) ?? presets[0];
+
+    const providerSelect = el('select', { class: 'dv-select dv-ai-select' });
+    providerSelect.setAttribute('aria-label', t('aiProviderLabel'));
+    for (const p of presets) {
+      const opt = el('option', { text: p.name });
+      opt.value = p.id;
+      opt.selected = p.id === provider;
+      providerSelect.append(opt);
+    }
+    providerSelect.addEventListener('change', () => {
+      post({ type: 'aiUpdateSettings', provider: providerSelect.value as AiProviderId });
+    });
+
+    const listId = `dv-ai-models-${++aiDatalistSeq}`;
+    const datalist = el('datalist');
+    datalist.id = listId;
+    for (const m of currentAiModels) {
+      const opt = el('option');
+      opt.value = m;
+      datalist.append(opt);
+    }
+
+    const modelInput = el('input', { class: 'dv-ai-field-input' });
+    modelInput.type = 'text';
+    modelInput.placeholder = activePreset.defaultModel || t('aiModelAutoPlaceholder');
+    modelInput.value = snap?.model ?? '';
+    modelInput.setAttribute('list', listId);
+    modelInput.setAttribute('aria-label', t('aiModelLabel'));
+    const commitModel = () => {
+      if (modelInput.value.trim() !== (snap?.model ?? '')) {
+        post({ type: 'aiUpdateSettings', model: modelInput.value.trim() });
+      }
+    };
+    modelInput.addEventListener('change', commitModel);
+    modelInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitModel();
+      }
+    });
+
+    const discoverBtn = iconButton('refresh', t('aiDiscoverModels'), () => {
+      post({ type: 'aiGetSettings', discoverModels: true });
+    });
+
+    const rows: HTMLElement[] = [
+      el('h3', { class: 'dv-st-heading', text: t('aiProviderSection') }),
+      el('div', { class: 'dv-st-row' }, [
+        el('span', { class: 'dv-st-label', text: t('aiProviderLabel') }),
+        providerSelect,
+      ]),
+      el('div', { class: 'dv-st-row' }, [
+        el('span', { class: 'dv-st-label', text: t('aiModelLabel') }),
+        el('div', { class: 'dv-ai-inline-row' }, [modelInput, datalist, discoverBtn]),
+      ]),
+    ];
+
+    if (provider !== 'VS Code') {
+      const baseInput = el('input', { class: 'dv-ai-field-input' });
+      baseInput.type = 'url';
+      baseInput.placeholder = activePreset.defaultBaseUrl || 'https://api.example.com/v1';
+      baseInput.value = snap?.baseUrl ?? '';
+      baseInput.setAttribute('aria-label', t('aiBaseUrlLabel'));
+      const commitBase = () => {
+        if (baseInput.value.trim() !== (snap?.baseUrl ?? '')) {
+          post({ type: 'aiUpdateSettings', baseUrl: baseInput.value.trim() });
+        }
+      };
+      baseInput.addEventListener('change', commitBase);
+      baseInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commitBase();
+        }
+      });
+      rows.push(
+        el('div', { class: 'dv-st-row' }, [
+          el('span', { class: 'dv-st-label', text: t('aiBaseUrlLabel') }),
+          baseInput,
+        ]),
+      );
+
+      const hasKey = Boolean(snap?.hasApiKey);
+      const badge = el('span', {
+        class: hasKey ? 'dv-ai-key-badge dv-ai-key-ok' : 'dv-ai-key-badge',
+        text: hasKey ? t('aiApiKeySet') : t('aiApiKeyMissing'),
+      });
+      const setKeyBtn = el('button', { class: 'dv-st-action-btn', text: t('aiSetApiKey') });
+      setKeyBtn.type = 'button';
+      setKeyBtn.addEventListener('click', () => post({ type: 'aiManageKey', op: 'set' }));
+
+      const keyBtns: HTMLElement[] = [badge, setKeyBtn];
+      if (hasKey) {
+        const clearKeyBtn = el('button', { class: 'dv-st-action-btn', text: t('aiClearApiKey') });
+        clearKeyBtn.type = 'button';
+        clearKeyBtn.addEventListener('click', () => post({ type: 'aiManageKey', op: 'clear' }));
+        keyBtns.push(clearKeyBtn);
+      }
+      rows.push(el('div', { class: 'dv-ai-key-row' }, keyBtns));
+    }
+
+    return el('section', { class: 'dv-st-section' }, rows);
+  }
+
   function renderDrawer(): void {
     const sub = typeof opts.subtitle === 'function' ? opts.subtitle() : (opts.subtitle ?? config.kind.toUpperCase());
     subtitleEl.textContent = sub;
@@ -1028,6 +1181,7 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     contentEl.replaceChildren(
       ...(docSection ? [docSection] : []),
       ...buildAppearanceDrawerSections(),
+      buildAiProviderSection(),
       buildToolbarSection(),
     );
     contentEl.scrollTop = scrollTop;
@@ -1050,6 +1204,12 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     gearBtn.setAttribute('aria-expanded', 'true');
     gearBtn.classList.add('dv-active');
     window.addEventListener('keydown', onKeyDown, true);
+    overlayStack.push({
+      id: 'settingsDrawer',
+      isOpen: () => drawerOpen,
+      close: closeDrawer,
+      restoreFocus: () => gearBtn,
+    });
     closeBtn.focus();
   }
 
@@ -1064,6 +1224,7 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     gearBtn.setAttribute('aria-expanded', 'false');
     gearBtn.classList.remove('dv-active');
     window.removeEventListener('keydown', onKeyDown, true);
+    overlayStack.remove('settingsDrawer');
   }
 
   function refresh(): void {
@@ -1073,6 +1234,14 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     }
   }
 
+  const unsubAi = onAiSettingsChange(() => {
+    if (drawerOpen) {
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag !== 'INPUT' && activeTag !== 'SELECT') {
+        renderDrawer();
+      }
+    }
+  });
   toolbarListeners.add(refresh);
   onFileState(refresh);
   onAppearanceChange(() => {
@@ -1085,6 +1254,7 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     closeOverflow();
     closeDrawer();
     ro?.disconnect();
+    unsubAi();
     toolbarListeners.delete(refresh);
     overflowPop.remove();
     backdrop.remove();

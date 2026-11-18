@@ -4,6 +4,8 @@ import '../shared/base.css';
 import '../shared/office-fonts.css';
 import './pptx.css';
 import type { DocComment } from '../../common/protocol';
+import { InteractionModeMachine } from '../../common/stateMachine';
+import { createAiAssistant } from '../shared/aiAssistant';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import {
   attachSurfaceAnnotator,
@@ -14,6 +16,7 @@ import {
 } from '../shared/comments';
 import { getFileState } from '../shared/fileState';
 import { createFindWidget, PreviewFind } from '../shared/find';
+import { overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
 import {
   customToolbar,
@@ -43,38 +46,29 @@ const slideList = new Outline((key) => goTo(Number(key)), {
 sidebar.panel('slides').append(slideList.node);
 
 let docFileName = 'Presentation.pptx';
-let editable = false;
-let editMode = false;
-let annotateMode = false;
+const modeMachine = new InteractionModeMachine();
 let comments: DocComment[] = [];
 let pptxShapes: string[][] = [];
 let pptxNotes: string[] = [];
 let lastSlideAspect: number | undefined;
 
 const editToggle = toggleButton('pencil', t('pptxEditMode'), (on) => {
-  editMode = on;
-  if (on && annotateMode) {
-    annotateMode = false;
-    annotateToggle.set(false);
-    host.classList.remove('pptx-annotating');
-  }
-  host.classList.toggle('pptx-editing', on);
-  closeFloatingEditors();
-  if (on) {
-    notice.flash(t('pptxEditMode'), 2800);
-  }
+  modeMachine.setMode(on ? 'edit' : 'read');
 });
 
 const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
-  annotateMode = on;
-  if (on && editMode) {
-    editMode = false;
-    editToggle.set(false);
-    host.classList.remove('pptx-editing');
-  }
-  host.classList.toggle('pptx-annotating', on);
+  modeMachine.setMode(on ? 'annotate' : 'read');
+});
+
+modeMachine.onChange((mode) => {
+  editToggle.set(mode === 'edit');
+  annotateToggle.set(mode === 'annotate');
+  host.classList.toggle('pptx-editing', mode === 'edit');
+  host.classList.toggle('pptx-annotating', mode === 'annotate');
   closeFloatingEditors();
-  if (on) {
+  if (mode === 'edit') {
+    notice.flash(t('pptxEditMode'), 2800);
+  } else if (mode === 'annotate') {
     sidebar.setOpen(true);
     sidebar.setTab('comments');
     notice.flash(t('annotatePptxHint'), 2800);
@@ -83,7 +77,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
 
 const commentsPanel = new CommentsPanel({
   docName: () => docFileName,
-  editable: () => editable,
+  editable: () => modeMachine.isEditable,
   targetLabel: (c) => (c.page ? t('slideN', c.page) : ''),
   onSelect: (c) => {
     if (c.page) {
@@ -94,17 +88,7 @@ const commentsPanel = new CommentsPanel({
   onUpdate: (id, text) => post({ type: 'docMutate', mutation: { kind: 'updateComment', id, text } }),
   onDelete: (id) => post({ type: 'docMutate', mutation: { kind: 'deleteComment', id } }),
   onToggleAddMode: () => {
-    annotateMode = !annotateMode;
-    annotateToggle.set(annotateMode);
-    if (annotateMode && editMode) {
-      editMode = false;
-      editToggle.set(false);
-      host.classList.remove('pptx-editing');
-    }
-    host.classList.toggle('pptx-annotating', annotateMode);
-    if (annotateMode) {
-      notice.flash(t('annotatePptxHint'), 2800);
-    }
+    modeMachine.toggle('annotate');
   },
 });
 sidebar.panel('comments').append(commentsPanel.node);
@@ -145,13 +129,27 @@ const findWidget = createFindWidget(pptFind, stage);
 
 let notesOpen = readState().pptxNotesOpen === true;
 const notesTitleEl = el('span', { class: 'pptx-notes-title', text: t('speakerNotes') });
+const notesAiBtn = iconButton('sparkle', `${t('aiAssistant')} · ${t('speakerNotes')}`, () => {
+  ai.open({
+    presetAction: 'generate',
+    initialPrompt: 'Write concise, natural speaker notes for this slide.',
+    autoRun: true,
+  });
+});
+notesAiBtn.classList.add('dv-cm-mini');
 const notesEditBtn = iconButton('pencil', t('editSpeakerNotes'), () => startNoteEdit());
 notesEditBtn.classList.add('dv-cm-mini');
 const notesCloseBtn = iconButton('close', t('cancel'), () => setNotesOpen(false));
 notesCloseBtn.classList.add('dv-cm-mini');
 const notesBody = el('div', { class: 'pptx-notes-body' });
 const notesPanel = el('div', { class: 'pptx-notes-panel' }, [
-  el('div', { class: 'pptx-notes-head' }, [notesTitleEl, el('div', { class: 'dv-spacer' }), notesEditBtn, notesCloseBtn]),
+  el('div', { class: 'pptx-notes-head' }, [
+    notesTitleEl,
+    el('div', { class: 'dv-spacer' }),
+    notesAiBtn,
+    notesEditBtn,
+    notesCloseBtn,
+  ]),
   notesBody,
 ]);
 notesPanel.hidden = !notesOpen;
@@ -170,7 +168,8 @@ function setNotesOpen(on: boolean) {
 }
 
 function syncNotesUi() {
-  notesEditBtn.hidden = !editable;
+  notesEditBtn.hidden = !modeMachine.isEditable;
+  notesAiBtn.hidden = !modeMachine.isEditable;
   if (!slides.length) {
     notesTitleEl.textContent = t('speakerNotes');
     notesBody.textContent = '';
@@ -183,7 +182,7 @@ function syncNotesUi() {
 }
 
 function startNoteEdit() {
-  if (!editable || !slides.length) {
+  if (!modeMachine.isEditable || !slides.length) {
     return;
   }
   const slideIndex = current;
@@ -200,7 +199,7 @@ function startNoteEdit() {
 }
 
 notesBody.addEventListener('dblclick', () => {
-  if (editable) {
+  if (modeMachine.isEditable) {
     startNoteEdit();
   }
 });
@@ -320,6 +319,7 @@ function enterPresentation() {
     return;
   }
   presenting = true;
+  modeMachine.setMode('present');
   presentOverlay.hidden = false;
   renderPresentSlide();
   try {
@@ -334,6 +334,9 @@ function exitPresentation() {
     return;
   }
   presenting = false;
+  if (modeMachine.mode === 'present') {
+    modeMachine.setMode('read');
+  }
   presentOverlay.hidden = true;
   presentNotesBubble.hidden = true;
   laserDot.hidden = true;
@@ -353,6 +356,153 @@ const presentBtn = iconButton('play', t('presentSlides'), () => enterPresentatio
 const exportMdBtn = iconButton('export', t('exportMarkdown'), () => post({ type: 'exportDocMarkdown' }));
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
+interface PptxAiMeta {
+  slideIndex: number;
+  shapeIndex?: number;
+  expected?: string;
+}
+
+function matchSlideShapeFromElement(elNode: Element): { slideIdx: number; shapeIdx: number; expected: string } | undefined {
+  const slideEl = elNode.closest<HTMLElement>('.pptx-preview-slide-wrapper');
+  if (!slideEl) return undefined;
+  const slideIdx = slides.indexOf(slideEl);
+  const shapesOnSlide = pptxShapes[slideIdx] ?? [];
+  if (slideIdx < 0 || !shapesOnSlide.length) return undefined;
+  const normedShapes = shapesOnSlide.map(normShapeText);
+  let cur: HTMLElement | null = elNode instanceof HTMLElement ? elNode : elNode.parentElement;
+  let matched = -1;
+  while (cur && cur !== slideEl) {
+    const txt = normShapeText(cur.textContent ?? '');
+    if (txt) {
+      const exact = normedShapes.indexOf(txt);
+      if (exact >= 0) {
+        matched = exact;
+        break;
+      }
+      const containing = normedShapes.findIndex((s) => s.includes(txt));
+      if (containing >= 0) {
+        matched = containing;
+      }
+    }
+    cur = cur.parentElement;
+  }
+  return matched >= 0 ? { slideIdx, shapeIdx: matched, expected: shapesOnSlide[matched] } : undefined;
+}
+
+function capturePptxAiContext() {
+  const slideIdx = Math.max(0, current);
+  const slideSummary = pptxShapes
+    .map((shapes, idx) => `Slide ${idx + 1}: ${shapes.join(' | ')}${pptxNotes[idx] ? ` (Notes: ${pptxNotes[idx]})` : ''}`)
+    .join('\n')
+    .slice(0, 10_000);
+
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+    const range = sel.getRangeAt(0);
+    const startEl =
+      range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.startContainer as Element)
+        : range.startContainer.parentElement;
+    if (startEl && host.contains(startEl)) {
+      const shapeHit = matchSlideShapeFromElement(startEl);
+      if (shapeHit) {
+        return {
+          selection: shapeHit.expected,
+          surrounding: slideSummary,
+          badge: `${t('slideN', shapeHit.slideIdx + 1)} · #${shapeHit.shapeIdx + 1}`,
+          meta: {
+            slideIndex: shapeHit.slideIdx,
+            shapeIndex: shapeHit.shapeIdx,
+            expected: shapeHit.expected,
+          } satisfies PptxAiMeta,
+        };
+      }
+      const selStr = sel.toString().trim();
+      return {
+        selection: selStr,
+        surrounding: slideSummary,
+        badge: t('slideN', slideIdx + 1),
+        meta: { slideIndex: slideIdx } satisfies PptxAiMeta,
+      };
+    }
+  }
+
+  const curShapes = (pptxShapes[slideIdx] ?? []).join('\n');
+  const curNotes = (pptxNotes[slideIdx] ?? '').trim();
+  const curSlideContext = [curShapes, curNotes ? `Speaker notes:\n${curNotes}` : ''].filter(Boolean).join('\n\n');
+  return {
+    selection: curSlideContext || undefined,
+    surrounding: slideSummary,
+    badge: t('slideN', slideIdx + 1),
+    meta: { slideIndex: slideIdx } satisfies PptxAiMeta,
+  };
+}
+
+let openPptxDrawerFn: (() => void) | undefined;
+
+const ai = createAiAssistant({
+  viewerKind: 'pptx',
+  getFileName: () => docFileName,
+  captureContext: capturePptxAiContext,
+  selectionRoot: host,
+  onOpenSettings: () => openPptxDrawerFn?.(),
+  focusReturnTarget: () => stage,
+  applyActions: [
+    {
+      id: 'replace-shape',
+      label: () => t('aiApplyReplace'),
+      primary: true,
+      visible: ({ captured }) => {
+        const m = captured.meta as PptxAiMeta | undefined;
+        return modeMachine.isEditable && m?.shapeIndex !== undefined && m.expected !== undefined;
+      },
+      onApply: ({ text, captured }) => {
+        const m = captured.meta as PptxAiMeta;
+        post({
+          type: 'docMutate',
+          mutation: {
+            kind: 'editPptxText',
+            slideIndex: m.slideIndex,
+            shapeIndex: m.shapeIndex!,
+            text: text.trim(),
+            expected: m.expected!,
+          },
+        });
+      },
+    },
+    {
+      id: 'save-notes',
+      label: () => t('aiApplyNotes'),
+      primary: true,
+      visible: () => modeMachine.isEditable && slides.length > 0,
+      onApply: ({ text, captured }) => {
+        const m = captured.meta as PptxAiMeta | undefined;
+        const slideIndex = m?.slideIndex ?? current;
+        setNotesOpen(true);
+        post({
+          type: 'docMutate',
+          mutation: { kind: 'editPptxNote', slideIndex, text: text.trim() },
+        });
+      },
+    },
+    {
+      id: 'save-comment',
+      label: () => t('aiApplyComment'),
+      visible: () => modeMachine.isEditable && slides.length > 0,
+      onApply: ({ text, captured }) => {
+        const m = captured.meta as PptxAiMeta | undefined;
+        const page = (m?.slideIndex ?? current) + 1;
+        sidebar.setOpen(true);
+        sidebar.setTab('comments');
+        post({
+          type: 'docMutate',
+          mutation: { kind: 'addComment', page, rect: { x: 0.9, y: 0.08, w: 0, h: 0 }, text: text.trim() },
+        });
+      },
+    },
+  ],
+});
+
 const topBar = customToolbar({
   subtitle: 'PPTX',
   slots: [
@@ -361,13 +511,15 @@ const topBar = customToolbar({
     { id: 'pager', nodes: [pager.node] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'find', nodes: findWidget.nodes },
-    { id: 'edit', label: t('pptxEditMode'), nodes: [editToggle.node], visible: () => editable },
-    { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
+    { id: 'edit', label: t('pptxEditMode'), nodes: [editToggle.node], visible: () => modeMachine.isEditable },
+    { id: 'comments', nodes: [annotateToggle.node], visible: () => modeMachine.isEditable },
+    { id: 'ai', nodes: [ai.button] },
     { id: 'actions', nodes: [exportMdBtn] },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
+    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     openExternalMenuItem(),
     { label: t('presentSlides'), icon: 'play', onClick: () => enterPresentation() },
     { label: t('exportMarkdown'), icon: 'export', onClick: () => post({ type: 'exportDocMarkdown' }) },
@@ -381,6 +533,7 @@ const topBar = customToolbar({
   ],
 });
 
+openPptxDrawerFn = () => topBar.openDrawer();
 app.append(
   topBar.node,
   notice.node,
@@ -508,7 +661,7 @@ function syncSlideAnnotations(): void {
 attachSurfaceAnnotator({
   root: host,
   allowBox: false,
-  isActive: () => editable && annotateMode,
+  isActive: () => modeMachine.isEditable && modeMachine.mode === 'annotate',
   resolveSurface: (target) => {
     const elTarget = target instanceof HTMLElement ? target : undefined;
     const slideEl = elTarget?.closest<HTMLElement>('.pptx-preview-slide-wrapper');
@@ -529,7 +682,7 @@ function normShapeText(s: string): string {
 }
 
 host.addEventListener('click', (e) => {
-  if (annotateMode || editMode) {
+  if (modeMachine.mode !== 'read') {
     return;
   }
   const anchor = (e.target as HTMLElement | null)?.closest<HTMLAnchorElement>('a[href]');
@@ -541,7 +694,7 @@ host.addEventListener('click', (e) => {
 });
 
 host.addEventListener('dblclick', (e) => {
-  if (!editable || !editMode) {
+  if (!modeMachine.isEditable || modeMachine.mode !== 'edit') {
     return;
   }
   const elTarget = e.target instanceof HTMLElement ? e.target : undefined;
@@ -715,11 +868,17 @@ async function load(bytes: Uint8Array) {
     syncCommentsUi();
     pptFind.refresh();
     findWidget.refreshCount();
-    post({ type: 'status', ok: true, detail: `${previewer.slideCount} slides` });
+    post({
+      type: 'status',
+      ok: true,
+      detail: `${previewer.slideCount} slides`,
+      mode: modeMachine.mode,
+      overlays: overlayStack.getOpenIds(),
+    });
   } catch (err) {
     if (run === generation) {
       showStatus(host, t('loadFailed', errorText(err)), true);
-      post({ type: 'status', ok: false, detail: errorText(err) });
+      post({ type: 'status', ok: false, detail: errorText(err), mode: modeMachine.mode });
     }
   }
 }
@@ -727,7 +886,7 @@ async function load(bytes: Uint8Array) {
 onMessage((message) => {
   if (message.type === 'load') {
     docFileName = message.name || 'Presentation.pptx';
-    editable = message.editable === true;
+    modeMachine.setEditable(message.editable === true);
     comments = message.comments ?? [];
     pptxShapes = message.pptxShapes ?? [];
     pptxNotes = message.pptxNotes ?? [];

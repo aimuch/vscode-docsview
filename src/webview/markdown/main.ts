@@ -1,12 +1,15 @@
 import 'katex/dist/katex.min.css';
 import morphdom from 'morphdom';
 import type { TocEntry } from '../../common/protocol';
+import { countDocumentWords } from '../../common/textStats';
 import '../shared/base.css';
 import './markdown.css';
+import { createAiAssistant } from '../shared/aiAssistant';
 import { app, el, errorText, isDark, onMessage, onThemeChange, post, t } from '../shared/api';
 import { getAppearance, highlightToggle, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
 import { icons } from '../shared/icons';
+import { overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
 import { createFindWidget } from '../shared/find';
 import { customToolbar, iconButton, moreMenu, segmented, toggleButton } from '../shared/ui';
@@ -224,6 +227,117 @@ const slideDeck = new MarkdownSlideDeck(article, () => scroller);
 const slideModeBtn = iconButton('play', `${t('mdSlideMode')} (F5)`, () => slideDeck.open());
 const historyBtn = iconButton('history', t('slotHistory'), () => post({ type: 'history' }));
 
+interface MdSelectionMeta {
+  startLine?: number;
+  endLine?: number;
+}
+
+function captureMdAiContext() {
+  const lines = getSourceLines();
+  if (editing) {
+    const start = Number(editing.block.dataset.line);
+    const end = Math.min(Number(editing.block.dataset.lineEnd), lines.length);
+    const ta = editing.box.querySelector<HTMLTextAreaElement>('textarea');
+    const val = ta?.value ?? '';
+    return {
+      selection: val,
+      surrounding: rawSource.slice(0, 8000),
+      badge: t('editLines', start + 1, Math.max(start + 1, end)),
+      meta: { startLine: start, endLine: end } satisfies MdSelectionMeta,
+    };
+  }
+
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+    const range = sel.getRangeAt(0);
+    const startEl =
+      range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.startContainer as Element)
+        : range.startContainer.parentElement;
+    const endEl =
+      range.endContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.endContainer as Element)
+        : range.endContainer.parentElement;
+    if (startEl && endEl && article.contains(startEl) && article.contains(endEl)) {
+      const b0 = blockAt(startEl);
+      const b1 = blockAt(endEl);
+      const startLine = b0 ? Number(b0.dataset.line) : undefined;
+      const endLine = b1 ? Math.min(Number(b1.dataset.lineEnd), lines.length) : undefined;
+      const rawBlock =
+        startLine !== undefined && endLine !== undefined && endLine > startLine
+          ? lines.slice(startLine, endLine).join('\n').replace(/\n+$/, '')
+          : sel.toString().trim();
+      return {
+        selection: rawBlock || sel.toString().trim(),
+        surrounding: rawSource.slice(0, 8000),
+        badge:
+          startLine !== undefined && endLine !== undefined
+            ? `L${startLine + 1}–${endLine}`
+            : t('aiContextSelection', sel.toString().trim().length),
+        meta: { startLine, endLine } satisfies MdSelectionMeta,
+      };
+    }
+  }
+
+  return {
+    surrounding: rawSource,
+    badge: t('aiContextDocument'),
+    meta: {} satisfies MdSelectionMeta,
+  };
+}
+
+let openDrawerFn: (() => void) | undefined;
+
+const ai = createAiAssistant({
+  viewerKind: 'markdown',
+  captureContext: captureMdAiContext,
+  selectionRoot: article,
+  onOpenSettings: () => openDrawerFn?.(),
+  focusReturnTarget: () => scroller,
+  applyActions: [
+    {
+      id: 'replace',
+      label: () => t('aiApplyReplace'),
+      primary: true,
+      visible: ({ captured }) => {
+        const m = captured.meta as MdSelectionMeta | undefined;
+        return m?.startLine !== undefined && m?.endLine !== undefined && m.endLine > m.startLine;
+      },
+      onApply: ({ text, captured }) => {
+        const m = captured.meta as MdSelectionMeta;
+        const lines = getSourceLines();
+        const start = m.startLine!;
+        const end = Math.min(m.endLine!, lines.length);
+        const expected = lines.slice(start, end).join('\n');
+        const stripped = expected.replace(/\n+$/, '');
+        const trailing = expected.slice(stripped.length) || '\n';
+        closeEditor();
+        post({ type: 'editBlock', start, end, text: text.trimEnd() + trailing, expected });
+      },
+    },
+    {
+      id: 'insert',
+      label: () => t('aiApplyInsert'),
+      primary: false,
+      onApply: ({ text, captured }) => {
+        const m = captured.meta as MdSelectionMeta | undefined;
+        const lines = getSourceLines();
+        const at =
+          m?.endLine !== undefined && m.endLine <= lines.length ? m.endLine : lines.length;
+        const prefix = at > 0 && (lines[at - 1] ?? '').trim() !== '' ? '\n' : '';
+        closeEditor();
+        post({
+          type: 'editBlock',
+          start: at,
+          end: at,
+          text: `${prefix}${text.trimEnd()}\n\n`,
+          expected: '',
+        });
+      },
+    },
+  ],
+});
+
 const topBar = customToolbar({
   subtitle: 'Markdown',
   slots: [
@@ -233,11 +347,13 @@ const topBar = customToolbar({
     { id: 'find', nodes: findWidget.nodes },
     { id: 'edit', label: t('editMode'), nodes: [editToggle.node] },
     { id: 'highlight', nodes: [highlightToggle()] },
+    { id: 'ai', nodes: [ai.button] },
     { id: 'actions', label: t('exportMenu'), nodes: [exportDropdown] },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'rtl', nodes: [rtlToggle.node] },
   ],
   documentActions: [
+    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     { label: t('mdSlideMode'), icon: 'play', onClick: () => slideDeck.open() },
     { label: t('exportHtml'), icon: 'export', onClick: () => exportAs('html') },
     { label: t('exportPdf'), hint: t('exportPdfHint'), icon: 'export', onClick: () => exportAs('pdf') },
@@ -269,6 +385,7 @@ const topBar = customToolbar({
 });
 
 const statusLabel = el('span', { class: 'dv-label' });
+openDrawerFn = () => topBar.openDrawer();
 const mdStatusBar = el('div', { class: 'dv-statusbar' }, [el('div', { class: 'dv-spacer' }), statusLabel]);
 
 scroller.tabIndex = -1;
@@ -388,11 +505,8 @@ article.addEventListener('change', (e) => {
 });
 
 function updateDocStats() {
-  // Use `textContent` (before `.md-copy` buttons are injected) so typing never triggers Forced Reflow (`innerText`).
-  const text = article.textContent ?? '';
-  const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
-  const latin = (text.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, ' ').match(/[A-Za-z0-9_'-]+/g) ?? []).length;
-  const totalWords = cjk + latin;
+  // Zero-allocation single-pass word count (`PERF-4`), avoiding regex match arrays & Forced Reflow.
+  const totalWords = countDocumentWords(article.textContent ?? '');
   const readMin = Math.max(1, Math.ceil(totalWords / 350));
   const lineCount = rawSource ? getSourceLines().length : 0;
   statusLabel.textContent = `${t('mdWords', totalWords.toLocaleString())} · ${t('mdReadMin', readMin)} · ${t('mdLines', lineCount.toLocaleString())}`;
@@ -454,6 +568,8 @@ function render(html: string, toc: TocEntry[]) {
         detail:
           `${toc.length} headings, ${diagrams} diagrams, ` +
           `${article.querySelectorAll('.katex').length} formulas, ${loaded}/${images.length} images`,
+        mode: scroller.classList.contains('md-editing') ? 'edit' : 'read',
+        overlays: overlayStack.getOpenIds(),
       });
     },
     (err) => post({ type: 'status', ok: false, detail: errorText(err) }),

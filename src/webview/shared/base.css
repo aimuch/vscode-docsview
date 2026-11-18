@@ -1850,3 +1850,296 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
 .dv-present-hud .dv-btn {
   color: #f4f4f5;
 }
+
+/* ------------------------------------------------------------------ AI Assistant Card, Selection Pill & Drawer */
+
+.dv-ai-trigger-btn {
+  color: var(--dv-accent);
+}
+
+.dv-ai-card {
+  position: fixed;
+  top: 44px;
+  right: 14px;
+  width: min(440px, calc(100vw - 28px));
+  max-height: calc(100vh - 64px);
+  z-index: 260;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border, var(--dv-border));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  color: var(--vscode-foreground);
+}
+
+.dv-ai-card[hidden] {
+  display: none;
+}
+
+.dv-ai-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dv-ai-title-icon {
+  display: inline-flex;
+  color: var(--dv-accent);
+}
+
+.dv-ai-title {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.dv-ai-ctx-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dv-accent) 14%, transparent);
+  color: var(--dv-accent);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dv-ai-provider-pill {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--dv-border);
+  background: var(--vscode-input-background, transparent);
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  cursor: pointer;
+  max-width: 155px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dv-ai-provider-pill:hover {
+  border-color: var(--vscode-focusBorder, var(--dv-accent));
+  color: var(--vscode-foreground);
+}
+
+.dv-ai-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.dv-ai-chips[hidden] {
+  display: none;
+}
+
+.dv-ai-chip {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--dv-border);
+  background: transparent;
+  color: var(--vscode-foreground);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.dv-ai-chip:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.14));
+}
+
+.dv-ai-chip.dv-ai-chip-active {
+  background: color-mix(in srgb, var(--dv-accent) 16%, transparent);
+  border-color: var(--dv-accent);
+  color: var(--dv-accent);
+  font-weight: 500;
+}
+
+.dv-ai-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dv-ai-prompt {
+  width: 100%;
+  min-height: 54px;
+  max-height: 150px;
+  resize: vertical;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.45;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-input-border, var(--dv-border));
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  box-sizing: border-box;
+}
+
+.dv-ai-prompt:focus {
+  outline: 1px solid var(--vscode-focusBorder, var(--dv-accent));
+  border-color: var(--vscode-focusBorder, var(--dv-accent));
+}
+
+.dv-ai-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dv-ai-shortcut-hint {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  opacity: 0.78;
+}
+
+.dv-ai-btn-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.dv-ai-btn-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dv-ai-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--vscode-button-background, var(--dv-accent));
+  color: var(--vscode-button-foreground, #ffffff);
+  border-color: transparent;
+  font-weight: 500;
+}
+
+.dv-ai-primary-btn:hover {
+  background: var(--vscode-button-hoverBackground, var(--dv-accent));
+}
+
+.dv-ai-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--vscode-errorForeground, #ef4444);
+  border-color: color-mix(in srgb, var(--vscode-errorForeground, #ef4444) 45%, var(--dv-border));
+}
+
+.dv-ai-status {
+  font-size: 11.5px;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.dv-ai-status.dv-ai-status-error {
+  color: var(--vscode-errorForeground, #ef4444);
+  white-space: pre-wrap;
+}
+
+.dv-ai-output {
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--dv-border);
+  background: color-mix(in srgb, var(--vscode-editor-background) 92%, #808080);
+  font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.dv-ai-apply-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.dv-ai-apply-bar[hidden] {
+  display: none;
+}
+
+.dv-ai-float-pill {
+  position: fixed;
+  z-index: 255;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 13px;
+  border: 1px solid color-mix(in srgb, var(--dv-accent) 50%, var(--dv-border));
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  color: var(--dv-accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.24);
+}
+
+.dv-ai-float-pill[hidden] {
+  display: none;
+}
+
+.dv-ai-float-pill:hover {
+  background: var(--vscode-button-background, var(--dv-accent));
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+/* Settings Drawer AI Provider controls */
+.dv-ai-select {
+  max-width: 190px;
+}
+
+.dv-ai-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  max-width: 210px;
+}
+
+.dv-ai-field-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 7px;
+  font: inherit;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-input-border, var(--dv-border));
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+}
+
+.dv-ai-key-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.dv-ai-key-badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--dv-border);
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.dv-ai-key-badge.dv-ai-key-ok {
+  border-color: color-mix(in srgb, #22c55e 45%, var(--dv-border));
+  color: #22c55e;
+}

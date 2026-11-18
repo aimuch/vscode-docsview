@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -199,6 +199,29 @@
       {
         "command": "docsview.showHistory",
         "title": "%command.showHistory%"
+      },
+      {
+        "command": "docsview.ai.openAssistant",
+        "title": "%command.ai.openAssistant%",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "docsview.ai.setApiKey",
+        "title": "%command.ai.setApiKey%",
+        "icon": "$(key)"
+      },
+      {
+        "command": "docsview.ai.clearApiKey",
+        "title": "%command.ai.clearApiKey%",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "docsview.getViewerState",
+        "title": "%command.getViewerState%"
+      },
+      {
+        "command": "docsview.readDocumentMarkdown",
+        "title": "%command.readDocumentMarkdown%"
       }
     ],
     "menus": {
@@ -247,12 +270,66 @@
         {
           "command": "docsview.showHistory",
           "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|jsonl|ndjson|xlsx|xlsm|docx|pptx|pdf|png|jpg|jpeg|webp|gif|bmp|svg|ico|avif)$/i"
+        },
+        {
+          "command": "docsview.ai.openAssistant",
+          "when": "activeCustomEditorId =~ /^docsview\\./"
+        },
+        {
+          "command": "docsview.getViewerState",
+          "when": "false"
+        },
+        {
+          "command": "docsview.readDocumentMarkdown",
+          "when": "false"
         }
       ]
     },
     "configuration": {
       "title": "DocsView",
       "properties": {
+        "docsview.ai.provider": {
+          "type": "string",
+          "enum": [
+            "VS Code",
+            "DeepSeek",
+            "Kimi",
+            "Doubao",
+            "Qwen",
+            "OpenAI",
+            "Ollama",
+            "Magpie",
+            "CC Switch",
+            "OpenAI Compatible"
+          ],
+          "enumDescriptions": [
+            "%config.ai.provider.0%",
+            "%config.ai.provider.1%",
+            "%config.ai.provider.2%",
+            "%config.ai.provider.3%",
+            "%config.ai.provider.4%",
+            "%config.ai.provider.5%",
+            "%config.ai.provider.6%",
+            "%config.ai.provider.7%",
+            "%config.ai.provider.8%",
+            "%config.ai.provider.9%"
+          ],
+          "default": "VS Code",
+          "description": "%config.ai.provider%",
+          "scope": "machine"
+        },
+        "docsview.ai.baseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.ai.baseUrl%",
+          "scope": "machine"
+        },
+        "docsview.ai.model": {
+          "type": "string",
+          "default": "",
+          "description": "%config.ai.model%",
+          "scope": "machine"
+        },
         "docsview.markdown.scrollSync": {
           "type": "boolean",
           "default": true,
@@ -412,6 +489,7 @@
               "comments",
               "highlight",
               "structure",
+              "ai",
               "actions",
               "theme",
               "openApp"

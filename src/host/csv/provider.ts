@@ -22,7 +22,13 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
     const setting = vscode.workspace.getConfiguration('docsview', document.uri).get<string>('csv.delimiter', 'auto');
     const eol = () => (document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n');
     const session = new CsvSession(name, setting, eol());
-    const post = (message: HostMessage) => void panel.webview.postMessage(message);
+    let disposed = false;
+    let editQueue: Promise<void> = Promise.resolve();
+    const post = (message: HostMessage) => {
+      if (!disposed) {
+        void panel.webview.postMessage(message);
+      }
+    };
     const key = document.uri.toString();
 
     let syncedVersion = -1;
@@ -30,7 +36,7 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
 
     /** Brings the session (and the webview) up to date with the document. */
     const sync = () => {
-      if (syncedVersion === document.version) {
+      if (disposed || syncedVersion === document.version) {
         return;
       }
       syncedVersion = document.version;
@@ -41,7 +47,7 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
     };
     const scheduleSync = debounce(sync, 50);
     const scheduleDiskSync = debounce(async () => {
-      if (!webviewReady || document.isDirty) {
+      if (disposed || !webviewReady || document.isDirty) {
         return;
       }
       try {
@@ -73,6 +79,16 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
       sync();
     };
 
+    const enqueueEdit = (compute: () => TextEdit[]) => {
+      editQueue = editQueue
+        .then(async () => {
+          if (disposed) return;
+          sync();
+          await apply(compute());
+        })
+        .catch(() => undefined);
+    };
+
     const disposables: vscode.Disposable[] = [
       watcher,
       watcher.onDidChange(scheduleDiskSync),
@@ -102,9 +118,8 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
             post({ type: 'sheet', index: 0, model: session.model() });
             break;
           case 'edit':
-            // Offsets are only valid against the text the session last parsed.
-            sync();
-            void apply(session.editCells(message.changes));
+            // Serialised so consecutive edits compute offsets against the latest document version.
+            enqueueEdit(() => session.editCells(message.changes));
             break;
           case 'convert': {
             sync();
@@ -127,13 +142,15 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
             break;
           }
           case 'structure':
-            sync();
-            void apply(session.structure(message.op, message.at, message.count));
+            enqueueEdit(() => session.structure(message.op, message.at, message.count));
             break;
         }
       }),
     ];
-    panel.onDidDispose(() => disposables.forEach((d) => d.dispose()));
+    panel.onDidDispose(() => {
+      disposed = true;
+      disposables.forEach((d) => d.dispose());
+    });
 
     configureWebview(panel, this.context.extensionUri, 'sheet', { documentUri: document.uri, tracksSource: true });
   }

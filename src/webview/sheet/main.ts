@@ -1,12 +1,15 @@
-// Table view for CSV/TSV and Excel workbooks.
-import type { Cell, CellChange, SheetModel, StructureOp, WorkbookInfo } from '../../common/protocol';
+// Table view for CSV/TSV, JSONL and Excel workbooks.
+import { extractFormulaFromAiResponse, extractTableFromAiResponse } from '../../common/aiResponseParser';
+import type { AiSheetSchemaContext, Cell, CellChange, SheetModel, StructureOp, WorkbookInfo } from '../../common/protocol';
 import { cellRaw, cellText, columnName, Grid, type GridSource, type Selection } from '../grid/grid';
 import '../shared/base.css';
+import { createAiAssistant } from '../shared/aiAssistant';
 import { app, button, el, onMessage, post, showStatus, t } from '../shared/api';
 import { getAppearance, highlightToggle, lockToggle, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
 import { createFindBar } from '../shared/find';
 import { icons } from '../shared/icons';
+import { overlayStack } from '../shared/overlayStack';
 import { readState, writeState } from '../shared/sidebar';
 import {
   customToolbar,
@@ -35,6 +38,7 @@ import {
   numericValue,
   selectionToJson,
   selectionToMarkdownTable,
+  shiftFormulaRefs,
   viewRows,
   type CondFormatKind,
   type NumFilterOp,
@@ -63,7 +67,10 @@ formula.type = 'text';
 formula.spellcheck = false;
 formula.placeholder = t('formulaPlaceholder');
 formula.setAttribute('aria-label', t('formulaPlaceholder'));
-const formulaBar = el('span', { class: 'sheet-formula-wrap' }, [fxBadge, formula]);
+const fxAiBtn = el('button', { class: 'sheet-fx-ai-btn', title: `${t('aiActFormula')} (AI)` });
+fxAiBtn.type = 'button';
+fxAiBtn.innerHTML = icons.sparkle;
+const formulaBar = el('span', { class: 'sheet-formula-wrap' }, [fxBadge, formula, fxAiBtn]);
 
 const selectionStatsEl = el('div', { class: 'sheet-sel-stats' });
 selectionStatsEl.hidden = true;
@@ -867,6 +874,231 @@ const zoom = createZoom((value) => {
   grid?.setZoom(value);
 }, gridHost);
 
+interface SheetAiMeta {
+  r0: number;
+  c0: number;
+  r1: number;
+  c1: number;
+  r: number;
+  c: number;
+}
+
+function captureSheetAiContext() {
+  const model = models.get(active);
+  const sel: Selection = grid?.selection ?? { r: 0, c: 0, r0: 0, c0: 0, r1: 0, c1: 0 };
+  const srcRow = (r: number) => Math.max(0, toSource(r));
+  const activeAddr = `${columnName(sel.c)}${srcRow(sel.r) + 1}`;
+  const rangeAddr =
+    sel.r0 === sel.r1 && sel.c0 === sel.c1
+      ? activeAddr
+      : `${columnName(sel.c0)}${srcRow(sel.r0) + 1}:${columnName(sel.c1)}${srcRow(sel.r1) + 1}`;
+
+  const headers: string[] = [];
+  const sampleRows: string[][] = [];
+  if (model) {
+    const colCap = Math.min(model.colCount, 40);
+    for (let c = 0; c < colCap; c++) {
+      headers.push(cellText(model.rows[0]?.[c]).trim());
+    }
+    const maxSampleR = Math.min(model.rows.length, 7);
+    for (let r = 1; r < maxSampleR; r++) {
+      const rowArr: string[] = [];
+      let nonEmpty = false;
+      for (let c = 0; c < Math.min(model.colCount, 20); c++) {
+        const v = cellText(model.rows[r]?.[c]);
+        if (v.trim() !== '') nonEmpty = true;
+        rowArr.push(v);
+      }
+      if (nonEmpty) {
+        sampleRows.push(rowArr);
+      }
+    }
+  }
+
+  const schema: AiSheetSchemaContext = {
+    sheetName: model?.name ?? 'Sheet1',
+    allSheets: info?.sheets.map((s) => s.name) ?? [model?.name ?? 'Sheet1'],
+    headers,
+    sampleRows,
+    activeCell: activeAddr,
+    selectionRange: rangeAddr,
+    isJsonl: Boolean(info?.isJsonl),
+  };
+
+  let selectedTsv = '';
+  if (model) {
+    const maxR = Math.min(sel.r1, sel.r0 + 80);
+    const maxC = Math.min(sel.c1, sel.c0 + 25);
+    const tsvLines: string[] = [];
+    for (let r = sel.r0; r <= maxR; r++) {
+      const sr = toSource(r);
+      if (sr < 0 || sr >= model.rows.length) continue;
+      const lineCells: string[] = [];
+      for (let c = sel.c0; c <= maxC; c++) {
+        lineCells.push(cellRaw(model.rows[sr]?.[c]).replace(/\t|\r?\n/g, ' '));
+      }
+      if (lineCells.some((x) => x !== '')) {
+        tsvLines.push(lineCells.join('\t'));
+      }
+    }
+    selectedTsv = tsvLines.join('\n');
+  }
+
+  const isMulti = sel.r1 > sel.r0 || sel.c1 > sel.c0;
+  return {
+    selection: selectedTsv || undefined,
+    badge: isMulti ? t('aiContextRange', rangeAddr) : t('aiContextCell', activeAddr),
+    sheetSchema: schema,
+    meta: { r0: sel.r0, c0: sel.c0, r1: sel.r1, c1: sel.c1, r: sel.r, c: sel.c } satisfies SheetAiMeta,
+  };
+}
+
+let openSheetDrawerFn: (() => void) | undefined;
+
+const ai = createAiAssistant({
+  viewerKind: 'sheet',
+  getFileName: () => models.get(active)?.name ?? '',
+  captureContext: captureSheetAiContext,
+  onOpenSettings: () => openSheetDrawerFn?.(),
+  focusReturnTarget: () => gridHost,
+  applyActions: [
+    {
+      id: 'apply-formula',
+      label: () => t('aiApplyFormula'),
+      primary: true,
+      visible: ({ text }) =>
+        canEdit() && info?.supportsFormulas !== false && Boolean(extractFormulaFromAiResponse(text)),
+      onApply: ({ text, captured }) => {
+        if (!canEdit()) {
+          flash(t('locked'));
+          return false;
+        }
+        const parsed = extractFormulaFromAiResponse(text);
+        if (!parsed) return false;
+        const m = (captured.meta as SheetAiMeta | undefined) ?? grid?.selection ?? { r: 0, c: 0 };
+        edit([{ r: m.r, c: m.c, text: parsed.formula }]);
+        formula.value = parsed.formula;
+      },
+    },
+    {
+      id: 'apply-formula-range',
+      label: () => t('aiApplyFormulaRange'),
+      visible: ({ text, captured }) => {
+        if (!canEdit() || info?.supportsFormulas === false || !extractFormulaFromAiResponse(text)) {
+          return false;
+        }
+        const m = captured.meta as SheetAiMeta | undefined;
+        return Boolean(m && (m.r1 > m.r0 || m.c1 > m.c0));
+      },
+      onApply: ({ text, captured }) => {
+        if (!canEdit()) {
+          flash(t('locked'));
+          return false;
+        }
+        const parsed = extractFormulaFromAiResponse(text);
+        const m = captured.meta as SheetAiMeta | undefined;
+        if (!parsed || !m) return false;
+        const changes: CellChange[] = [];
+        for (let r = m.r0; r <= m.r1; r++) {
+          for (let c = m.c0; c <= m.c1; c++) {
+            changes.push({
+              r,
+              c,
+              text: shiftFormulaRefs(parsed.formula, r - m.r0, c - m.c0),
+            });
+          }
+        }
+        edit(changes);
+      },
+    },
+    {
+      id: 'apply-cells',
+      label: () => t('aiApplyCells'),
+      primary: true,
+      visible: ({ text, action }) => {
+        if (!canEdit()) return false;
+        if (info?.supportsFormulas !== false && extractFormulaFromAiResponse(text) && action === 'formula') {
+          return false;
+        }
+        if (action !== 'tableFill' && action !== 'translate' && action !== 'generate') {
+          return false;
+        }
+        return extractTableFromAiResponse(text, Boolean(info?.isJsonl)).rows.length > 0;
+      },
+      onApply: ({ text, captured }) => {
+        if (!canEdit()) {
+          flash(t('locked'));
+          return false;
+        }
+        const m = (captured.meta as SheetAiMeta | undefined) ?? grid?.selection ?? { r0: 0, c0: 0 };
+        const extracted = extractTableFromAiResponse(text, Boolean(info?.isJsonl));
+        if (info?.isJsonl && extracted.jsonlLines?.length) {
+          // Parse JSON keys against current schema columns so fields land in matching columns!
+          const model = models.get(active);
+          const colNames =
+            model?.rows[0]?.map((c) => cellText(c).trim()) ?? [];
+          const changes: CellChange[] = [];
+          const baseRow = Math.max(1, m.r0);
+          extracted.jsonlLines.forEach((jl, rOffset) => {
+            try {
+              const obj = JSON.parse(jl) as Record<string, unknown>;
+              colNames.forEach((colKey, colIdx) => {
+                if (colKey in obj) {
+                  const val = obj[colKey];
+                  changes.push({
+                    r: baseRow + rOffset,
+                    c: colIdx,
+                    text: val === null || val === undefined ? '' : typeof val === 'object' ? JSON.stringify(val) : String(val),
+                  });
+                }
+              });
+            } catch {
+              // ignore malformed line
+            }
+          });
+          if (changes.length) {
+            edit(changes);
+          }
+          return;
+        }
+        const changes: CellChange[] = [];
+        extracted.rows.forEach((rowVals, dr) => {
+          rowVals.forEach((cellVal, dc) => {
+            changes.push({ r: m.r0 + dr, c: m.c0 + dc, text: cellVal });
+          });
+        });
+        if (changes.length) {
+          edit(changes);
+        }
+      },
+    },
+  ],
+});
+
+fxAiBtn.addEventListener('mousedown', (e) => {
+  // Prevent premature formula.blur commit (`CR-2`) when clicking ✨ inside the formula bar!
+  e.preventDefault();
+});
+fxAiBtn.addEventListener('click', () => {
+  let initialDraft = '';
+  if (formulaTarget && document.activeElement === formula) {
+    const typed = formula.value.trim();
+    if (typed && !typed.startsWith('=') && typed !== formulaTarget.initial) {
+      initialDraft = typed;
+      formula.value = formulaTarget.initial;
+    }
+    suppressFormulaBlurCommit = true;
+    formulaTarget = undefined;
+    formula.blur();
+    suppressFormulaBlurCommit = false;
+  }
+  ai.open({
+    presetAction: info?.supportsFormulas === false ? 'tableFill' : 'formula',
+    initialPrompt: initialDraft || undefined,
+    autoRun: Boolean(initialDraft),
+  });
+});
+
 const topBar = customToolbar({
   subtitle: () => (getFileState().ext ? getFileState().ext.toUpperCase() : 'SHEET'),
   extraLeft: [filterChip],
@@ -878,6 +1110,7 @@ const topBar = customToolbar({
     { id: 'edit', label: t('lockEdits'), nodes: [lock] },
     { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node, freezeColBtn.node, condFormatDropdown] },
     { id: 'structure', nodes: [structureGroup] },
+    { id: 'ai', nodes: [ai.button] },
     {
       id: 'actions',
       label: t('convertMenu'),
@@ -888,6 +1121,7 @@ const topBar = customToolbar({
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
+    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     openExternalMenuItem(),
     { label: t('copyAsMarkdown'), icon: 'copyMd', onClick: copySelectionMarkdown },
     { label: t('copyAsJson'), icon: 'copy', onClick: copySelectionJson },
@@ -939,6 +1173,7 @@ const topBar = customToolbar({
 });
 
 const sheetMain = el('div', { class: 'sheet-workspace' }, [gridHost, jsonlInspector.node]);
+openSheetDrawerFn = () => topBar.openDrawer();
 app.append(topBar.node, replaceBar, notice.node, sheetMain, statusBar);
 showStatus(gridHost, t('loading'));
 
@@ -1083,6 +1318,7 @@ function updateSummary() {
 
 /** Cell targeted when the user started editing inside the formula bar. */
 let formulaTarget: { sheet: number; r: number; c: number; initial: string } | undefined;
+let suppressFormulaBlurCommit = false;
 
 function syncFormulaFromSelection(sel: Selection) {
   const model = models.get(active);
@@ -1151,17 +1387,21 @@ formula.addEventListener('keydown', (e) => {
     }
   } else if (e.key === 'Escape') {
     e.preventDefault();
+    suppressFormulaBlurCommit = true;
     if (formulaTarget) {
       formula.value = formulaTarget.initial;
       formulaTarget = undefined;
     }
     grid?.focus();
+    suppressFormulaBlurCommit = false;
   }
   e.stopPropagation();
 });
 
 formula.addEventListener('blur', () => {
-  commitFormulaBar();
+  if (!suppressFormulaBlurCommit) {
+    commitFormulaBar();
+  }
 });
 
 function formatStatNum(n: number): string {
@@ -1179,7 +1419,8 @@ function updateSelectionStats(sel: Selection) {
     const srcR = toSource(r);
     return srcR >= 0 ? model.rows[srcR]?.[c] : undefined;
   };
-  const stats = computeSelectionStats(cellAt, sel.r0, sel.c0, sel.r1, sel.c1);
+  const populatedRows = rowMap ? rowMap.length : model.rows.length;
+  const stats = computeSelectionStats(cellAt, sel.r0, sel.c0, sel.r1, sel.c1, 50_000, populatedRows);
   if (!stats) {
     selectionStatsEl.hidden = true;
     selectionStatsEl.replaceChildren();
@@ -1319,6 +1560,8 @@ function openGridContextMenu(x: number, y: number) {
     return;
   }
   const items: (HTMLElement | '-')[] = [
+    ctxAction(`✨ ${t('aiAssistant')}…`, () => ai.open()),
+    '-',
     ctxAction(t('copyAsMarkdown'), copySelectionMarkdown),
     ctxAction(t('copyAsJson'), copySelectionJson),
     '-',
@@ -1518,7 +1761,13 @@ function show(index: number, keepView: boolean) {
   updateSummary();
   updateFilterChip(model);
   sheetFindBar.refreshCount();
-  post({ type: 'status', ok: true, detail: `${model.name}: ${model.rowCount}x${model.colCount}` });
+  post({
+    type: 'status',
+    ok: true,
+    detail: `${model.name}: ${model.rowCount}x${model.colCount}`,
+    mode: canEdit() ? 'edit' : 'read',
+    overlays: overlayStack.getOpenIds(),
+  });
 }
 
 function startTabRename(tabBtn: HTMLButtonElement, index: number, currentName: string) {
@@ -1627,6 +1876,7 @@ onMessage((message) => {
       const isJsonl = Boolean(info.isJsonl);
       const supportsFx = info.supportsFormulas !== false;
       fxBadge.hidden = !supportsFx;
+      fxAiBtn.hidden = !info.editable;
       const ph = supportsFx ? t('formulaPlaceholder') : t('cellValuePlaceholder');
       formula.placeholder = ph;
       formula.setAttribute('aria-label', ph);

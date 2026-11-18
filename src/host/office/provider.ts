@@ -1,6 +1,7 @@
 import { userInfo } from 'node:os';
 import * as vscode from 'vscode';
 import type { DocMutation, HostMessage, ViewerKind, WebviewMessage } from '../../common/protocol';
+import { BinarySaveGate } from '../../common/stateMachine';
 import { snapshot } from '../history';
 import type { OfficeEditResult, OfficeFormat, OfficeSession } from '../office';
 import { configureWebview, debounce, handleCommonMessage, onWebviewMessage, parentUri, t } from '../webviewHtml';
@@ -57,8 +58,7 @@ class OfficeDocument implements vscode.CustomDocument {
   loadError: string | undefined;
   session: OfficeSession | undefined;
   legacyDocText: string | undefined;
-  ignoreWatcherUntil = 0;
-  diskChangedWhileDirty = false;
+  readonly saveGate = new BinarySaveGate();
   mutationQueue: Promise<void> = Promise.resolve();
   post: (message: HostMessage) => void = () => undefined;
 
@@ -104,7 +104,7 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
         }
       }
       document.loadError = undefined;
-      document.diskChangedWhileDirty = false;
+      document.saveGate.recordLoadedFromDisk(bytes);
     } catch (err) {
       document.session = undefined;
       document.legacyDocText = undefined;
@@ -285,14 +285,18 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
       new vscode.RelativePattern(parentUri(document.uri), baseName(document.uri)),
     );
     const reload = debounce(async () => {
-      if (Date.now() < document.ignoreWatcherUntil) {
+      let diskBytes: Uint8Array;
+      try {
+        diskBytes = await vscode.workspace.fs.readFile(document.uri);
+      } catch {
         return;
       }
-      if (document.session?.dirty) {
-        if (!document.diskChangedWhileDirty) {
-          document.diskChangedWhileDirty = true;
-          void vscode.window.showWarningMessage(t('saveConflict'));
-        }
+      const verdict = document.saveGate.evaluateDiskBytes(diskBytes, Boolean(document.session?.dirty));
+      if (verdict === 'self-write' || verdict === 'conflict-known') {
+        return;
+      }
+      if (verdict === 'conflict-new') {
+        void vscode.window.showWarningMessage(t('saveConflict'));
         return;
       }
       await this.load(document);
@@ -313,7 +317,7 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
     if (!session) {
       return;
     }
-    if (document.diskChangedWhileDirty) {
+    if (document.saveGate.hasConflict) {
       const saveLabel = t('save');
       const choice = await vscode.window.showWarningMessage(t('saveConflict'), { modal: true }, saveLabel);
       if (choice !== saveLabel || cancellation.isCancellationRequested) {
@@ -322,10 +326,10 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
     }
     const bytes = session.export();
     await snapshot(document.uri);
-    document.ignoreWatcherUntil = Date.now() + 2000;
+    document.saveGate.beginSelfSave(bytes);
     await vscode.workspace.fs.writeFile(document.uri, bytes);
     session.markSaved();
-    document.diskChangedWhileDirty = false;
+    document.saveGate.completeSelfSave(bytes);
   }
 
   async saveCustomDocumentAs(document: OfficeDocument, destination: vscode.Uri): Promise<void> {

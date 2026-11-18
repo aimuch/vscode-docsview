@@ -7,9 +7,11 @@
 import '../shared/base.css';
 import './image.css';
 import type { AnnotationExportFormat, ImageExportFormat, LoupePosition } from '../../common/protocol';
+import { createAiAssistant } from '../shared/aiAssistant';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { getAppearance, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
+import { overlayStack } from '../shared/overlayStack';
 import { readState, Sidebar, writeState } from '../shared/sidebar';
 import {
   customToolbar,
@@ -50,6 +52,7 @@ import {
 import { LOUPE_H, LOUPE_W, paintPixelLoupe, sampleCanvasPixel } from './loupe';
 import { MARKUP_COLORS, renderMarkupToCanvas, type MarkupItem, type MarkupTool } from './markup';
 import { extractImageMetadata, formatAspectRatio, formatFileSize, type ImageMetaEntry } from './metadata';
+import { ImageWorkspaceMachine, type ImageToolSegment } from './modeMachine';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const svgEl = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string> = {}) => {
@@ -86,8 +89,10 @@ let sourceCanvas: HTMLCanvasElement | undefined;
 let sampleCtx: CanvasRenderingContext2D | undefined;
 
 const savedMode = readState().imgMode;
-let toolMode: ToolMode =
+const initialToolMode: ImageToolSegment =
   savedMode === 'bbox' || savedMode === 'markup' || savedMode === 'crop' ? savedMode : 'inspect';
+const workspaceMachine = new ImageWorkspaceMachine(initialToolMode);
+let toolMode: ToolMode = initialToolMode;
 const savedColorMode = readState().imgColorMode;
 let colorMode: ColorFormatMode =
   savedColorMode === 'hex' || savedColorMode === 'hsl' ? savedColorMode : 'rgb';
@@ -215,8 +220,11 @@ metaPopover.hidden = true;
 document.body.append(metaPopover);
 
 function closeMetaPopover() {
-  metaPopover.hidden = true;
-  metaInfoBtn.classList.remove('dv-active');
+  if (!metaPopover.hidden) {
+    metaPopover.hidden = true;
+    metaInfoBtn.classList.remove('dv-active');
+    overlayStack.remove('imgMetaPopover');
+  }
 }
 
 function toggleMetaPopover() {
@@ -255,6 +263,12 @@ function toggleMetaPopover() {
   }
   metaPopover.hidden = false;
   metaInfoBtn.classList.add('dv-active');
+  overlayStack.push({
+    id: 'imgMetaPopover',
+    isOpen: () => !metaPopover.hidden,
+    close: closeMetaPopover,
+    restoreFocus: () => metaInfoBtn,
+  });
   const btnRect = metaInfoBtn.getBoundingClientRect();
   const popRect = metaPopover.getBoundingClientRect();
   const left = clamp(btnRect.left, 8, Math.max(8, window.innerWidth - (popRect.width || 300) - 8));
@@ -737,22 +751,10 @@ resizeBar.hidden = true;
 const resizeBtn = iconButton('resize', t('imgResize'), () => setResizeOpen(!resizeOpen));
 
 function setResizeOpen(open: boolean) {
-  resizeOpen = open;
-  resizeBar.hidden = !open;
-  resizeBtn.classList.toggle('dv-active', open);
   if (open) {
-    if (toolMode === 'crop' || toolMode === 'markup') {
-      setToolMode('inspect');
-    }
-    if (diffActive) {
-      exitCompareMode();
-    }
-    if (naturalW && naturalH) {
-      resizeWInput.value = String(naturalW);
-      resizeHInput.value = String(naturalH);
-    }
-    resizeWInput.focus();
-    resizeWInput.select();
+    workspaceMachine.setMode('resize');
+  } else if (workspaceMachine.mode === 'resize') {
+    workspaceMachine.setMode('inspect');
   }
 }
 
@@ -950,25 +952,66 @@ const markupColorGroup = el(
   }),
 );
 
+let committedMarkupCanvas: HTMLCanvasElement | undefined;
+let markupRaf = 0;
+let pendingDraftMarkup: MarkupItem | undefined;
+
+function invalidateMarkupBase() {
+  committedMarkupCanvas = undefined;
+}
+
+function getCommittedMarkupBase(): HTMLCanvasElement | undefined {
+  if (!sourceCanvas) return undefined;
+  if (!markupItems.length) return sourceCanvas;
+  if (!committedMarkupCanvas || committedMarkupCanvas.width !== sourceCanvas.width || committedMarkupCanvas.height !== sourceCanvas.height) {
+    committedMarkupCanvas = renderMarkupToCanvas(sourceCanvas, markupItems);
+  }
+  return committedMarkupCanvas;
+}
+
 function refreshMarkupPreview(draft?: MarkupItem) {
+  if (markupRaf) {
+    cancelAnimationFrame(markupRaf);
+    markupRaf = 0;
+  }
   if (!sourceCanvas || toolMode !== 'markup') {
     markupPreviewCanvas.hidden = true;
     return;
   }
-  const all = draft ? [...markupItems, draft] : markupItems;
-  if (!all.length) {
+  if (!markupItems.length && !draft) {
     markupPreviewCanvas.hidden = true;
     return;
   }
-  const rendered = renderMarkupToCanvas(sourceCanvas, all);
-  markupPreviewCanvas.width = rendered.width;
-  markupPreviewCanvas.height = rendered.height;
-  markupPreviewCanvas.getContext('2d')!.drawImage(rendered, 0, 0);
+  const base = getCommittedMarkupBase()!;
+  const rendered = draft ? renderMarkupToCanvas(base, [draft]) : base;
+  if (markupPreviewCanvas.width !== rendered.width || markupPreviewCanvas.height !== rendered.height) {
+    markupPreviewCanvas.width = rendered.width;
+    markupPreviewCanvas.height = rendered.height;
+  }
+  const ctx = markupPreviewCanvas.getContext('2d')!;
+  ctx.clearRect(0, 0, rendered.width, rendered.height);
+  ctx.drawImage(rendered, 0, 0);
   markupPreviewCanvas.hidden = false;
+}
+
+function scheduleMarkupDraftPreview(draft: MarkupItem) {
+  pendingDraftMarkup = draft;
+  if (markupRaf) {
+    return;
+  }
+  markupRaf = requestAnimationFrame(() => {
+    markupRaf = 0;
+    if (pendingDraftMarkup) {
+      const d = pendingDraftMarkup;
+      pendingDraftMarkup = undefined;
+      refreshMarkupPreview(d);
+    }
+  });
 }
 
 const markupUndoBtn = iconButton('undo', t('imgMarkupUndo'), () => {
   markupItems.pop();
+  invalidateMarkupBase();
   refreshMarkupPreview();
 });
 
@@ -976,6 +1019,7 @@ const cancelMarkupBtn = el('button', { class: 'dv-btn', text: t('cancel') });
 cancelMarkupBtn.type = 'button';
 cancelMarkupBtn.addEventListener('click', () => {
   markupItems = [];
+  invalidateMarkupBase();
   setToolMode('inspect');
 });
 
@@ -987,6 +1031,7 @@ async function applyMarkupInPlace(): Promise<void> {
   const rendered = renderMarkupToCanvas(sourceCanvas, markupItems);
   const ext = currentExt();
   markupItems = [];
+  invalidateMarkupBase();
   setToolMode('inspect');
   if (ext === 'gif' || ext === 'avif' || ext === 'svg') {
     notice.flash(t('imgCropReadonlyFmt'), 4200);
@@ -1082,6 +1127,10 @@ function syncDiffView() {
 }
 
 function exitCompareMode() {
+  if (workspaceMachine.mode === 'diff') {
+    workspaceMachine.setMode('inspect');
+    return;
+  }
   diffActive = false;
   if (compareImgUrl) {
     URL.revokeObjectURL(compareImgUrl);
@@ -1128,11 +1177,7 @@ async function activateCompareImage(_otherName: string, otherBytes: Uint8Array):
   heatCanvas.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(diff.out), diff.width, diff.height), 0, 0);
   diffHeatmapUrl = heatCanvas.toDataURL('image/png');
 
-  if (resizeOpen) {
-    setResizeOpen(false);
-  }
-  diffActive = true;
-  setToolMode('inspect');
+  workspaceMachine.setMode('diff');
   syncDiffView();
 }
 
@@ -1279,6 +1324,51 @@ copyJsonBtn.addEventListener('click', copyBoxesJson);
 
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
+let openImgDrawerFn: (() => void) | undefined;
+
+const ai = createAiAssistant({
+  viewerKind: 'image',
+  getFileName: () => fileName,
+  onOpenSettings: () => openImgDrawerFn?.(),
+  focusReturnTarget: () => stage,
+  captureContext: () => {
+    const ext = currentExt();
+    const metaSummary = [
+      `File: ${fileName} (${naturalW}x${naturalH}px, ${ext.toUpperCase()})`,
+      ...imageMetaEntries.map((e) => `${e.key}: ${e.value}`),
+    ];
+    if (boxes.length > 0) {
+      metaSummary.push(
+        `BBoxes (${boxes.length}): ${JSON.stringify(
+          boxes.map((b) => ({ id: b.id, label: b.label, bbox: formatBBoxTuple(b) })),
+        )}`,
+      );
+    }
+    const svgSource =
+      ext === 'svg' && rawFileBytes ? new TextDecoder().decode(rawFileBytes).slice(0, 16_000) : undefined;
+    return {
+      selection: svgSource,
+      surrounding: metaSummary.join('\n'),
+      badge: `${naturalW}×${naturalH} ${ext.toUpperCase()}`,
+    };
+  },
+  applyActions: [
+    {
+      id: 'apply-svg',
+      label: () => t('aiApplyReplace'),
+      primary: true,
+      visible: ({ text }) => currentExt() === 'svg' && /<svg[\s>]/i.test(text),
+      onApply: ({ text }) => {
+        const fence = /```(?:svg|xml|html)?\s*\r?\n([\s\S]*?)```/i.exec(text);
+        const body = (fence ? fence[1] : text).trim();
+        const svgMatch = /<svg[\s\S]*<\/svg>/i.exec(body);
+        if (!svgMatch) return false;
+        post({ type: 'imageReplace', bytes: new TextEncoder().encode(svgMatch[0]), label: 'AI Update SVG' });
+      },
+    },
+  ],
+});
+
 const topBar = customToolbar({
   subtitle: () => (fileName ? fileName : 'IMAGE'),
   slots: [
@@ -1294,11 +1384,13 @@ const topBar = customToolbar({
       id: 'bbox',
       nodes: [loupePosSeg.node, annotDropdown, copyJsonBtn, clearBtn],
     },
+    { id: 'ai', nodes: [ai.button] },
     { id: 'actions', nodes: [convertDropdown] },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
+    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     openExternalMenuItem(),
     { label: t('imgCopyClipboard'), icon: 'copy', onClick: () => void copyImageToClipboard() },
     { label: t('imgCompare'), icon: 'compare', onClick: () => post({ type: 'pickCompareImage' }) },
@@ -1351,32 +1443,59 @@ function syncBboxToolbarButtons() {
   }
 }
 
-function setToolMode(mode: ToolMode, seedCrop?: PixelRect) {
-  toolMode = mode;
-  modeSeg.set(mode);
-  writeState({ imgMode: mode });
-  stage.classList.toggle('img-mode-inspect', mode === 'inspect');
-  stage.classList.toggle('img-mode-bbox', mode === 'bbox');
-  stage.classList.toggle('img-mode-markup', mode === 'markup');
-  stage.classList.toggle('img-mode-crop', mode === 'crop');
-  cropBar.hidden = mode !== 'crop';
-  markupBar.hidden = mode !== 'markup';
-  if (mode !== 'markup') {
+let pendingCropSeed: PixelRect | undefined;
+
+function applyWorkspaceState() {
+  const wsMode = workspaceMachine.mode;
+  toolMode = workspaceMachine.toolSegment;
+  modeSeg.set(toolMode);
+  if (wsMode === 'inspect' || wsMode === 'bbox' || wsMode === 'markup' || wsMode === 'crop') {
+    writeState({ imgMode: wsMode });
+  }
+
+  // Resize bar state
+  const isResize = wsMode === 'resize';
+  resizeOpen = isResize;
+  resizeBar.hidden = !isResize;
+  resizeBtn.classList.toggle('dv-active', isResize);
+  if (isResize && naturalW && naturalH) {
+    resizeWInput.value = String(naturalW);
+    resizeHInput.value = String(naturalH);
+    resizeWInput.focus();
+    resizeWInput.select();
+  }
+
+  // Diff bar state
+  const isDiff = wsMode === 'diff';
+  if (!isDiff && diffActive) {
+    diffActive = false;
+    if (compareImgUrl) {
+      URL.revokeObjectURL(compareImgUrl);
+      compareImgUrl = undefined;
+    }
+    diffHeatmapUrl = undefined;
+  } else if (isDiff) {
+    diffActive = true;
+  }
+  syncDiffView();
+
+  stage.classList.toggle('img-mode-inspect', toolMode === 'inspect');
+  stage.classList.toggle('img-mode-bbox', toolMode === 'bbox');
+  stage.classList.toggle('img-mode-markup', toolMode === 'markup');
+  stage.classList.toggle('img-mode-crop', toolMode === 'crop');
+  cropBar.hidden = wsMode !== 'crop';
+  markupBar.hidden = wsMode !== 'markup';
+  if (wsMode !== 'markup') {
     markupPreviewCanvas.hidden = true;
   } else {
     refreshMarkupPreview();
   }
-  if (mode === 'crop' || mode === 'markup') {
-    if (resizeOpen) {
-      setResizeOpen(false);
-    }
-    if (diffActive) {
-      exitCompareMode();
-    }
-    if (mode === 'crop') {
-      const activeBox = seedCrop ?? boxes.find((b) => b.id === selectedBoxId);
-      initDefaultCropRect(activeBox);
-    }
+  if (wsMode === 'crop') {
+    const activeBox = pendingCropSeed ?? boxes.find((b) => b.id === selectedBoxId);
+    pendingCropSeed = undefined;
+    initDefaultCropRect(activeBox);
+  }
+  if (wsMode === 'crop' || wsMode === 'markup') {
     if (getAppearance().loupePosition === 'follow') {
       loupe.hidden = true;
     }
@@ -1386,6 +1505,19 @@ function setToolMode(mode: ToolMode, seedCrop?: PixelRect) {
   }
   syncBboxToolbarButtons();
 }
+
+workspaceMachine.onChange(() => applyWorkspaceState());
+
+function setToolMode(mode: ToolMode, seedCrop?: PixelRect) {
+  pendingCropSeed = seedCrop;
+  if (workspaceMachine.mode === mode) {
+    applyWorkspaceState();
+  } else {
+    workspaceMachine.setMode(mode);
+  }
+}
+
+openImgDrawerFn = () => topBar.openDrawer();
 
 canvasWrap.classList.toggle('img-checker', checkerboard);
 
@@ -1988,6 +2120,7 @@ stage.addEventListener('mousedown', (e) => {
           color: markupColor,
           text: label,
         });
+        invalidateMarkupBase();
         refreshMarkupPreview();
         return;
       }
@@ -2005,13 +2138,15 @@ stage.addEventListener('mousedown', (e) => {
           y2: ey,
           color: markupColor,
         };
-        refreshMarkupPreview(draft);
+        scheduleMarkupDraftPreview(draft);
       };
       const up = () => {
         window.removeEventListener('mousemove', move);
         window.removeEventListener('mouseup', up);
+        pendingDraftMarkup = undefined;
         if (draft && (Math.abs(draft.x2 - draft.x1) >= 2 || Math.abs(draft.y2 - draft.y1) >= 2)) {
           markupItems.push({ ...draft, id: nextMarkupId++ });
+          invalidateMarkupBase();
         }
         refreshMarkupPreview();
       };
@@ -2424,6 +2559,7 @@ async function loadImage(name: string, bytes: Uint8Array) {
     offscreen.width = naturalW;
     offscreen.height = naturalH;
     sourceCanvas = offscreen;
+    invalidateMarkupBase();
     sampleCtx = offscreen.getContext('2d', { willReadFrequently: true }) ?? undefined;
     if (sampleCtx) {
       sampleCtx.drawImage(imgEl, 0, 0, naturalW, naturalH);
@@ -2458,7 +2594,13 @@ async function loadImage(name: string, bytes: Uint8Array) {
       renderBoxes();
     }
     syncLoupeVisibility();
-    post({ type: 'status', ok: true, detail: `${naturalW}x${naturalH}` });
+    post({
+      type: 'status',
+      ok: true,
+      detail: `${naturalW}x${naturalH}`,
+      mode: workspaceMachine.mode,
+      overlays: overlayStack.getOpenIds(),
+    });
   } catch (err) {
     if (myGen !== imgLoadGen) {
       return;

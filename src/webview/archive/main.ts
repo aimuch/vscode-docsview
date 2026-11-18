@@ -2,9 +2,11 @@
 import '../shared/base.css';
 import './archive.css';
 import type { ArchiveEntryInfo } from '../../common/protocol';
+import { createAiAssistant } from '../shared/aiAssistant';
 import { app, el, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { createFindBar } from '../shared/find';
 import { icons } from '../shared/icons';
+import { overlayStack } from '../shared/overlayStack';
 import { Outline, Sidebar, type OutlineItem } from '../shared/sidebar';
 import { customToolbar, iconButton, openExternalButton, openExternalMenuItem } from '../shared/ui';
 
@@ -18,6 +20,7 @@ let sortDir: 1 | -1 = 1;
 let searchQuery = '';
 let filteredCount = 0;
 let activePath = '';
+let activeEntryText = '';
 let previewBlobUrl: string | undefined;
 
 const tableWrap = el('div', { class: 'arc-table-wrap' });
@@ -49,19 +52,57 @@ const findBar = createFindBar(
 
 const extractAllBtn = iconButton('export', t('archiveExtractAll'), () => post({ type: 'extractAllArchive' }));
 
+let openArcDrawerFn: (() => void) | undefined;
+
+const ai = createAiAssistant({
+  viewerKind: 'archive',
+  getFileName: () => (activePath ? `${archiveName}/${activePath}` : archiveName),
+  onOpenSettings: () => openArcDrawerFn?.(),
+  focusReturnTarget: () => tableWrap,
+  captureContext: () => {
+    const sel = window.getSelection()?.toString().trim() ?? '';
+    const treeSummary = allEntries
+      .filter((e) => !e.isDir)
+      .slice(0, 200)
+      .map((e) => `${e.path} (${e.size}B)`)
+      .join('\n');
+    if (sel) {
+      return {
+        selection: sel,
+        surrounding: activeEntryText ? activeEntryText.slice(0, 10_000) : treeSummary,
+        badge: activePath || archiveName,
+      };
+    }
+    if (activeEntryText) {
+      return {
+        selection: activeEntryText.slice(0, 14_000),
+        surrounding: treeSummary,
+        badge: activePath,
+      };
+    }
+    return {
+      surrounding: treeSummary,
+      badge: archiveName || 'ARCHIVE',
+    };
+  },
+});
+
 const topBar = customToolbar({
   subtitle: () => (archiveName ? archiveName : 'ARCHIVE'),
   slots: [
     { id: 'nav', nodes: [sidebar.toggle] },
     { id: 'find', nodes: findBar.nodes },
+    { id: 'ai', nodes: [ai.button] },
     { id: 'actions', label: t('archiveExtractAll'), nodes: [extractAllBtn] },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
+    { icon: 'sparkle', label: t('aiAssistant'), onClick: () => ai.open() },
     { icon: 'export', label: t('archiveExtractAll'), onClick: () => post({ type: 'extractAllArchive' }) },
     openExternalMenuItem(),
   ],
 });
+openArcDrawerFn = () => topBar.openDrawer();
 
 const previewPane = el('div', { class: 'arc-preview' });
 previewPane.hidden = true;
@@ -83,6 +124,7 @@ saveAsBtn.addEventListener('click', () => {
 const closePreviewBtn = iconButton('close', t('close'), () => {
   previewPane.hidden = true;
   activePath = '';
+  activeEntryText = '';
   renderTable();
 });
 const previewBody = el('div', { class: 'arc-preview-body' });
@@ -281,12 +323,19 @@ onMessage((message) => {
       fmtBytes(message.compressedTotal),
       pct,
     );
-    post({ type: 'status', ok: true, detail: `${fileCount} entries` });
+    post({
+      type: 'status',
+      ok: true,
+      detail: `${fileCount} entries`,
+      mode: 'browse',
+      overlays: overlayStack.getOpenIds(),
+    });
   } else if (message.type === 'archiveEntry' && message.path === activePath) {
     if (previewBlobUrl) {
       URL.revokeObjectURL(previewBlobUrl);
       previewBlobUrl = undefined;
     }
+    activeEntryText = message.kind === 'text' ? (message.text ?? '') : '';
     if (message.kind === 'text') {
       previewBody.replaceChildren(el('pre', { class: 'arc-code', text: message.text ?? '' }));
     } else if (message.kind === 'image' && message.bytes) {

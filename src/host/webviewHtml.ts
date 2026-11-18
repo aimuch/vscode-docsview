@@ -16,9 +16,10 @@ import {
 } from '../common/protocol';
 import { renderShell } from '../common/shell';
 import { pickLang, translate, type Lang, type StringKey } from '../common/strings';
+import { cancelWebviewAiStream, handleAiWebviewMessage, postAiSettingsToWebview } from './ai/aiController';
 import { extensionOf, isDefaultEditor, setDefaultEditor } from './fileActions';
 import { showHistory, supportsHistory } from './history';
-import { reportStatus } from './status';
+import { clearViewerState, reportStatus } from './status';
 
 // ---------------------------------------------------------------- appearance settings
 
@@ -349,9 +350,26 @@ export function configureWebview(
   const viewStateSub = panel.onDidChangeViewState(() => postViewState(view));
   panel.onDidDispose(() => {
     viewStateSub.dispose();
+    cancelWebviewAiStream(webview);
     views.delete(view);
+    if (![...views].some((v) => v.uri?.toString() === opts.documentUri?.toString())) {
+      clearViewerState(opts.documentUri);
+    }
   });
   view.render();
+}
+
+export function broadcastHostMessage(message: HostMessage): void {
+  views.forEach((view) => void view.webview.postMessage(message));
+}
+
+export function openAiInActiveView(): boolean {
+  const active = [...views].find((v) => v.panel.active) ?? [...views].find((v) => v.panel.visible);
+  if (!active) {
+    return false;
+  }
+  void active.webview.postMessage({ type: 'aiOpen' } satisfies HostMessage);
+  return true;
 }
 
 /** Keeps every open view in sync with settings and with the editor layout. Call once on activation. */
@@ -452,6 +470,9 @@ export function handleCommonMessage(
   message: WebviewMessage,
 ): void {
   reportStatus(uri, kind, message);
+  if (handleAiWebviewMessage(webview, uri, message)) {
+    return;
+  }
   switch (message.type) {
     case 'ready':
       for (const view of views) {
@@ -460,6 +481,7 @@ export function handleCommonMessage(
           postFileState(view);
         }
       }
+      void postAiSettingsToWebview(webview, false);
       break;
     case 'setDefault': {
       void setDefaultEditor(uri, message.on);

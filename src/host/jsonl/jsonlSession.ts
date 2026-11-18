@@ -5,6 +5,7 @@ import type { Cell, CellChange, HostMessage, SheetModel, StructureOp, WorkbookIn
 import type { TextEdit } from '../csv/csvParser';
 
 const EXTRA_JSONL_ROWS = 10;
+const MAX_PATCH_ROWS = 2000;
 const INVALID_JSON_FIELD = Symbol('INVALID_JSON_FIELD');
 
 interface RecordSpan {
@@ -12,8 +13,44 @@ interface RecordSpan {
   end: number;
   raw: string;
   obj: Record<string, unknown>;
+  keys: string[];
   isPrimitive?: boolean;
   invalid?: boolean;
+}
+
+function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function parseJsonLine(pos: number, contentEnd: number, line: string): RecordSpan {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      return { start: pos, end: contentEnd, raw: line, obj, keys: Object.keys(obj) };
+    }
+    return {
+      start: pos,
+      end: contentEnd,
+      raw: line,
+      obj: { _value: parsed },
+      keys: ['_value'],
+      isPrimitive: true,
+    };
+  } catch {
+    return {
+      start: pos,
+      end: contentEnd,
+      raw: line,
+      obj: { _raw: line },
+      keys: ['_raw'],
+      invalid: true,
+    };
+  }
 }
 
 function formatJsonField(val: unknown): Cell {
@@ -89,6 +126,7 @@ export class JsonlSession {
   private eol = '\n';
   private columns: string[] = [];
   private records: RecordSpan[] = [];
+  private parsed = false;
 
   constructor(
     private readonly fileName: string,
@@ -117,9 +155,33 @@ export class JsonlSession {
   }
 
   setText(text: string, eol = this.eol): HostMessage {
-    this.source = text;
+    const prevRecords = this.parsed ? this.records : undefined;
+    const prevColumns = this.parsed ? this.columns : undefined;
+    const oldText = this.source;
     this.eol = eol;
-    this.records = [];
+
+    if (prevRecords && prevColumns && text === oldText) {
+      return {
+        type: 'rows',
+        index: 0,
+        rowCount: 1 + this.records.length + EXTRA_JSONL_ROWS,
+        colCount: Math.max(this.columns.length, 1),
+        rows: [],
+      };
+    }
+
+    this.source = text;
+    // Build a lookup from raw JSON line -> previously parsed RecordSpan so unchanged lines skip JSON.parse().
+    const reusableByRaw = new Map<string, RecordSpan>();
+    if (prevRecords) {
+      for (const rec of prevRecords) {
+        if (!reusableByRaw.has(rec.raw)) {
+          reusableByRaw.set(rec.raw, rec);
+        }
+      }
+    }
+
+    const nextRecords: RecordSpan[] = [];
     const colSet = new Set<string>();
 
     let pos = 0;
@@ -132,27 +194,56 @@ export class JsonlSession {
       const contentEnd = lineEnd > pos && text.charCodeAt(lineEnd - 1) === 13 ? lineEnd - 1 : lineEnd;
       const line = text.slice(pos, contentEnd);
       if (line.trim().length > 0) {
-        try {
-          const parsed = JSON.parse(line) as unknown;
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            const obj = parsed as Record<string, unknown>;
-            for (const k of Object.keys(obj)) {
-              colSet.add(k);
+        const cached = reusableByRaw.get(line);
+        const span: RecordSpan = cached
+          ? {
+              start: pos,
+              end: contentEnd,
+              raw: line,
+              obj: cached.obj,
+              keys: cached.keys,
+              isPrimitive: cached.isPrimitive,
+              invalid: cached.invalid,
             }
-            this.records.push({ start: pos, end: contentEnd, raw: line, obj });
-          } else {
-            colSet.add('_value');
-            this.records.push({ start: pos, end: contentEnd, raw: line, obj: { _value: parsed }, isPrimitive: true });
-          }
-        } catch {
-          colSet.add('_raw');
-          this.records.push({ start: pos, end: contentEnd, raw: line, obj: { _raw: line }, invalid: true });
+          : parseJsonLine(pos, contentEnd, line);
+        for (const k of span.keys) {
+          colSet.add(k);
         }
+        nextRecords.push(span);
       }
       pos = lineEnd + 1;
     }
 
+    this.records = nextRecords;
     this.columns = colSet.size > 0 ? [...colSet] : ['field'];
+    this.parsed = true;
+
+    if (
+      prevRecords &&
+      prevColumns &&
+      prevRecords.length === nextRecords.length &&
+      sameStringArray(prevColumns, this.columns)
+    ) {
+      const changedRows: { r: number; cells: Cell[] }[] = [];
+      for (let i = 0; i < nextRecords.length && changedRows.length <= MAX_PATCH_ROWS; i++) {
+        if (prevRecords[i].raw !== nextRecords[i].raw) {
+          changedRows.push({
+            r: i + 1,
+            cells: this.columns.map((col) => formatJsonField(nextRecords[i].obj[col])),
+          });
+        }
+      }
+      if (changedRows.length <= MAX_PATCH_ROWS) {
+        return {
+          type: 'rows',
+          index: 0,
+          rowCount: 1 + nextRecords.length + EXTRA_JSONL_ROWS,
+          colCount: Math.max(this.columns.length, 1),
+          rows: changedRows,
+        };
+      }
+    }
+
     return { type: 'sheet', index: 0, model: this.model() };
   }
 

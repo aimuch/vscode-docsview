@@ -16,14 +16,20 @@ export class JsonlEditorProvider implements vscode.CustomTextEditorProvider {
     const name = document.uri.path.slice(document.uri.path.lastIndexOf('/') + 1);
     const eol = () => (document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n');
     const session = new JsonlSession(name, eol());
-    const post = (message: HostMessage) => void panel.webview.postMessage(message);
+    let disposed = false;
+    let editQueue: Promise<void> = Promise.resolve();
+    const post = (message: HostMessage) => {
+      if (!disposed) {
+        void panel.webview.postMessage(message);
+      }
+    };
     const key = document.uri.toString();
 
     let syncedVersion = -1;
     let webviewReady = false;
 
     const sync = () => {
-      if (syncedVersion === document.version) {
+      if (disposed || syncedVersion === document.version) {
         return;
       }
       syncedVersion = document.version;
@@ -50,11 +56,24 @@ export class JsonlEditorProvider implements vscode.CustomTextEditorProvider {
       sync();
     };
 
+    const enqueueEdit = (compute: () => TextEdit[] | undefined) => {
+      editQueue = editQueue
+        .then(async () => {
+          if (disposed) return;
+          sync();
+          const edits = compute();
+          if (edits?.length) {
+            await apply(edits);
+          }
+        })
+        .catch(() => undefined);
+    };
+
     const watcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(parentUri(document.uri), name),
     );
     const scheduleDiskSync = debounce(async () => {
-      if (!webviewReady || document.isDirty) {
+      if (disposed || !webviewReady || document.isDirty) {
         return;
       }
       try {
@@ -95,27 +114,27 @@ export class JsonlEditorProvider implements vscode.CustomTextEditorProvider {
             post({ type: 'sheet', index: 0, model: session.model() });
             break;
           case 'edit': {
-            sync();
-            const res = session.editCells(message.changes);
-            if (res.hadInvalidJson) {
-              void vscode.window.showWarningMessage(t('jsonlInvalidJson'));
-            }
-            void apply(res.edits);
+            enqueueEdit(() => {
+              const res = session.editCells(message.changes);
+              if (res.hadInvalidJson) {
+                void vscode.window.showWarningMessage(t('jsonlInvalidJson'));
+              }
+              return res.edits;
+            });
             break;
           }
           case 'editJsonlRecord': {
-            sync();
-            const edits = session.replaceRecordJson(message.recordIndex, message.jsonText);
-            if (!edits) {
-              void vscode.window.showWarningMessage(t('jsonlInvalidJson'));
-              break;
-            }
-            void apply(edits);
+            enqueueEdit(() => {
+              const edits = session.replaceRecordJson(message.recordIndex, message.jsonText);
+              if (!edits) {
+                void vscode.window.showWarningMessage(t('jsonlInvalidJson'));
+              }
+              return edits;
+            });
             break;
           }
           case 'structure':
-            sync();
-            void apply(session.structure(message.op, message.at, message.count));
+            enqueueEdit(() => session.structure(message.op, message.at, message.count));
             break;
           case 'convert': {
             sync();
@@ -141,7 +160,10 @@ export class JsonlEditorProvider implements vscode.CustomTextEditorProvider {
         }
       }),
     ];
-    panel.onDidDispose(() => disposables.forEach((d) => d.dispose()));
+    panel.onDidDispose(() => {
+      disposed = true;
+      disposables.forEach((d) => d.dispose());
+    });
     configureWebview(panel, this.context.extensionUri, 'sheet', { documentUri: document.uri, tracksSource: true });
   }
 }

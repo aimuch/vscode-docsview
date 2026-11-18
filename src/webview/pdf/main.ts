@@ -11,6 +11,8 @@ import 'pdfjs-dist/web/pdf_viewer.css';
 import '../shared/base.css';
 import './pdf.css';
 import type { DocComment } from '../../common/protocol';
+import { InteractionModeMachine } from '../../common/stateMachine';
+import { createAiAssistant } from '../shared/aiAssistant';
 import { app, config, el, errorText, onMessage, post, t, toArrayBuffer } from '../shared/api';
 import {
   attachSurfaceAnnotator,
@@ -22,6 +24,7 @@ import {
 import { getFileState } from '../shared/fileState';
 import { createFindBar } from '../shared/find';
 import { icons, type IconName } from '../shared/icons';
+import { overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
 import {
   customToolbar,
@@ -84,12 +87,16 @@ sidebar.panel('outline').append(outline.node);
 // ---------------------------------------------------------------- annotations / comments
 
 let docFileName = 'Document.pdf';
-let editable = false;
-let annotateMode = false;
+const modeMachine = new InteractionModeMachine();
 let comments: DocComment[] = [];
 
 const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
-  annotateMode = on;
+  modeMachine.setMode(on ? 'annotate' : 'read');
+});
+
+modeMachine.onChange((mode) => {
+  const on = mode === 'annotate';
+  annotateToggle.set(on);
   viewerEl.classList.toggle('pdf-annotating', on);
   closeFloatingEditors();
   hideSelectionBar();
@@ -102,7 +109,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
 
 const commentsPanel = new CommentsPanel({
   docName: () => docFileName,
-  editable: () => editable,
+  editable: () => modeMachine.isEditable,
   targetLabel: (c) => (c.page ? t('pageN', c.page) : ''),
   onSelect: (c) => {
     if (c.page && viewer.pagesCount) {
@@ -113,12 +120,7 @@ const commentsPanel = new CommentsPanel({
   onUpdate: (id, text) => post({ type: 'docMutate', mutation: { kind: 'updateComment', id, text } }),
   onDelete: (id) => post({ type: 'docMutate', mutation: { kind: 'deleteComment', id } }),
   onToggleAddMode: () => {
-    annotateMode = !annotateMode;
-    annotateToggle.set(annotateMode);
-    viewerEl.classList.toggle('pdf-annotating', annotateMode);
-    if (annotateMode) {
-      notice.flash(t('annotatePdfHint'), 2800);
-    }
+    modeMachine.toggle('annotate');
   },
 });
 sidebar.panel('comments').append(commentsPanel.node);
@@ -163,7 +165,7 @@ function syncCommentsUi(): void {
 attachSurfaceAnnotator({
   root: viewerEl,
   allowBox: true,
-  isActive: () => editable && annotateMode,
+  isActive: () => modeMachine.isEditable && modeMachine.mode === 'annotate',
   resolveSurface: (target) => {
     const elTarget = target instanceof HTMLElement ? target : undefined;
     const pageEl = elTarget?.closest<HTMLElement>('.page[data-page-number]');
@@ -179,17 +181,18 @@ attachSurfaceAnnotator({
   },
 });
 
-// Floating mouse text-selection highlighter bar
-let pendingSel:
-  | {
-      page: number;
-      rect: { x: number; y: number; w: number; h: number };
-      quads: { x: number; y: number; w: number; h: number }[];
-      quote: string;
-      clientX: number;
-      clientY: number;
-    }
-  | undefined;
+// Floating mouse text-selection highlighter & AI bar
+interface PdfSelectionSnap {
+  page: number;
+  rect: { x: number; y: number; w: number; h: number };
+  quads: { x: number; y: number; w: number; h: number }[];
+  quote: string;
+  fullText: string;
+  clientX: number;
+  clientY: number;
+}
+
+let pendingSel: PdfSelectionSnap | undefined;
 
 const hlYellowBtn = el('button', { class: 'pdf-sel-btn', title: t('pdfHighlightYellow') });
 hlYellowBtn.type = 'button';
@@ -252,7 +255,25 @@ function applyQuickHighlight(color: string) {
 hlYellowBtn.addEventListener('click', () => applyQuickHighlight('#fde047'));
 hlGreenBtn.addEventListener('click', () => applyQuickHighlight('#4ade80'));
 
-const pdfSelBar = el('div', { class: 'pdf-sel-bar' }, [hlYellowBtn, hlGreenBtn, hlCommentBtn]);
+const hlAiBtn = iconButton('sparkle', t('aiOpenTip'), () => {
+  if (!pendingSel) {
+    return;
+  }
+  const snap = pendingSel;
+  hideSelectionBar();
+  ai.open({
+    presetAction: 'explain',
+    capturedOverride: {
+      selection: snap.fullText,
+      surrounding: extractVisiblePdfContext(),
+      badge: `${t('pageN', snap.page)} (${snap.fullText.length})`,
+      meta: snap,
+    },
+  });
+});
+hlAiBtn.classList.add('pdf-sel-btn');
+
+const pdfSelBar = el('div', { class: 'pdf-sel-bar' }, [hlYellowBtn, hlGreenBtn, hlCommentBtn, hlAiBtn]);
 pdfSelBar.hidden = true;
 pdfSelBar.addEventListener('mousedown', (e) => {
   e.preventDefault();
@@ -298,7 +319,7 @@ function collectLineQuads(
 }
 
 viewerEl.addEventListener('mouseup', (e) => {
-  if (!editable || annotateMode) {
+  if (modeMachine.mode === 'annotate') {
     hideSelectionBar();
     return;
   }
@@ -335,11 +356,16 @@ viewerEl.addEventListener('mouseup', (e) => {
       rect: overallRect,
       quads: quads.length > 0 ? quads : [overallRect],
       quote: rawText.slice(0, 180),
+      fullText: rawText,
       clientX: e.clientX,
       clientY: e.clientY,
     };
+    const canAnnotate = modeMachine.isEditable;
+    hlYellowBtn.hidden = !canAnnotate;
+    hlGreenBtn.hidden = !canAnnotate;
+    hlCommentBtn.hidden = !canAnnotate;
     pdfSelBar.hidden = false;
-    const left = Math.max(8, Math.min(window.innerWidth - 130, selBounds.left + selBounds.width / 2 - 52));
+    const left = Math.max(8, Math.min(window.innerWidth - 156, selBounds.left + selBounds.width / 2 - 64));
     const top = Math.max(42, selBounds.top - 36);
     pdfSelBar.style.left = `${left}px`;
     pdfSelBar.style.top = `${top}px`;
@@ -399,6 +425,8 @@ eventBus.on('pagerendered', (e: { pageNumber: number; error?: unknown }) => {
       type: 'status',
       ok: !e.error,
       detail: e.error ? errorText(e.error) : `${viewer.pagesCount} pages, ${outline.size} outline items`,
+      mode: modeMachine.mode,
+      overlays: overlayStack.getOpenIds(),
     });
   }
 });
@@ -599,7 +627,7 @@ function buildThumbnails(doc: pdfjs.PDFDocumentProxy) {
     });
     wrap.append(link);
 
-    if (editable) {
+    if (modeMachine.isEditable) {
       wrap.draggable = true;
       wrap.addEventListener('dragstart', (ev) => {
         dragFromPage = n;
@@ -803,7 +831,7 @@ const pdfToolsDropdown = moreMenu(
     {
       icon: 'rotateCW',
       label: t('pdfSaveRotateCW'),
-      visible: () => editable,
+      visible: () => modeMachine.isEditable,
       onClick: () =>
         post({
           type: 'docMutate',
@@ -813,7 +841,7 @@ const pdfToolsDropdown = moreMenu(
     {
       icon: 'export',
       label: t('pdfExtractPages'),
-      visible: () => editable,
+      visible: () => modeMachine.isEditable,
       onClick: () =>
         post({
           type: 'extractPdfPages',
@@ -824,7 +852,7 @@ const pdfToolsDropdown = moreMenu(
     {
       icon: 'plus',
       label: t('pdfMerge'),
-      visible: () => editable,
+      visible: () => modeMachine.isEditable,
       onClick: () => post({ type: 'mergePdfs' }),
     },
     '-',
@@ -841,6 +869,89 @@ const pdfToolsDropdown = moreMenu(
 
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
+function extractVisiblePdfContext(): string {
+  const curPage = viewer.currentPageNumber || 1;
+  const chunks: string[] = [];
+  for (const p of [curPage - 1, curPage, curPage + 1]) {
+    const pageNode = viewerEl.querySelector<HTMLElement>(`.page[data-page-number="${p}"] .textLayer`);
+    const txt = pageNode?.textContent?.replace(/\s+/g, ' ').trim();
+    if (txt) {
+      chunks.push(`[Page ${p}]\n${txt}`);
+    }
+  }
+  return chunks.join('\n\n').slice(0, 12_000);
+}
+
+let openPdfDrawerFn: (() => void) | undefined;
+
+const ai = createAiAssistant({
+  viewerKind: 'pdf',
+  getFileName: () => docFileName,
+  onOpenSettings: () => openPdfDrawerFn?.(),
+  focusReturnTarget: () => container,
+  captureContext: () => {
+    const curPage = viewer.currentPageNumber || 1;
+    const selText = window.getSelection()?.toString().replace(/\s+/g, ' ').trim() ?? '';
+    if (pendingSel) {
+      return {
+        selection: pendingSel.fullText,
+        surrounding: extractVisiblePdfContext(),
+        badge: `${t('pageN', pendingSel.page)} (${pendingSel.fullText.length})`,
+        meta: pendingSel,
+      };
+    }
+    if (selText) {
+      return {
+        selection: selText,
+        surrounding: extractVisiblePdfContext(),
+        badge: `${t('pageN', curPage)} (${selText.length})`,
+      };
+    }
+    return {
+      surrounding: extractVisiblePdfContext(),
+      badge: t('pageN', curPage),
+    };
+  },
+  applyActions: [
+    {
+      id: 'save-pdf-comment',
+      label: () => t('aiApplyComment'),
+      primary: true,
+      visible: () => modeMachine.isEditable,
+      onApply: ({ text, captured }) => {
+        const snap = captured.meta as PdfSelectionSnap | undefined;
+        sidebar.setOpen(true);
+        sidebar.setTab('comments');
+        if (snap) {
+          post({
+            type: 'docMutate',
+            mutation: {
+              kind: 'addComment',
+              page: snap.page,
+              rect: snap.rect,
+              quads: snap.quads,
+              quote: snap.quote,
+              text: text.trim(),
+              color: '#fde047',
+              subtype: 'highlight',
+            },
+          });
+        } else {
+          post({
+            type: 'docMutate',
+            mutation: {
+              kind: 'addComment',
+              page: viewer.currentPageNumber || 1,
+              rect: { x: 0.88, y: 0.08, w: 0, h: 0 },
+              text: text.trim(),
+            },
+          });
+        }
+      },
+    },
+  ],
+});
+
 const topBar = customToolbar({
   subtitle: 'PDF',
   slots: [
@@ -849,18 +960,20 @@ const topBar = customToolbar({
     { id: 'pager', nodes: [pager.node] },
     { id: 'zoom', nodes: [zoomGroup] },
     { id: 'find', nodes: findWidget.nodes },
-    { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
-    { id: 'actions', nodes: [pdfToolsDropdown], visible: () => editable || comments.length > 0 },
+    { id: 'comments', nodes: [annotateToggle.node], visible: () => modeMachine.isEditable },
+    { id: 'ai', nodes: [ai.button] },
+    { id: 'actions', nodes: [pdfToolsDropdown], visible: () => modeMachine.isEditable || comments.length > 0 },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
+    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     openExternalMenuItem(),
     { label: t('pdfRotateCW'), icon: 'rotateCW', onClick: rotatePdfPages },
     {
       label: t('pdfSaveRotateCW'),
       icon: 'rotateCW',
-      visible: () => editable,
+      visible: () => modeMachine.isEditable,
       onClick: () =>
         post({
           type: 'docMutate',
@@ -870,7 +983,7 @@ const topBar = customToolbar({
     {
       label: t('pdfExtractPages'),
       icon: 'export',
-      visible: () => editable,
+      visible: () => modeMachine.isEditable,
       onClick: () =>
         post({
           type: 'extractPdfPages',
@@ -878,7 +991,7 @@ const topBar = customToolbar({
           totalPages: viewer.pagesCount || 1,
         }),
     },
-    { label: t('pdfMerge'), icon: 'plus', visible: () => editable, onClick: () => post({ type: 'mergePdfs' }) },
+    { label: t('pdfMerge'), icon: 'plus', visible: () => modeMachine.isEditable, onClick: () => post({ type: 'mergePdfs' }) },
     {
       label: t('exportCommentsMd'),
       icon: 'export',
@@ -889,6 +1002,7 @@ const topBar = customToolbar({
   ],
 });
 
+openPdfDrawerFn = () => topBar.openDrawer();
 app.append(
   topBar.node,
   notice.node,
@@ -898,7 +1012,7 @@ app.append(
 onMessage((message) => {
   if (message.type === 'load') {
     docFileName = message.name || 'Document.pdf';
-    editable = message.editable === true;
+    modeMachine.setEditable(message.editable === true);
     comments = message.comments ?? [];
     topBar.refresh();
     void load(message.bytes, message.initialPage);

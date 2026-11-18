@@ -78,6 +78,11 @@ export const icons = {
   undo: svg('<path d="M5.5 4.2L2.5 7l3 2.8"/><path d="M3 7h6.5a3.8 3.8 0 0 1 0 7.6H7"/>'),
   info: svg('<circle cx="8" cy="8" r="5.8"/><path d="M8 7.3v4M8 4.8h.01"/>'),
   code: svg('<path d="M5.5 5L2.3 8l3.2 3M10.5 5l3.2 3-3.2 3"/>'),
+  sparkle: svg(
+    '<path d="M7.5 1.8l1.35 3.65L12.5 6.8l-3.65 1.35L7.5 11.8 6.15 8.15 2.5 6.8l3.65-1.35z"/><path d="M12.6 10.6l.65 1.75 1.75.65-1.75.65-.65 1.75-.65-1.75-1.75-.65 1.75-.65z"/>',
+  ),
+  stop: svg('<rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2" fill="currentColor" stroke="none"/>'),
+  refresh: svg('<path d="M13.2 5.4A5.5 5.5 0 1013.6 10M13.5 2.6v3.1h-3.1"/>'),
 };
 
 export type IconName = keyof typeof icons;

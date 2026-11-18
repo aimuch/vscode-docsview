@@ -1,16 +1,21 @@
 import * as vscode from 'vscode';
+import { readDocumentMarkdown, registerAgentTools } from './host/agentTools';
+import { initAiHost } from './host/ai/aiController';
+import { clearAiApiKey, setAiApiKey } from './host/ai/aiProviders';
 import { ArchivePreviewProvider } from './host/archive/provider';
 import { BinaryPreviewProvider } from './host/binaryPreviewProvider';
 import { CsvEditorProvider } from './host/csv/provider';
 import { EpubPreviewProvider } from './host/epub/provider';
 import { ExcelEditorProvider } from './host/excel/provider';
+import { initHistory, listVersions, showHistory, watchTextSaves } from './host/history';
 import { JsonlEditorProvider } from './host/jsonl/provider';
 import { MarkdownPreviewProvider } from './host/markdown/provider';
 import { OfficeEditorProvider } from './host/office/provider';
-import { initHistory, listVersions, showHistory, watchTextSaves } from './host/history';
-import { onViewerStatus } from './host/status';
+import { getViewerStates, onViewerStatus } from './host/status';
 import {
+  broadcastHostMessage,
   dispatchToView,
+  openAiInActiveView,
   openSinglePreview,
   openSingleSource,
   openSplitPreview,
@@ -28,7 +33,9 @@ function activeResource(): vscode.Uri | undefined {
 
 export function activate(context: vscode.ExtensionContext): {
   onViewerStatus: typeof onViewerStatus;
-  testing: { dispatch: typeof dispatchToView; listVersions: typeof listVersions };
+  getViewerStates: typeof getViewerStates;
+  readDocumentMarkdown: typeof readDocumentMarkdown;
+  testing: { dispatch: typeof dispatchToView; listVersions: typeof listVersions; setAiApiKey: typeof setAiApiKey };
 } {
   // Keep the webview alive while its tab is in the background: re-parsing a large
   // workbook or PDF on every tab switch would be far more expensive.
@@ -37,8 +44,10 @@ export function activate(context: vscode.ExtensionContext): {
   initHistory(context.globalStorageUri);
   const binary = new BinaryPreviewProvider(context);
   context.subscriptions.push(
+    ...initAiHost(context, broadcastHostMessage),
     ...watchViews(),
     watchTextSaves(),
+    ...registerAgentTools(activeResource),
     ...BinaryPreviewProvider.viewTypes.map((viewType) =>
       vscode.window.registerCustomEditorProvider(viewType, binary, {
         webviewOptions,
@@ -99,10 +108,26 @@ export function activate(context: vscode.ExtensionContext): {
         await openSingleSource(target);
       }
     }),
+    vscode.commands.registerCommand('docsview.ai.openAssistant', async () => {
+      if (!openAiInActiveView()) {
+        const target = activeResource();
+        if (target) {
+          await openSinglePreview(target);
+          openAiInActiveView();
+        }
+      }
+    }),
+    vscode.commands.registerCommand('docsview.ai.setApiKey', (explicitKey?: string) => setAiApiKey(explicitKey)),
+    vscode.commands.registerCommand('docsview.ai.clearApiKey', () => clearAiApiKey()),
   );
 
-  // Lets tests (and other tooling) observe when a document has actually rendered.
-  return { onViewerStatus, testing: { dispatch: dispatchToView, listVersions } };
+  // Lets tests, agents, and other extensions observe state and read structured documents.
+  return {
+    onViewerStatus,
+    getViewerStates,
+    readDocumentMarkdown,
+    testing: { dispatch: dispatchToView, listVersions, setAiApiKey },
+  };
 }
 
 export function deactivate(): void {

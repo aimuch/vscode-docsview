@@ -5,9 +5,12 @@ import '../shared/base.css';
 import '../markdown/markdown.css';
 import './epub.css';
 import type { EpubBookData } from '../../common/protocol';
+import { countDocumentWords } from '../../common/textStats';
+import { createAiAssistant } from '../shared/aiAssistant';
 import { app, el, onMessage, post, showStatus, t } from '../shared/api';
 import { themeToolbarButton } from '../shared/appearance';
 import { createFindWidget, PreviewFind } from '../shared/find';
+import { overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
 import { customToolbar, iconButton, openExternalButton, openExternalMenuItem, segmented } from '../shared/ui';
 import { createPager, createZoom } from '../shared/zoom';
@@ -144,6 +147,33 @@ const epubFind = new PreviewFind(article, scroller, {
 });
 const findWidget = createFindWidget(epubFind, scroller);
 
+let openEpubDrawerFn: (() => void) | undefined;
+
+const ai = createAiAssistant({
+  viewerKind: 'epub',
+  getFileName: () => book?.title ?? 'Book.epub',
+  selectionRoot: article,
+  onOpenSettings: () => openEpubDrawerFn?.(),
+  focusReturnTarget: () => scroller,
+  captureContext: () => {
+    const sel = window.getSelection()?.toString().trim() ?? '';
+    const chSec = chapterSections[currentChapter];
+    const chTitle = book?.chapters[currentChapter]?.title ?? `${t('chapter')} ${currentChapter + 1}`;
+    const chText = chSec ? domNodeToMarkdown(chSec) : '';
+    if (sel) {
+      return {
+        selection: sel,
+        surrounding: chText.slice(0, 10_000),
+        badge: `${chTitle} (${sel.length})`,
+      };
+    }
+    return {
+      surrounding: chText.slice(0, 12_000),
+      badge: chTitle,
+    };
+  },
+});
+
 const topBar = customToolbar({
   subtitle: () => (book ? book.title : 'EPUB'),
   slots: [
@@ -152,15 +182,19 @@ const topBar = customToolbar({
     { id: 'pager', nodes: [pager.node] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'find', nodes: findWidget.nodes },
+    { id: 'ai', nodes: [ai.button] },
     { id: 'actions', label: t('exportMenu'), nodes: [exportMdBtn] },
     { id: 'theme', nodes: [themeToolbarButton()] },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
+    { icon: 'sparkle', label: t('aiAssistant'), onClick: () => ai.open() },
     { icon: 'export', label: t('exportMarkdown'), onClick: exportBookAsMarkdown },
     openExternalMenuItem(),
   ],
 });
+
+openEpubDrawerFn = () => topBar.openDrawer();
 
 const statusLabel = el('span', { class: 'dv-label' });
 const statusBar = el('div', { class: 'dv-statusbar' }, [el('div', { class: 'dv-spacer' }), statusLabel]);
@@ -313,12 +347,16 @@ function renderBook(data: EpubBookData) {
   epubFind.refresh();
   findWidget.refreshCount();
 
-  const text = article.textContent ?? '';
-  const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
-  const latin = (text.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, ' ').match(/[A-Za-z0-9_'-]+/g) ?? []).length;
-  statusLabel.textContent = `${data.title}${data.author ? ` · ${data.author}` : ''} · ${t('epubChapters', data.chapters.length)} · ${t('mdWords', (cjk + latin).toLocaleString())}`;
+  const words = countDocumentWords(article.textContent ?? '');
+  statusLabel.textContent = `${data.title}${data.author ? ` · ${data.author}` : ''} · ${t('epubChapters', data.chapters.length)} · ${t('mdWords', words.toLocaleString())}`;
 
-  post({ type: 'status', ok: true, detail: `${data.chapters.length} chapters` });
+  post({
+    type: 'status',
+    ok: true,
+    detail: `${data.chapters.length} chapters`,
+    mode: singleMode ? 'single' : 'continuous',
+    overlays: overlayStack.getOpenIds(),
+  });
 }
 
 onMessage((message) => {

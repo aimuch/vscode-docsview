@@ -182,6 +182,25 @@ export async function run(): Promise<void> {
         detail: input instanceof vscode.TabInputCustom ? input.viewType : input?.constructor.name,
       });
     }
+
+    // AX commands: `docsview.readDocumentMarkdown` & `docsview.getViewerState`
+    {
+      const xlsxUri = vscode.Uri.file(join(samples, 'report.xlsx'));
+      const md = await vscode.commands.executeCommand<string>('docsview.readDocumentMarkdown', xlsxUri);
+      results.push({
+        file: 'AX readDocumentMarkdown(report.xlsx)',
+        viewType: 'command',
+        ok: typeof md === 'string' && md.includes('|') && md.includes('report.xlsx'),
+        detail: `${md?.length ?? 0} chars`,
+      });
+      const states = await vscode.commands.executeCommand<{ kind: string; mode: string }[]>('docsview.getViewerState');
+      results.push({
+        file: 'AX getViewerState()',
+        viewType: 'command',
+        ok: Array.isArray(states),
+        detail: `${states?.length ?? 0} open state(s)`,
+      });
+    }
   } catch (err) {
     results.push({ file: '(setup)', viewType: '', ok: false, detail: err instanceof Error ? err.stack : String(err) });
   }

@@ -123,6 +123,34 @@
   user-select: none;
 }
 
+.sheet-fx-ai-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--vscode-panel-border, rgba(128, 128, 128, 0.25));
+  background: transparent;
+  color: var(--dv-accent);
+  cursor: pointer;
+}
+
+.sheet-fx-ai-btn:hover {
+  background: color-mix(in srgb, var(--dv-accent) 16%, transparent);
+}
+
+.sheet-fx-ai-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.sheet-fx-ai-btn[hidden] {
+  display: none;
+}
+
 .sheet-formula {
   flex: 1;
   min-width: 0;

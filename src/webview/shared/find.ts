@@ -2,6 +2,7 @@
 // shared across Markdown, Word (.docx), PowerPoint (.pptx), PDF (.pdf), Spreadsheets, and .doc.
 import { el, t } from './api';
 import { icons } from './icons';
+import { overlayStack } from './overlayStack';
 import { iconButton } from './ui';
 
 interface HighlightRegistryLike {
@@ -16,7 +17,8 @@ const HighlightCtor = (): (new (...ranges: Range[]) => unknown) | undefined =>
   (globalThis as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight;
 
 /** UI elements inside preview containers whose text is not part of the authored document. */
-const SKIP = '.md-copy, .md-edit, .docx-cm-pill, .dv-annot-layer, script, style, svg, textarea';
+const SKIP = '.md-copy, .md-edit, .docx-cm-pill, .dv-annot-layer, .dv-ai-card, .dv-ai-float-pill, script, style, svg, textarea';
+const MAX_FIND_RANGES = 5000;
 
 export interface PreviewFindOptions {
   /** Search inside `[hidden]` containers too (e.g. non-active slides in PPT single-slide mode). */
@@ -98,9 +100,17 @@ export class PreviewFind {
         return NodeFilter.FILTER_ACCEPT;
       },
     });
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      const text = (node.nodeValue ?? '').toLowerCase();
-      for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length)) {
+    for (let node = walker.nextNode(); node && this.ranges.length < MAX_FIND_RANGES; node = walker.nextNode()) {
+      const raw = node.nodeValue ?? '';
+      if (raw.length < needle.length) {
+        continue;
+      }
+      const text = raw.toLowerCase();
+      for (
+        let at = text.indexOf(needle);
+        at >= 0 && this.ranges.length < MAX_FIND_RANGES;
+        at = text.indexOf(needle, at + needle.length)
+      ) {
         const range = document.createRange();
         range.setStart(node, at);
         range.setEnd(node, at + needle.length);
@@ -212,27 +222,61 @@ export function createFindBar(
     );
   };
 
+  let inputTimer: ReturnType<typeof setTimeout> | undefined;
+  const flushPendingInput = () => {
+    if (inputTimer !== undefined) {
+      clearTimeout(inputTimer);
+      inputTimer = undefined;
+      backend.onInput(input.value);
+      refreshCount();
+    }
+  };
+
   const open = () => {
     toggleBtn.hidden = true;
     toggleBtn.setAttribute('aria-expanded', 'true');
     barWrap.hidden = false;
     notifyToolbar(true);
+    overlayStack.push({
+      id: 'findBar',
+      isOpen: () => !barWrap.hidden,
+      close,
+      restoreFocus: () => focusReturnTarget,
+    });
     input.focus();
     input.select();
   };
 
   const close = () => {
+    if (inputTimer !== undefined) {
+      clearTimeout(inputTimer);
+      inputTimer = undefined;
+    }
     input.value = '';
     backend.clear();
     refreshCount('');
     barWrap.hidden = true;
     toggleBtn.hidden = false;
     toggleBtn.setAttribute('aria-expanded', 'false');
+    overlayStack.remove('findBar');
     notifyToolbar(false);
     focusReturnTarget.focus();
   };
 
   input.addEventListener('input', () => {
+    if (inputTimer !== undefined) {
+      clearTimeout(inputTimer);
+      inputTimer = undefined;
+    }
+    // Debounce keystrokes only on huge DOM trees (>2000 elements); small/medium docs search immediately.
+    if (document.body.getElementsByTagName('*').length > 2000 && input.value.length > 0) {
+      inputTimer = setTimeout(() => {
+        inputTimer = undefined;
+        backend.onInput(input.value);
+        refreshCount();
+      }, 75);
+      return;
+    }
     backend.onInput(input.value);
     refreshCount();
   });
@@ -240,6 +284,7 @@ export function createFindBar(
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
+      flushPendingInput();
       backend.step(e.shiftKey);
       refreshCount();
     } else if (e.key === 'Escape') {

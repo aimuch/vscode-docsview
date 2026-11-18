@@ -28,6 +28,16 @@ Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一
 
 任何文件都可以通过右键 → **打开方式…** 在 DocsView 与文本编辑器之间切换。
 
+## AI 助手与多模型引擎（`Ctrl/Cmd+I`）
+
+内置统一 **AI 助手**（顶栏 `✨` 按钮、文字划词浮标、表格公式栏右侧 `✨` 按钮或快捷键 `Ctrl/Cmd+I`），零第三方 SDK 体积膨胀：
+- **多模型提供商支持**：支持直接调用 **VS Code 内置语言模型 API**（如 GitHub Copilot Chat），或直连 **DeepSeek**、**Kimi (Moonshot)**、**Doubao（豆包）**、**Qwen（通义千问）**、**OpenAI**、**Ollama**、**Magpie**（自动读取 `~/.config/magpie/gateway.json`）、**CC Switch**（`127.0.0.1:15721`）及任意 **OpenAI Compatible** 接口。API 密钥安全加密存储于 VS Code `SecretStorage`，首次外发自动提示隐私确认。
+- **全格式深度联动**：
+  - **Markdown**：划词润色、精简、扩写、中英互译、纠错校对，或根据提示词生成表格 / Mermaid 流程图，一键替换原段落或插入下方。
+  - **Excel / CSV / JSONL**：自动注入当前工作表列头与样本行 Schema，用自然语言直接生成 `=SUMIFS` / `=XLOOKUP` 等公式并一键填入单元格或按相对引用批量填充整片选区；支持批量生成/清洗/转换单元格数据与 JSONL 记录。
+  - **Word / PowerPoint / PDF / EPUB**：支持 Word 段落就地改写与写回批注、PPT 幻灯片文案优化与**一键生成演讲者备注**、PDF 划词解释/翻译并一键存为跨行 `/Highlight` 高亮批注、EPUB 章节总结与翻译。
+- **Agent 接口（AX）**：提供 `docsview.readDocumentMarkdown`（将 `.xlsx`/`.docx`/`.pptx`/`.pdf`/`.epub`/`.zip` 等二进制文档一键读取为结构化 Markdown）与 `docsview.getViewerState`（确定性读取当前预览状态机与浮层栈）。
+
 ## 工具栏与设置抽屉
 
 每个预览顶部共享一套精简工具栏：左侧默认放置当前格式的导航与常用工具，最右侧是 **设置按钮（齿轮图标）**，点击从右侧滑出设置抽屉。
@@ -105,6 +115,9 @@ Markdown / CSV 的文本编辑器右上角有两个 DocsView 图标：**打开�
 | `docsview.image.loupePosition` | `follow` | 图片像素取色放大镜位置：`follow`（跟随指针）/ `fixed`（固定在右上角） |
 | `docsview.sidebarPosition` | `left` | 导航/目录/批注侧边栏位置：`left`（左侧）/ `right`（右侧） |
 | `docsview.comments.author` | `""` | Word / PPT / PDF 添加批注时记录的作者名称（留空默认使用当前系统用户名） |
+| `docsview.ai.provider` | `"VS Code"` | AI 模型提供商：`VS Code` / `DeepSeek` / `Kimi` / `Doubao` / `Qwen` / `OpenAI` / `Ollama` / `Magpie` / `CC Switch` / `OpenAI Compatible` |
+| `docsview.ai.baseUrl` | `""` | 直连提供商自定义 API 地址（留空使用对应提供商默认地址） |
+| `docsview.ai.model` | `""` | 指定模型 ID（留空自动探测或使用预设默认模型） |
 | `docsview.toolbar` | 默认左区 | 顶部工具栏左侧与右侧显示的项目及其排列顺序 |
 
 ## 已知限制

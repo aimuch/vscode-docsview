@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
+import { BinarySaveGate } from '../../common/stateMachine';
 import { saveConverted } from '../fileActions';
 import { snapshot } from '../history';
 import { configureWebview, debounce, handleCommonMessage, parentUri, t, onWebviewMessage } from '../webviewHtml';
@@ -13,10 +14,7 @@ class ExcelDocument implements vscode.CustomDocument {
   /** Set when the file could not be parsed; shown in the editor instead of a grid. */
   loadError: string | undefined;
   session: ExcelSession | undefined;
-  /** Our own writes trigger the file watcher too; ignore events until this time. */
-  ignoreWatcherUntil = 0;
-  /** True when another process rewrote the file while this session had unsaved edits. */
-  diskChangedWhileDirty = false;
+  readonly saveGate = new BinarySaveGate();
   post: (message: HostMessage) => void = () => undefined;
 
   constructor(readonly uri: vscode.Uri) {}
@@ -50,7 +48,7 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
         document.session = await Session.open(bytes, baseName(document.uri));
       }
       document.loadError = undefined;
-      document.diskChangedWhileDirty = false;
+      document.saveGate.recordLoadedFromDisk(bytes);
     } catch (err) {
       document.session = undefined;
       document.loadError = t('loadFailed', err instanceof Error ? err.message : String(err));
@@ -180,14 +178,18 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
       new vscode.RelativePattern(parentUri(document.uri), baseName(document.uri)),
     );
     const reload = debounce(async () => {
-      if (Date.now() < document.ignoreWatcherUntil) {
+      let diskBytes: Uint8Array;
+      try {
+        diskBytes = await vscode.workspace.fs.readFile(document.uri);
+      } catch {
         return;
       }
-      if (document.session?.dirty) {
-        if (!document.diskChangedWhileDirty) {
-          document.diskChangedWhileDirty = true;
-          void vscode.window.showWarningMessage(t('saveConflict'));
-        }
+      const verdict = document.saveGate.evaluateDiskBytes(diskBytes, Boolean(document.session?.dirty));
+      if (verdict === 'self-write' || verdict === 'conflict-known') {
+        return;
+      }
+      if (verdict === 'conflict-new') {
+        void vscode.window.showWarningMessage(t('saveConflict'));
         return;
       }
       await this.load(document);
@@ -207,7 +209,7 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
     if (!session) {
       return;
     }
-    if (document.diskChangedWhileDirty) {
+    if (document.saveGate.hasConflict) {
       const saveLabel = t('save');
       const choice = await vscode.window.showWarningMessage(t('saveConflict'), { modal: true }, saveLabel);
       if (choice !== saveLabel || cancellation.isCancellationRequested) {
@@ -217,10 +219,10 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
     const bytes = session.export();
     // Keep the previous file as a version before it is overwritten.
     await snapshot(document.uri);
-    document.ignoreWatcherUntil = Date.now() + 2000;
+    document.saveGate.beginSelfSave(bytes);
     await vscode.workspace.fs.writeFile(document.uri, bytes);
     session.markSaved(bytes);
-    document.diskChangedWhileDirty = false;
+    document.saveGate.completeSelfSave(bytes);
   }
 
   async saveCustomDocumentAs(document: ExcelDocument, destination: vscode.Uri): Promise<void> {

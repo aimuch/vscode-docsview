@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../common/protocol';
+import { BinarySaveGate } from '../common/stateMachine';
 import { saveConvertedImage } from './fileActions';
 import { listVersions, snapshot } from './history';
 import { ImageSession, plainU8 } from './imageSession';
@@ -41,8 +42,7 @@ class ImageDocument implements vscode.CustomDocument {
   session: ImageSession | undefined;
   siblingIndex: number | undefined;
   siblingCount: number | undefined;
-  ignoreWatcherUntil = 0;
-  diskChangedWhileDirty = false;
+  readonly saveGate = new BinarySaveGate();
   post: (message: HostMessage) => void = () => undefined;
 
   constructor(readonly uri: vscode.Uri) {}
@@ -89,7 +89,7 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
       document.siblingIndex = idx >= 0 ? idx : undefined;
       document.siblingCount = idx >= 0 ? siblings.length : undefined;
       document.loadError = undefined;
-      document.diskChangedWhileDirty = false;
+      document.saveGate.recordLoadedFromDisk(bytes);
     } catch (err) {
       document.session = undefined;
       document.loadError = t('loadFailed', err instanceof Error ? err.message : String(err));
@@ -364,14 +364,18 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
       new vscode.RelativePattern(parentUri(document.uri), baseName(document.uri)),
     );
     const reload = debounce(async () => {
-      if (Date.now() < document.ignoreWatcherUntil) {
+      let diskBytes: Uint8Array;
+      try {
+        diskBytes = await vscode.workspace.fs.readFile(document.uri);
+      } catch {
         return;
       }
-      if (document.dirty) {
-        if (!document.diskChangedWhileDirty) {
-          document.diskChangedWhileDirty = true;
-          void vscode.window.showWarningMessage(t('saveConflict'));
-        }
+      const verdict = document.saveGate.evaluateDiskBytes(diskBytes, document.dirty);
+      if (verdict === 'self-write' || verdict === 'conflict-known') {
+        return;
+      }
+      if (verdict === 'conflict-new') {
+        void vscode.window.showWarningMessage(t('saveConflict'));
         return;
       }
       await this.load(document);
@@ -393,7 +397,7 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
     if (!document.session) {
       return;
     }
-    if (document.diskChangedWhileDirty) {
+    if (document.saveGate.hasConflict) {
       const saveLabel = t('save');
       const choice = await vscode.window.showWarningMessage(t('saveConflict'), { modal: true }, saveLabel);
       if (choice !== saveLabel || cancellation.isCancellationRequested) {
@@ -401,10 +405,11 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
       }
     }
     await snapshot(document.uri);
-    document.ignoreWatcherUntil = Date.now() + 2000;
-    await vscode.workspace.fs.writeFile(document.uri, document.session.bytes);
+    const bytes = document.session.bytes;
+    document.saveGate.beginSelfSave(bytes);
+    await vscode.workspace.fs.writeFile(document.uri, bytes);
     document.session.markSaved();
-    document.diskChangedWhileDirty = false;
+    document.saveGate.completeSelfSave(bytes);
   }
 
   async saveCustomDocumentAs(document: ImageDocument, destination: vscode.Uri): Promise<void> {

@@ -586,6 +586,41 @@ const server = http.createServer(async (req, res) => {
         console.log(`[dev] ${message.type}`, JSON.stringify(message));
         return send(200, MIME['.json'], '[]');
       }
+      if (message.type === 'aiGetSettings' || message.type === 'aiUpdateSettings' || message.type === 'aiManageKey') {
+        return send(
+          200,
+          MIME['.json'],
+          JSON.stringify([
+            {
+              type: 'aiSettings',
+              settings: {
+                provider: 'VS Code',
+                baseUrl: '',
+                model: 'dev-mock',
+                hasApiKey: false,
+                presets: [
+                  { id: 'VS Code', name: 'VS Code (Dev Harness)', defaultBaseUrl: '', defaultModel: '', requiresApiKey: false },
+                ],
+              },
+              models: ['dev-mock'],
+            },
+          ]),
+        );
+      }
+      if (message.type === 'aiRun') {
+        const mockText =
+          message.context.action === 'formula'
+            ? '=SUM(B2:B10)\nSums values in B2:B10 (dev harness preview).'
+            : `[Dev Harness Mock AI · ${message.context.action}]\n${message.context.instruction ?? message.context.selection ?? 'OK'}`;
+        return send(
+          200,
+          MIME['.json'],
+          JSON.stringify([{ type: 'aiStream', requestId: message.requestId, text: mockText, model: 'dev-mock', done: true }]),
+        );
+      }
+      if (message.type === 'aiCancel') {
+        return send(200, MIME['.json'], '[]');
+      }
       try {
         replies = await session.handle(message);
         if (message.type === 'ready') {

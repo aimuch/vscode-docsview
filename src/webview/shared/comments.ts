@@ -5,6 +5,7 @@ import { formatCommentsAsMarkdown } from '../../common/commentsMarkdown';
 import type { DocComment } from '../../common/protocol';
 import { el, post, t } from './api';
 import { icons } from './icons';
+import { overlayStack } from './overlayStack';
 import { iconButton } from './ui';
 
 function formatShortDate(raw: string | undefined): string {
@@ -248,7 +249,7 @@ function mountFloatingDialog(opts: {
 
   const cleanup = () => {
     window.removeEventListener('mousedown', onOutside, true);
-    window.removeEventListener('keydown', onEsc, true);
+    overlayStack.remove('floatingDialog');
     pop.remove();
     if (activePopoverCleanup === cleanup) {
       activePopoverCleanup = undefined;
@@ -268,13 +269,6 @@ function mountFloatingDialog(opts: {
 
   const onOutside = (e: MouseEvent) => {
     if (!pop.contains(e.target as Node)) {
-      cancel();
-    }
-  };
-  const onEsc = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
       cancel();
     }
   };
@@ -300,9 +294,13 @@ function mountFloatingDialog(opts: {
   pop.style.top = `${top}px`;
 
   activePopoverCleanup = cleanup;
+  overlayStack.push({
+    id: 'floatingDialog',
+    isOpen: () => pop.isConnected,
+    close: cancel,
+  });
   setTimeout(() => {
     window.addEventListener('mousedown', onOutside, true);
-    window.addEventListener('keydown', onEsc, true);
     area.focus();
     if (opts.initialText) {
       area.select();

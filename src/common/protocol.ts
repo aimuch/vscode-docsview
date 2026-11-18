@@ -222,6 +222,68 @@ export const DEFAULT_APPEARANCE: Appearance = {
   sidebarPosition: 'left',
 };
 
+// ---------------------------------------------------------------- AI assistant models
+
+export type AiProviderId =
+  | 'VS Code'
+  | 'DeepSeek'
+  | 'Kimi'
+  | 'Doubao'
+  | 'Qwen'
+  | 'OpenAI'
+  | 'Ollama'
+  | 'Magpie'
+  | 'CC Switch'
+  | 'OpenAI Compatible';
+
+export interface AiProviderPresetInfo {
+  id: AiProviderId;
+  name: string;
+  defaultBaseUrl: string;
+  defaultModel: string;
+  requiresApiKey: boolean;
+}
+
+export interface AiSettingsSnapshot {
+  provider: AiProviderId;
+  baseUrl: string;
+  model: string;
+  hasApiKey: boolean;
+  presets: AiProviderPresetInfo[];
+}
+
+export type AiActionKind =
+  | 'generate'
+  | 'polish'
+  | 'concise'
+  | 'expand'
+  | 'translate'
+  | 'explain'
+  | 'summarize'
+  | 'fix'
+  | 'formula'
+  | 'tableFill';
+
+export interface AiSheetSchemaContext {
+  sheetName: string;
+  allSheets: string[];
+  headers: string[];
+  sampleRows: string[][];
+  activeCell: string;
+  selectionRange: string;
+  isJsonl?: boolean;
+}
+
+export interface AiPromptContext {
+  viewerKind: ViewerKind;
+  fileName?: string;
+  action: AiActionKind;
+  instruction?: string;
+  selection?: string;
+  surrounding?: string;
+  sheetSchema?: AiSheetSchemaContext;
+}
+
 // ---------------------------------------------------------------- toolbar layout
 
 export type ToolbarItemId =
@@ -239,6 +301,7 @@ export type ToolbarItemId =
   | 'openApp'
   | 'highlight'
   | 'structure'
+  | 'ai'
   | 'actions'
   | 'history'
   | 'rtl'
@@ -262,6 +325,7 @@ export const ALL_TOOLBAR_ITEMS: readonly ToolbarItemId[] = [
   'openApp',
   'highlight',
   'structure',
+  'ai',
   'actions',
   'history',
   'rtl',
@@ -290,6 +354,7 @@ export const DEFAULT_TOOLBAR: ToolbarConfig = {
     'comments',
     'highlight',
     'structure',
+    'ai',
     'actions',
     'theme',
     'openApp',
@@ -375,6 +440,9 @@ export type HostMessage =
   | { type: 'viewState'; split: boolean }
   /** File-level state for the settings drawer. `isDefault` is undefined when it does not apply. */
   | { type: 'fileState'; isDefault?: boolean; ext: string; history: boolean }
+  | { type: 'aiSettings'; settings: AiSettingsSnapshot; models?: string[] }
+  | { type: 'aiOpen' }
+  | { type: 'aiStream'; requestId: number; text: string; model?: string; done: boolean; error?: string }
   | { type: 'error'; message: string };
 
 export type WebviewMessage =
@@ -440,8 +508,18 @@ export type WebviewMessage =
   | { type: 'extractArchiveEntry'; path: string }
   /** Archive: extract all archive contents into a user-chosen directory. */
   | { type: 'extractAllArchive' }
-  /** Sent once per load: the document is on screen, or could not be rendered. */
-  | { type: 'status'; ok: boolean; detail?: string };
+  /** AI Assistant: execute a context-aware prompt (streaming chunks back via `aiStream`). */
+  | { type: 'aiRun'; requestId: number; context: AiPromptContext }
+  /** AI Assistant: cancel an in-flight streaming request. */
+  | { type: 'aiCancel'; requestId: number }
+  /** AI Assistant: request current AI provider settings (and optionally probe `/models`). */
+  | { type: 'aiGetSettings'; discoverModels?: boolean }
+  /** AI Assistant: update `docsview.ai.provider`, `baseUrl`, or `model` in VS Code machine settings. */
+  | { type: 'aiUpdateSettings'; provider?: AiProviderId; baseUrl?: string; model?: string }
+  /** AI Assistant: prompt to store or clear API key in VS Code SecretStorage. */
+  | { type: 'aiManageKey'; op: 'set' | 'clear' }
+  /** Sent once per load (or state change): the document is on screen, or could not be rendered. */
+  | { type: 'status'; ok: boolean; detail?: string; mode?: string; overlays?: string[] };
 
 /** Static configuration injected into the webview HTML. */
 export interface WebviewConfig {

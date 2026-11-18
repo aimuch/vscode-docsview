@@ -3,10 +3,14 @@ import '../shared/base.css';
 import '../shared/office-fonts.css';
 import './docx.css';
 import type { DocComment } from '../../common/protocol';
+import { InteractionModeMachine } from '../../common/stateMachine';
+import { countDocumentWords } from '../../common/textStats';
+import { createAiAssistant } from '../shared/aiAssistant';
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { closeFloatingEditors, CommentsPanel, openCommentComposer, openInlineTextEditor } from '../shared/comments';
 import { getFileState } from '../shared/fileState';
 import { createFindWidget, PreviewFind } from '../shared/find';
+import { overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
 import {
   customToolbar,
@@ -36,37 +40,28 @@ const outline = new Outline((key) => {
 sidebar.panel('outline').append(outline.node);
 
 let docFileName = 'Document.docx';
-let editable = false;
-let editMode = false;
-let annotateMode = false;
+const modeMachine = new InteractionModeMachine();
 let comments: DocComment[] = [];
 let docxParagraphs: string[] = [];
 let paragraphMap = new Map<number, HTMLElement>();
 
 const editToggle = toggleButton('pencil', t('docxEditMode'), (on) => {
-  editMode = on;
-  if (on && annotateMode) {
-    annotateMode = false;
-    annotateToggle.set(false);
-    pages.classList.remove('docx-annotating');
-  }
-  pages.classList.toggle('docx-editing', on);
-  closeFloatingEditors();
-  if (on) {
-    notice.flash(t('docxEditMode'), 2800);
-  }
+  modeMachine.setMode(on ? 'edit' : 'read');
 });
 
 const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
-  annotateMode = on;
-  if (on && editMode) {
-    editMode = false;
-    editToggle.set(false);
-    pages.classList.remove('docx-editing');
-  }
-  pages.classList.toggle('docx-annotating', on);
+  modeMachine.setMode(on ? 'annotate' : 'read');
+});
+
+modeMachine.onChange((mode) => {
+  editToggle.set(mode === 'edit');
+  annotateToggle.set(mode === 'annotate');
+  pages.classList.toggle('docx-editing', mode === 'edit');
+  pages.classList.toggle('docx-annotating', mode === 'annotate');
   closeFloatingEditors();
-  if (on) {
+  if (mode === 'edit') {
+    notice.flash(t('docxEditMode'), 2800);
+  } else if (mode === 'annotate') {
     sidebar.setOpen(true);
     sidebar.setTab('comments');
     notice.flash(t('annotateDocxHint'), 2800);
@@ -75,7 +70,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
 
 const commentsPanel = new CommentsPanel({
   docName: () => docFileName,
-  editable: () => editable,
+  editable: () => modeMachine.isEditable,
   targetLabel: (c) => {
     const pLabel = c.pIndex !== undefined ? `¶${c.pIndex + 1}` : '';
     const quote = c.quote ? ` “${c.quote}”` : '';
@@ -96,17 +91,7 @@ const commentsPanel = new CommentsPanel({
   onUpdate: (id, text) => post({ type: 'docMutate', mutation: { kind: 'updateComment', id, text } }),
   onDelete: (id) => post({ type: 'docMutate', mutation: { kind: 'deleteComment', id } }),
   onToggleAddMode: () => {
-    annotateMode = !annotateMode;
-    annotateToggle.set(annotateMode);
-    if (annotateMode && editMode) {
-      editMode = false;
-      editToggle.set(false);
-      pages.classList.remove('docx-editing');
-    }
-    pages.classList.toggle('docx-annotating', annotateMode);
-    if (annotateMode) {
-      notice.flash(t('annotateDocxHint'), 2800);
-    }
+    modeMachine.toggle('annotate');
   },
 });
 sidebar.panel('comments').append(commentsPanel.node);
@@ -139,6 +124,90 @@ const findWidget = createFindWidget(docFind, stage);
 const exportMdBtn = iconButton('export', t('exportMarkdown'), () => post({ type: 'exportDocMarkdown' }));
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
+interface DocxAiMeta {
+  pIndex?: number;
+  expected?: string;
+}
+
+function captureDocxAiContext() {
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+    const range = sel.getRangeAt(0);
+    const startEl =
+      range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.startContainer as Element)
+        : range.startContainer.parentElement;
+    if (startEl && pages.contains(startEl)) {
+      const pNode = startEl.closest<HTMLElement>('[data-p-index]');
+      const pIndex = pNode ? Number(pNode.dataset.pIndex) : undefined;
+      const validIdx = pIndex !== undefined && Number.isFinite(pIndex) ? pIndex : undefined;
+      const expected = validIdx !== undefined ? docxParagraphs[validIdx] : undefined;
+      const selStr = sel.toString().trim();
+      return {
+        selection: expected ?? selStr,
+        surrounding: docxParagraphs.join('\n').slice(0, 10_000),
+        badge: validIdx !== undefined ? `¶${validIdx + 1}` : t('aiContextSelection', selStr.length),
+        meta: { pIndex: validIdx, expected } satisfies DocxAiMeta,
+      };
+    }
+  }
+  return {
+    surrounding: docxParagraphs.length ? docxParagraphs.join('\n') : (pages.textContent ?? ''),
+    badge: t('aiContextDocument'),
+    meta: {} satisfies DocxAiMeta,
+  };
+}
+
+let openDocxDrawerFn: (() => void) | undefined;
+
+const ai = createAiAssistant({
+  viewerKind: 'docx',
+  getFileName: () => docFileName,
+  captureContext: captureDocxAiContext,
+  selectionRoot: pages,
+  onOpenSettings: () => openDocxDrawerFn?.(),
+  focusReturnTarget: () => stage,
+  applyActions: [
+    {
+      id: 'replace-para',
+      label: () => t('aiApplyReplace'),
+      primary: true,
+      visible: ({ captured }) => {
+        const m = captured.meta as DocxAiMeta | undefined;
+        return modeMachine.isEditable && m?.pIndex !== undefined && m.expected !== undefined;
+      },
+      onApply: ({ text, captured }) => {
+        const m = captured.meta as DocxAiMeta;
+        post({
+          type: 'docMutate',
+          mutation: {
+            kind: 'editDocxParagraph',
+            pIndex: m.pIndex!,
+            text: text.replace(/\r?\n+/g, ' ').trim(),
+            expected: m.expected!,
+          },
+        });
+      },
+    },
+    {
+      id: 'save-comment',
+      label: () => t('aiApplyComment'),
+      visible: () => modeMachine.isEditable,
+      onApply: ({ text, captured }) => {
+        const m = captured.meta as DocxAiMeta | undefined;
+        const pIndex = m?.pIndex ?? 0;
+        const quote = (captured.selection ?? docxParagraphs[pIndex] ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        sidebar.setOpen(true);
+        sidebar.setTab('comments');
+        post({
+          type: 'docMutate',
+          mutation: { kind: 'addComment', pIndex, quote, text: text.trim() },
+        });
+      },
+    },
+  ],
+});
+
 const statusText = el('span', { class: 'dv-label' });
 const statusBar = el('div', { class: 'dv-statusbar' }, [el('div', { class: 'dv-spacer' }), statusText]);
 
@@ -149,13 +218,15 @@ const topBar = customToolbar({
     { id: 'view', nodes: [view.node] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'find', nodes: findWidget.nodes },
-    { id: 'edit', label: t('docxEditMode'), nodes: [editToggle.node], visible: () => editable },
-    { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
+    { id: 'edit', label: t('docxEditMode'), nodes: [editToggle.node], visible: () => modeMachine.isEditable },
+    { id: 'comments', nodes: [annotateToggle.node], visible: () => modeMachine.isEditable },
+    { id: 'ai', nodes: [ai.button] },
     { id: 'actions', nodes: [exportMdBtn] },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
+    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     openExternalMenuItem(),
     { label: t('exportMarkdown'), icon: 'export', onClick: () => post({ type: 'exportDocMarkdown' }) },
     {
@@ -168,6 +239,7 @@ const topBar = customToolbar({
   ],
 });
 
+openDocxDrawerFn = () => topBar.openDrawer();
 app.append(
   topBar.node,
   notice.node,
@@ -271,10 +343,7 @@ function syncDocxStatusBar(): void {
   }
   const paraNodes = [...pages.querySelectorAll<HTMLElement>(PARA_SELECTOR)];
   const nonEmptyParas = paraNodes.filter((n) => (n.textContent ?? '').trim().length > 0).length;
-  const fullText = pages.textContent ?? '';
-  const cjk = (fullText.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
-  const latin = (fullText.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, ' ').match(/[A-Za-z0-9_'-]+/g) ?? []).length;
-  const words = cjk + latin;
+  const words = countDocumentWords(pages.textContent ?? '');
   const parts = [
     `${t('page')} ${pageCount}`,
     t('docParagraphs', nonEmptyParas),
@@ -343,7 +412,7 @@ function resolveClickedParagraph(target: EventTarget | null): { node: HTMLElemen
 }
 
 pages.addEventListener('click', (e) => {
-  if (!annotateMode && !editMode) {
+  if (modeMachine.mode === 'read') {
     const anchor = (e.target as HTMLElement | null)?.closest<HTMLAnchorElement>('a[href]');
     const href = anchor?.getAttribute('href')?.trim();
     if (anchor && href) {
@@ -360,7 +429,7 @@ pages.addEventListener('click', (e) => {
       return;
     }
   }
-  if (!editable || !annotateMode) {
+  if (!modeMachine.isEditable || modeMachine.mode !== 'annotate') {
     return;
   }
   const hit = resolveClickedParagraph(e.target);
@@ -383,7 +452,7 @@ pages.addEventListener('click', (e) => {
 });
 
 pages.addEventListener('dblclick', (e) => {
-  if (!editable || !editMode) {
+  if (!modeMachine.isEditable || modeMachine.mode !== 'edit') {
     return;
   }
   const hit = resolveClickedParagraph(e.target);
@@ -480,11 +549,13 @@ async function load(bytes: Uint8Array) {
       type: 'status',
       ok: true,
       detail: `${pages.querySelectorAll('section.docx').length} pages, ${headings.length} headings`,
+      mode: modeMachine.mode,
+      overlays: overlayStack.getOpenIds(),
     });
   } catch (err) {
     if (current === generation) {
       showStatus(pages, t('loadFailed', errorText(err)), true);
-      post({ type: 'status', ok: false, detail: errorText(err) });
+      post({ type: 'status', ok: false, detail: errorText(err), mode: modeMachine.mode });
     }
   }
 }
@@ -492,7 +563,7 @@ async function load(bytes: Uint8Array) {
 onMessage((message) => {
   if (message.type === 'load') {
     docFileName = message.name || 'Document.docx';
-    editable = message.editable === true;
+    modeMachine.setEditable(message.editable === true);
     comments = message.comments ?? [];
     docxParagraphs = message.docxParagraphs ?? [];
     topBar.refresh();
