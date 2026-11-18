@@ -27,6 +27,7 @@ function formatShortDate(raw: string | undefined): string {
 
 export interface CommentsPanelOptions {
   docName?: () => string;
+  editable?: () => boolean;
   targetLabel?: (comment: DocComment) => string;
   onSelect: (comment: DocComment) => void;
   onUpdate: (id: string, text: string) => void;
@@ -38,6 +39,7 @@ export class CommentsPanel {
   readonly node: HTMLElement;
   private readonly countEl: HTMLElement;
   private readonly exportBtn: HTMLButtonElement;
+  private readonly addBtn: HTMLButtonElement | undefined;
   private readonly listEl: HTMLElement;
   private items: DocComment[] = [];
   private activeId: string | undefined;
@@ -53,6 +55,7 @@ export class CommentsPanel {
       addBtn.type = 'button';
       addBtn.innerHTML = `${icons.plus}<span>${t('addComment')}</span>`;
       addBtn.addEventListener('click', () => opts.onToggleAddMode?.());
+      this.addBtn = addBtn;
       rightGroup.append(addBtn);
     }
     const head = el('div', { class: 'dv-cm-head' }, [this.countEl, rightGroup]);
@@ -100,6 +103,10 @@ export class CommentsPanel {
   }
 
   private render(): void {
+    const canEdit = this.opts.editable ? this.opts.editable() : true;
+    if (this.addBtn) {
+      this.addBtn.hidden = !canEdit;
+    }
     this.countEl.textContent = t('commentsCount', this.items.length);
     this.exportBtn.disabled = this.items.length === 0;
     if (!this.items.length) {
@@ -119,21 +126,25 @@ export class CommentsPanel {
       const dateStr = formatShortDate(comment.date);
       const dateEl = el('span', { class: 'dv-cm-date', text: dateStr });
 
-      const editBtn = iconButton('pencil', t('editComment'), () => {
-        this.editingId = comment.id;
-        this.render();
-      });
-      editBtn.classList.add('dv-cm-mini');
+      const metaChildren: HTMLElement[] = [badge, author, dateEl];
+      if (canEdit) {
+        const editBtn = iconButton('pencil', t('editComment'), () => {
+          this.editingId = comment.id;
+          this.render();
+        });
+        editBtn.classList.add('dv-cm-mini');
 
-      const delBtn = iconButton('trash', t('deleteComment'), () => {
-        this.opts.onDelete(comment.id);
-      });
-      delBtn.classList.add('dv-cm-mini');
+        const delBtn = iconButton('trash', t('deleteComment'), () => {
+          this.opts.onDelete(comment.id);
+        });
+        delBtn.classList.add('dv-cm-mini');
 
-      const actions = el('span', { class: 'dv-cm-actions' }, [editBtn, delBtn]);
-      actions.addEventListener('click', (e) => e.stopPropagation());
+        const actions = el('span', { class: 'dv-cm-actions' }, [editBtn, delBtn]);
+        actions.addEventListener('click', (e) => e.stopPropagation());
+        metaChildren.push(actions);
+      }
 
-      const metaRow = el('div', { class: 'dv-cm-meta' }, [badge, author, dateEl, actions]);
+      const metaRow = el('div', { class: 'dv-cm-meta' }, metaChildren);
       card.append(metaRow);
 
       const targetText = this.opts.targetLabel?.(comment) ?? '';
@@ -346,6 +357,7 @@ export function renderSurfaceAnnotations(
   entries: { comment: DocComment; badgeIndex: number }[],
   activeId: string | undefined,
   onSelect: (comment: DocComment) => void,
+  opts?: { bakedPdfStream?: boolean },
 ): void {
   let layer = surfaceEl.querySelector<HTMLElement>(':scope > .dv-annot-layer');
   if (!entries.length) {
@@ -356,28 +368,37 @@ export function renderSurfaceAnnotations(
     layer = el('div', { class: 'dv-annot-layer' });
     surfaceEl.append(layer);
   }
-  const nodes = entries.map(({ comment, badgeIndex }) => {
+  const baked = opts?.bakedPdfStream === true;
+  const nodes: HTMLElement[] = entries.flatMap<HTMLElement>(({ comment, badgeIndex }) => {
     const r = comment.rect ?? { x: 0.1, y: 0.1, w: 0, h: 0 };
     const isHighlight = comment.subtype === 'highlight';
     const isBox = !isHighlight && r.w > 0.005 && r.h > 0.005;
     const tip = `${comment.author}: ${comment.text}`;
     if (isHighlight) {
-      const hl = el('div', { class: 'dv-annot-highlight', title: tip });
-      hl.style.left = `${r.x * 100}%`;
-      hl.style.top = `${r.y * 100}%`;
-      hl.style.width = `${Math.max(0.01, r.w) * 100}%`;
-      hl.style.height = `${Math.max(0.01, r.h) * 100}%`;
+      const quads = comment.quads && comment.quads.length > 0 ? comment.quads : [r];
       const col = comment.color ?? '#fde047';
-      hl.style.background = col.toLowerCase() === '#4ade80' ? 'rgba(74, 222, 128, 0.38)' : 'rgba(250, 204, 21, 0.42)';
-      if (comment.id === activeId) {
-        hl.classList.add('dv-annot-active');
-      }
-      hl.addEventListener('pointerdown', (e) => e.stopPropagation());
-      hl.addEventListener('click', (e) => {
-        e.stopPropagation();
-        onSelect(comment);
+      const fill = baked
+        ? 'transparent'
+        : col.toLowerCase() === '#4ade80'
+          ? 'rgba(74, 222, 128, 0.38)'
+          : 'rgba(250, 204, 21, 0.42)';
+      return quads.map((q) => {
+        const hl = el('div', { class: 'dv-annot-highlight', title: tip });
+        hl.style.left = `${q.x * 100}%`;
+        hl.style.top = `${q.y * 100}%`;
+        hl.style.width = `${Math.max(0.01, q.w) * 100}%`;
+        hl.style.height = `${Math.max(0.008, q.h) * 100}%`;
+        hl.style.background = fill;
+        if (comment.id === activeId) {
+          hl.classList.add('dv-annot-active');
+        }
+        hl.addEventListener('pointerdown', (e) => e.stopPropagation());
+        hl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          onSelect(comment);
+        });
+        return hl;
       });
-      return hl;
     }
     if (isBox) {
       const box = el('div', { class: 'dv-annot-box', title: tip }, [
@@ -387,6 +408,10 @@ export function renderSurfaceAnnotations(
       box.style.top = `${r.y * 100}%`;
       box.style.width = `${r.w * 100}%`;
       box.style.height = `${r.h * 100}%`;
+      if (baked && comment.id !== activeId) {
+        box.style.background = 'transparent';
+        box.style.borderColor = 'transparent';
+      }
       if (comment.id === activeId) {
         box.classList.add('dv-annot-active');
       }
@@ -395,7 +420,7 @@ export function renderSurfaceAnnotations(
         e.stopPropagation();
         onSelect(comment);
       });
-      return box;
+      return [box];
     }
     const pin = el('button', { class: 'dv-annot-pin', title: tip, text: String(badgeIndex) });
     pin.type = 'button';
@@ -409,7 +434,7 @@ export function renderSurfaceAnnotations(
       e.stopPropagation();
       onSelect(comment);
     });
-    return pin;
+    return [pin];
   });
   layer.replaceChildren(...nodes);
 }

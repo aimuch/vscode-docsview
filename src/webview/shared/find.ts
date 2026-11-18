@@ -251,6 +251,9 @@ export function createFindBar(
 
   window.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
+      if (document.querySelector('.dv-present-overlay:not([hidden]), .md-lightbox:not([hidden])')) {
+        return;
+      }
       e.preventDefault();
       open();
     }

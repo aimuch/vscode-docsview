@@ -75,6 +75,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
 
 const commentsPanel = new CommentsPanel({
   docName: () => docFileName,
+  editable: () => editable,
   targetLabel: (c) => {
     const pLabel = c.pIndex !== undefined ? `¶${c.pIndex + 1}` : '';
     const quote = c.quote ? ` “${c.quote}”` : '';
@@ -135,7 +136,11 @@ stage.tabIndex = -1;
 const docFind = new PreviewFind(pages, stage);
 const findWidget = createFindWidget(docFind, stage);
 
+const exportMdBtn = iconButton('export', t('exportMarkdown'), () => post({ type: 'exportDocMarkdown' }));
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
+
+const statusText = el('span', { class: 'dv-label' });
+const statusBar = el('div', { class: 'dv-statusbar' }, [el('div', { class: 'dv-spacer' }), statusText]);
 
 const topBar = customToolbar({
   subtitle: 'DOCX',
@@ -146,11 +151,13 @@ const topBar = customToolbar({
     { id: 'find', nodes: findWidget.nodes },
     { id: 'edit', label: t('docxEditMode'), nodes: [editToggle.node], visible: () => editable },
     { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
+    { id: 'actions', nodes: [exportMdBtn] },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
     openExternalMenuItem(),
+    { label: t('exportMarkdown'), icon: 'export', onClick: () => post({ type: 'exportDocMarkdown' }) },
     {
       label: t('exportCommentsMd'),
       icon: 'export',
@@ -164,7 +171,10 @@ const topBar = customToolbar({
 app.append(
   topBar.node,
   notice.node,
-  el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, stage])]),
+  el('div', { class: 'dv-body' }, [
+    sidebar.node,
+    el('div', { class: 'dv-main' }, [sidebar.expandBtn, stage, statusBar]),
+  ]),
   styles,
 );
 showStatus(pages, t('loading'));
@@ -253,10 +263,34 @@ function indexRenderedParagraphs(): void {
   }
 }
 
+function syncDocxStatusBar(): void {
+  const pageCount = pages.querySelectorAll('section.docx').length;
+  if (!pageCount) {
+    statusText.textContent = '';
+    return;
+  }
+  const paraNodes = [...pages.querySelectorAll<HTMLElement>(PARA_SELECTOR)];
+  const nonEmptyParas = paraNodes.filter((n) => (n.textContent ?? '').trim().length > 0).length;
+  const fullText = pages.textContent ?? '';
+  const cjk = (fullText.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
+  const latin = (fullText.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, ' ').match(/[A-Za-z0-9_'-]+/g) ?? []).length;
+  const words = cjk + latin;
+  const parts = [
+    `${t('page')} ${pageCount}`,
+    t('docParagraphs', nonEmptyParas),
+    t('mdWords', words.toLocaleString()),
+  ];
+  if (comments.length > 0) {
+    parts.push(t('commentsCount', comments.length));
+  }
+  statusText.textContent = parts.join(' · ');
+}
+
 function syncCommentsUi(): void {
   commentsPanel.setComments(comments);
   sidebar.setTabLabel('comments', comments.length ? t('commentsCount', comments.length) : t('comments'));
   syncParagraphBadges();
+  syncDocxStatusBar();
 }
 
 function syncParagraphBadges(): void {
@@ -309,6 +343,23 @@ function resolveClickedParagraph(target: EventTarget | null): { node: HTMLElemen
 }
 
 pages.addEventListener('click', (e) => {
+  if (!annotateMode && !editMode) {
+    const anchor = (e.target as HTMLElement | null)?.closest<HTMLAnchorElement>('a[href]');
+    const href = anchor?.getAttribute('href')?.trim();
+    if (anchor && href) {
+      e.preventDefault();
+      if (href.startsWith('#')) {
+        const id = decodeURIComponent(href.slice(1));
+        const dest = id
+          ? pages.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"], a[name="${CSS.escape(id)}"]`)
+          : null;
+        dest?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else if (/^(?:https?:|mailto:)/i.test(href)) {
+        post({ type: 'openLink', href });
+      }
+      return;
+    }
+  }
   if (!editable || !annotateMode) {
     return;
   }

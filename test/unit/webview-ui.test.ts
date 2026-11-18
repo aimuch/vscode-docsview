@@ -443,10 +443,10 @@ describe('appearance', () => {
     expect(slotOrder('right')).toEqual(['scheme', 'theme', 'zoom']);
     expect(ui.getToolbarConfig().left).toContain('pager');
 
-    // Reset back to default toolbar layout.
+    // Reset back to default toolbar layout (Markdown default includes 'theme').
     drawer.querySelector<HTMLButtonElement>('.dv-tb-reset')!.click();
     expect(slotOrder('right')).toEqual([]);
-    expect(slotOrder('left')).toEqual(['nav', 'zoom']);
+    expect(slotOrder('left')).toEqual(['nav', 'zoom', 'theme']);
 
     tb.closeDrawer();
     tb.node.remove();

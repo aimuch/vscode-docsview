@@ -3,6 +3,7 @@
 // exercises what unit tests cannot: contribution points, CSP, asset URLs and workers.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { strToU8, zipSync } from 'fflate';
 import * as vscode from 'vscode';
 import { runEditingChecks, type Api, type ViewerStatus } from './editing';
 
@@ -74,6 +75,54 @@ export async function run(): Promise<void> {
     const work = join(dirname(resultFile), 'work');
     mkdirSync(work, { recursive: true });
     await runEditingChecks(api, samples, work, results);
+
+    // Smoke-check JSONL, EPUB & Archive (ZIP / VSIX) custom editors on synthetic fixtures in `work`.
+    const sampleJsonl = join(work, 'dataset.jsonl');
+    writeFileSync(sampleJsonl, '{"id":"001","prompt":"hello","score":0.95}\n{"id":"002","prompt":"world","score":0.88}\n');
+    const sampleEpub = join(work, 'guide.epub');
+    writeFileSync(
+      sampleEpub,
+      zipSync({
+        'META-INF/container.xml': strToU8(
+          '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+        ),
+        'OEBPS/content.opf': strToU8(
+          '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Smoke Guide</dc:title></metadata><manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>',
+        ),
+        'OEBPS/ch1.xhtml': strToU8('<html><body><h1>Smoke Chapter</h1><p>Content ok.</p></body></html>'),
+      }),
+    );
+    const sampleZip = join(work, 'bundle.zip');
+    writeFileSync(sampleZip, zipSync({ 'src/index.ts': strToU8('export const ok = true;\n') }));
+
+    for (const [absFile, label, viewType] of [
+      [sampleJsonl, 'dataset.jsonl', 'docsview.jsonl'],
+      [sampleEpub, 'guide.epub', 'docsview.epub'],
+      [sampleZip, 'bundle.zip', 'docsview.archive'],
+    ] as const) {
+      const uri = vscode.Uri.file(absFile);
+      const status = new Promise<ViewerStatus>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          subscription.dispose();
+          reject(new Error(`no render status within ${TIMEOUT_MS / 1000}s`));
+        }, TIMEOUT_MS);
+        const subscription = api.onViewerStatus((s) => {
+          if (s.uri.toString() === uri.toString()) {
+            clearTimeout(timer);
+            subscription.dispose();
+            resolve(s);
+          }
+        });
+      });
+      try {
+        await vscode.commands.executeCommand('vscode.openWith', uri, viewType);
+        const s = await status;
+        results.push({ file: label, viewType, ok: s.ok, detail: s.detail });
+      } catch (err) {
+        status.catch(() => undefined);
+        results.push({ file: label, viewType, ok: false, detail: err instanceof Error ? err.message : String(err) });
+      }
+    }
 
     // Changing the UI language setting must reload open previews (they re-report a render).
     {

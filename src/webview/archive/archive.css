@@ -77,12 +77,37 @@
 
 .arc-preview {
   width: 44%;
-  min-width: 280px;
+  min-width: 260px;
   max-width: 640px;
   border-left: 1px solid var(--dv-border);
   display: flex;
   flex-direction: column;
   background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+.arc-preview[hidden] {
+  display: none;
+}
+
+.arc-trunc-cell {
+  text-align: center;
+  padding: 10px 12px !important;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+@media (max-width: 780px) {
+  .arc-workspace {
+    flex-direction: column;
+  }
+  .arc-preview {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: 46%;
+    border-left: 0;
+    border-top: 1px solid var(--dv-border);
+  }
 }
 
 .arc-preview-head {

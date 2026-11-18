@@ -1,13 +1,13 @@
 /* EPUB e-book reader styles layered over shared markdown theme typography. */
 
-.epub-body {
+body:not([data-md-width='fluid']) .epub-body {
   max-width: 760px;
 }
 
 .epub-book-head {
   padding-bottom: 18px;
   margin-bottom: 24px;
-  border-bottom: 1px solid var(--dv-border);
+  border-bottom: 1px solid var(--md-border, var(--dv-border));
 }
 
 .epub-book-title {
@@ -19,13 +19,13 @@
 
 .epub-book-author {
   font-size: 0.95em;
-  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  color: var(--md-muted, var(--vscode-descriptionForeground, var(--vscode-foreground)));
 }
 
 .epub-chapter + .epub-chapter {
   margin-top: 36px;
   padding-top: 28px;
-  border-top: 1px dashed var(--dv-border);
+  border-top: 1px dashed var(--md-border, var(--dv-border));
 }
 
 .epub-chapter img {

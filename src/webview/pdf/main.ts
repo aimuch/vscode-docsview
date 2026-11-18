@@ -21,6 +21,7 @@ import {
 } from '../shared/comments';
 import { getFileState } from '../shared/fileState';
 import { createFindBar } from '../shared/find';
+import { icons, type IconName } from '../shared/icons';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
 import {
   customToolbar,
@@ -101,6 +102,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
 
 const commentsPanel = new CommentsPanel({
   docName: () => docFileName,
+  editable: () => editable,
   targetLabel: (c) => (c.page ? t('pageN', c.page) : ''),
   onSelect: (c) => {
     if (c.page && viewer.pagesCount) {
@@ -129,12 +131,18 @@ function syncPageAnnotation(pageNumber: number): void {
   const entries = comments
     .map((comment, idx) => ({ comment, badgeIndex: idx + 1 }))
     .filter((e) => e.comment.page === pageNumber);
-  renderSurfaceAnnotations(pageEl, entries, commentsPanel.active, (comment) => {
-    sidebar.setOpen(true);
-    sidebar.setTab('comments');
-    commentsPanel.setActive(comment.id, true);
-    syncAllPageAnnotations();
-  });
+  renderSurfaceAnnotations(
+    pageEl,
+    entries,
+    commentsPanel.active,
+    (comment) => {
+      sidebar.setOpen(true);
+      sidebar.setTab('comments');
+      commentsPanel.setActive(comment.id, true);
+      syncAllPageAnnotations();
+    },
+    { bakedPdfStream: true },
+  );
 }
 
 function syncAllPageAnnotations(): void {
@@ -173,7 +181,14 @@ attachSurfaceAnnotator({
 
 // Floating mouse text-selection highlighter bar
 let pendingSel:
-  | { page: number; rect: { x: number; y: number; w: number; h: number }; quote: string; clientX: number; clientY: number }
+  | {
+      page: number;
+      rect: { x: number; y: number; w: number; h: number };
+      quads: { x: number; y: number; w: number; h: number }[];
+      quote: string;
+      clientX: number;
+      clientY: number;
+    }
   | undefined;
 
 const hlYellowBtn = el('button', { class: 'pdf-sel-btn', title: t('pdfHighlightYellow') });
@@ -201,6 +216,7 @@ const hlCommentBtn = iconButton('commentPlus', t('pdfHighlightComment'), () => {
           kind: 'addComment',
           page: snap.page,
           rect: snap.rect,
+          quads: snap.quads,
           quote: snap.quote,
           text,
           color: '#fde047',
@@ -225,6 +241,7 @@ function applyQuickHighlight(color: string) {
       kind: 'addComment',
       page: snap.page,
       rect: snap.rect,
+      quads: snap.quads,
       quote: snap.quote,
       text: snap.quote,
       color,
@@ -246,6 +263,38 @@ document.body.append(pdfSelBar);
 function hideSelectionBar() {
   pendingSel = undefined;
   pdfSelBar.hidden = true;
+}
+
+function collectLineQuads(
+  range: Range,
+  pageBounds: DOMRect,
+): { x: number; y: number; w: number; h: number }[] {
+  const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+  const raw = [...range.getClientRects()].filter((r) => r.width > 0.5 && r.height > 0.5);
+  if (!raw.length) {
+    return [];
+  }
+  raw.sort((a, b) => (Math.abs(a.top - b.top) > 3 ? a.top - b.top : a.left - b.left));
+  const lines: { left: number; top: number; right: number; bottom: number }[] = [];
+  for (const r of raw) {
+    const prev = lines[lines.length - 1];
+    const prevH = prev ? prev.bottom - prev.top : 0;
+    if (prev && Math.abs(r.top - prev.top) <= Math.max(4, prevH * 0.45)) {
+      prev.left = Math.min(prev.left, r.left);
+      prev.top = Math.min(prev.top, r.top);
+      prev.right = Math.max(prev.right, r.right);
+      prev.bottom = Math.max(prev.bottom, r.bottom);
+    } else {
+      lines.push({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+    }
+  }
+  return lines.map((l) => {
+    const x = clamp01((l.left - pageBounds.left) / pageBounds.width);
+    const y = clamp01((l.top - pageBounds.top) / pageBounds.height);
+    const w = clamp01((l.right - l.left) / pageBounds.width);
+    const h = clamp01((l.bottom - l.top) / pageBounds.height);
+    return { x, y, w: Math.max(0.01, w), h: Math.max(0.008, h) };
+  });
 }
 
 viewerEl.addEventListener('mouseup', (e) => {
@@ -279,9 +328,12 @@ viewerEl.addEventListener('mouseup', (e) => {
     const ry = clamp01((selBounds.top - pageBounds.top) / pageBounds.height);
     const rw = clamp01(selBounds.width / pageBounds.width);
     const rh = clamp01(selBounds.height / pageBounds.height);
+    const overallRect = { x: rx, y: ry, w: Math.max(0.01, rw), h: Math.max(0.008, rh) };
+    const quads = collectLineQuads(range, pageBounds);
     pendingSel = {
       page,
-      rect: { x: rx, y: ry, w: Math.max(0.01, rw), h: Math.max(0.008, rh) },
+      rect: overallRect,
+      quads: quads.length > 0 ? quads : [overallRect],
       quote: rawText.slice(0, 180),
       clientX: e.clientX,
       clientY: e.clientY,
@@ -330,10 +382,13 @@ eventBus.on('pagesinit', () => {
   applyScrollMode();
   viewer.currentScaleValue = restore?.scale ?? 'page-width';
   if (restore) {
-    viewer.currentPageNumber = Math.min(restore.page, viewer.pagesCount);
+    viewer.currentPageNumber = Math.max(1, Math.min(restore.page, viewer.pagesCount));
   }
   pager.update(viewer.currentPageNumber, viewer.pagesCount);
   syncAllPageAnnotations();
+  if (findWidget.input.value) {
+    dispatchPdfFind(findWidget.input.value, '');
+  }
 });
 let reported = false;
 eventBus.on('pagerendered', (e: { pageNumber: number; error?: unknown }) => {
@@ -566,9 +621,10 @@ function buildThumbnails(doc: pdfjs.PDFDocumentProxy) {
         dragFromPage = 0;
       });
 
-      const miniBtn = (txt: string, tip: string, disabled: boolean, fn: () => void) => {
-        const b = el('button', { class: 'pdf-thumb-act', text: txt, title: tip });
+      const miniBtn = (icon: IconName, tip: string, disabled: boolean, fn: () => void) => {
+        const b = el('button', { class: 'pdf-thumb-act', title: tip });
         b.type = 'button';
+        b.innerHTML = icons[icon];
         b.disabled = disabled;
         b.addEventListener('click', (ev) => {
           ev.stopPropagation();
@@ -577,16 +633,16 @@ function buildThumbnails(doc: pdfjs.PDFDocumentProxy) {
         return b;
       };
       const tools = el('div', { class: 'pdf-thumb-tools' }, [
-        miniBtn('↻', t('pdfSaveRotateCW'), false, () =>
+        miniBtn('rotateCW', t('pdfSaveRotateCW'), false, () =>
           post({ type: 'docMutate', mutation: { kind: 'rotatePdfPages', pages: [n], delta: 90 } }),
         ),
-        miniBtn('↑', t('pdfMoveUp'), n === 1, () =>
+        miniBtn('up', t('pdfMoveUp'), n === 1, () =>
           post({ type: 'docMutate', mutation: { kind: 'movePdfPage', fromPage: n, toPage: n - 1 } }),
         ),
-        miniBtn('↓', t('pdfMoveDown'), n === doc.numPages, () =>
+        miniBtn('down', t('pdfMoveDown'), n === doc.numPages, () =>
           post({ type: 'docMutate', mutation: { kind: 'movePdfPage', fromPage: n, toPage: n + 1 } }),
         ),
-        miniBtn('✕', t('pdfDeletePage'), doc.numPages <= 1, () =>
+        miniBtn('close', t('pdfDeletePage'), doc.numPages <= 1, () =>
           post({ type: 'docMutate', mutation: { kind: 'deletePdfPage', page: n } }),
         ),
       ]);
@@ -670,14 +726,16 @@ function ensureWorker(): Promise<void> {
 
 let loadGeneration = 0;
 
-async function load(bytes: Uint8Array) {
+async function load(bytes: Uint8Array, initialPage?: number) {
   const myGen = ++loadGeneration;
   try {
     await ensureWorker();
     if (myGen !== loadGeneration) {
       return;
     }
-    if (currentDoc) {
+    if (initialPage && initialPage >= 1) {
+      restore = { page: initialPage, scale: viewer.currentScaleValue || 'page-width' };
+    } else if (currentDoc) {
       restore = { page: viewer.currentPageNumber, scale: viewer.currentScaleValue || 'page-width' };
     }
     const doc = await pdfjs.getDocument({
@@ -778,6 +836,7 @@ const pdfToolsDropdown = moreMenu(
     },
   ],
   'export',
+  { compact: true },
 );
 
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
@@ -790,7 +849,8 @@ const topBar = customToolbar({
     { id: 'pager', nodes: [pager.node] },
     { id: 'zoom', nodes: [zoomGroup] },
     { id: 'find', nodes: findWidget.nodes },
-    { id: 'comments', nodes: [annotateToggle.node, pdfToolsDropdown], visible: () => editable },
+    { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
+    { id: 'actions', nodes: [pdfToolsDropdown], visible: () => editable || comments.length > 0 },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
@@ -841,9 +901,10 @@ onMessage((message) => {
     editable = message.editable === true;
     comments = message.comments ?? [];
     topBar.refresh();
-    void load(message.bytes);
+    void load(message.bytes, message.initialPage);
   } else if (message.type === 'comments') {
     comments = message.comments;
+    topBar.refresh();
     syncCommentsUi();
   } else if (message.type === 'error') {
     status.hidden = false;

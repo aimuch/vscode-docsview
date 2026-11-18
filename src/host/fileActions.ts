@@ -82,6 +82,8 @@ export async function saveConverted(source: vscode.Uri, format: ConvertFormat, b
   await vscode.workspace.fs.writeFile(target, bytes);
   if (format === 'xlsx') {
     await vscode.commands.executeCommand('vscode.openWith', target, 'docsview.excel');
+  } else if (format === 'jsonl') {
+    await vscode.commands.executeCommand('vscode.openWith', target, 'docsview.jsonl');
   } else {
     await vscode.commands.executeCommand('vscode.openWith', target, 'docsview.csv');
   }

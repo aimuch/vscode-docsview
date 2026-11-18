@@ -1,3 +1,6 @@
+import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import * as vscode from 'vscode';
 import type { ArchiveEntryInfo, HostMessage, WebviewMessage } from '../../common/protocol';
 import { configureWebview, debounce, handleCommonMessage, onWebviewMessage, parentUri, t } from '../webviewHtml';
@@ -6,16 +9,33 @@ function baseName(uri: vscode.Uri): string {
   return uri.path.slice(uri.path.lastIndexOf('/') + 1);
 }
 
+function archiveStem(name: string): string {
+  return name.replace(/\.(?:tar\.gz|tgz|tar|zip|vsix|whl|jar|apk|nupkg)$/i, '') || 'extracted';
+}
+
 class ArchiveDocument implements vscode.CustomDocument {
   bytes: Uint8Array | undefined;
+  uncompressedTar: Uint8Array | undefined;
   summary: { totalSize: number; compressedTotal: number; entries: ArchiveEntryInfo[] } | undefined;
   loadError: string | undefined;
+  tempDir: vscode.Uri | undefined;
 
   constructor(readonly uri: vscode.Uri) {}
 
+  ensureTempDir(): vscode.Uri {
+    this.tempDir ??= vscode.Uri.file(join(tmpdir(), `docsview-arc-${randomBytes(6).toString('hex')}`));
+    return this.tempDir;
+  }
+
   dispose(): void {
     this.bytes = undefined;
+    this.uncompressedTar = undefined;
     this.summary = undefined;
+    if (this.tempDir) {
+      const dir = this.tempDir;
+      this.tempDir = undefined;
+      void vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false }).then(undefined, () => undefined);
+    }
   }
 }
 
@@ -31,11 +51,18 @@ export class ArchivePreviewProvider implements vscode.CustomReadonlyEditorProvid
         import('../containers'),
       ]);
       const clean = rawBytes.constructor === Uint8Array ? rawBytes : new Uint8Array(rawBytes);
+      const inspected = inspectArchive(clean, baseName(document.uri));
       document.bytes = clean;
-      document.summary = inspectArchive(clean, baseName(document.uri));
+      document.uncompressedTar = inspected.uncompressedTar;
+      document.summary = {
+        totalSize: inspected.totalSize,
+        compressedTotal: inspected.compressedTotal,
+        entries: inspected.entries,
+      };
       document.loadError = undefined;
     } catch (err) {
       document.bytes = undefined;
+      document.uncompressedTar = undefined;
       document.summary = undefined;
       document.loadError = t('loadFailed', err instanceof Error ? err.message : String(err));
     }
@@ -85,30 +112,62 @@ export class ArchivePreviewProvider implements vscode.CustomReadonlyEditorProvid
         }
         if (message.type === 'previewArchiveEntry' && document.bytes) {
           const raw = document.bytes;
-          void import('../containers').then(({ extractArchiveEntryBytes, classifyArchiveEntry }) => {
-            const payload = extractArchiveEntryBytes(raw, archiveName, message.path);
-            if (!payload) {
-              return;
-            }
-            const info = classifyArchiveEntry(message.path, payload);
-            const cleanBytes =
-              info.bytes && info.bytes.constructor !== Uint8Array ? new Uint8Array(info.bytes) : info.bytes;
-            post({
-              type: 'archiveEntry',
-              path: message.path,
-              kind: info.kind,
-              text: info.text,
-              mime: info.mime,
-              bytes: cleanBytes,
-              size: info.size,
-            });
-          });
+          const cachedTar = document.uncompressedTar;
+          const declaredSize = document.summary?.entries.find((e) => e.path === message.path)?.size ?? 0;
+          void import('../containers')
+            .then(({ extractArchiveEntryBytes, classifyArchiveEntry, MAX_PREVIEW_ENTRY_BYTES }) => {
+              if (declaredSize > MAX_PREVIEW_ENTRY_BYTES) {
+                post({ type: 'archiveEntry', path: message.path, kind: 'binary', size: declaredSize });
+                return;
+              }
+              const payload = extractArchiveEntryBytes(raw, archiveName, message.path, {
+                cachedTar,
+                maxBytes: MAX_PREVIEW_ENTRY_BYTES,
+              });
+              if (!payload) {
+                post({ type: 'archiveEntry', path: message.path, kind: 'binary', size: declaredSize });
+                return;
+              }
+              const info = classifyArchiveEntry(message.path, payload);
+              const cleanBytes =
+                info.bytes && info.bytes.constructor !== Uint8Array ? new Uint8Array(info.bytes) : info.bytes;
+              post({
+                type: 'archiveEntry',
+                path: message.path,
+                kind: info.kind,
+                text: info.text,
+                mime: info.mime,
+                bytes: cleanBytes,
+                size: info.size,
+              });
+            })
+            .catch((err: unknown) =>
+              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+            );
+        } else if (message.type === 'openArchiveEntryTemp' && document.bytes) {
+          const raw = document.bytes;
+          const cachedTar = document.uncompressedTar;
+          void (async () => {
+            const { extractArchiveEntryBytes, sanitizeArchiveRelativePath } = await import('../containers');
+            const safeRel = sanitizeArchiveRelativePath(message.path);
+            if (!safeRel) return;
+            const payload = extractArchiveEntryBytes(raw, archiveName, message.path, { cachedTar });
+            if (!payload) return;
+            const target = vscode.Uri.joinPath(document.ensureTempDir(), ...safeRel.split('/'));
+            await vscode.workspace.fs.createDirectory(parentUri(target));
+            await vscode.workspace.fs.writeFile(target, payload);
+            await vscode.commands.executeCommand('vscode.open', target);
+          })().catch((err: unknown) =>
+            vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+          );
         } else if (message.type === 'extractArchiveEntry' && document.bytes) {
           const raw = document.bytes;
-          const entryName = message.path.slice(message.path.lastIndexOf('/') + 1);
+          const cachedTar = document.uncompressedTar;
           void (async () => {
-            const { extractArchiveEntryBytes } = await import('../containers');
-            const payload = extractArchiveEntryBytes(raw, archiveName, message.path);
+            const { extractArchiveEntryBytes, sanitizeArchiveRelativePath } = await import('../containers');
+            const safeRel = sanitizeArchiveRelativePath(message.path);
+            const entryName = safeRel?.split('/').pop() || 'extracted';
+            const payload = extractArchiveEntryBytes(raw, archiveName, message.path, { cachedTar });
             if (!payload) {
               return;
             }
@@ -120,6 +179,44 @@ export class ArchivePreviewProvider implements vscode.CustomReadonlyEditorProvid
             }
             await vscode.workspace.fs.writeFile(target, payload);
             await vscode.commands.executeCommand('vscode.open', target);
+          })().catch((err: unknown) =>
+            vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+          );
+        } else if (message.type === 'extractAllArchive' && document.bytes) {
+          const raw = document.bytes;
+          const cachedTar = document.uncompressedTar;
+          void (async () => {
+            const picked = await vscode.window.showOpenDialog({
+              defaultUri: parentUri(document.uri),
+              canSelectFolders: true,
+              canSelectFiles: false,
+              canSelectMany: false,
+            });
+            if (!picked?.[0]) {
+              return;
+            }
+            const { extractAllArchiveEntries } = await import('../containers');
+            const filesMap = extractAllArchiveEntries(raw, archiveName, cachedTar);
+            const destRoot = vscode.Uri.joinPath(picked[0], archiveStem(archiveName));
+            await vscode.workspace.fs.createDirectory(destRoot);
+            const createdDirs = new Set<string>();
+            for (const [relPath, content] of filesMap) {
+              const fileUri = vscode.Uri.joinPath(destRoot, ...relPath.split('/'));
+              const dirKey = parentUri(fileUri).toString();
+              if (!createdDirs.has(dirKey)) {
+                createdDirs.add(dirKey);
+                await vscode.workspace.fs.createDirectory(parentUri(fileUri));
+              }
+              await vscode.workspace.fs.writeFile(fileUri, content);
+            }
+            const openLabel = t('open');
+            const choice = await vscode.window.showInformationMessage(
+              t('exportSaved', vscode.workspace.asRelativePath(destRoot, false)),
+              openLabel,
+            );
+            if (choice === openLabel) {
+              await vscode.commands.executeCommand('revealFileInOS', destRoot);
+            }
           })().catch((err: unknown) =>
             vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
           );

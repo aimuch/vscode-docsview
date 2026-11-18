@@ -97,12 +97,14 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
             }
             const format = message.format;
             const run = async () => {
-              const { workbookToDelimited, workbookToXlsx } = await import('../spreadsheet');
+              const { workbookToDelimited, workbookToJsonl, workbookToXlsx } = await import('../spreadsheet');
               const bytes = session.export();
               const out =
                 format === 'xlsx'
                   ? workbookToXlsx(bytes)
-                  : new TextEncoder().encode(workbookToDelimited(bytes, message.index, format));
+                  : format === 'jsonl'
+                    ? new TextEncoder().encode(workbookToJsonl(bytes, message.index))
+                    : new TextEncoder().encode(workbookToDelimited(bytes, message.index, format));
               await saveConverted(document.uri, format, out);
             };
             void run().catch((err: unknown) =>

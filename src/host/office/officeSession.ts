@@ -270,7 +270,21 @@ export class OfficeSession {
   }
 
   backup(): string {
-    return JSON.stringify(this.history.slice(0, this.cursor).map((s) => s.mutation));
+    const serialized = this.history.slice(0, this.cursor).map((s) => {
+      if (s.mutation.kind === 'appendPdfBytes') {
+        return {
+          kind: 'appendPdfBytes',
+          label: s.mutation.label,
+          otherBytesB64: Buffer.from(
+            s.mutation.otherBytes.buffer,
+            s.mutation.otherBytes.byteOffset,
+            s.mutation.otherBytes.byteLength,
+          ).toString('base64'),
+        };
+      }
+      return s.mutation;
+    });
+    return JSON.stringify(serialized);
   }
 
   async restore(raw: string): Promise<void> {
@@ -285,7 +299,17 @@ export class OfficeSession {
     }
     for (const item of items) {
       if (item && typeof item === 'object' && 'kind' in item) {
-        await this.apply(item as DocMutation);
+        const rec = item as Record<string, unknown>;
+        if (rec.kind === 'appendPdfBytes' && typeof rec.otherBytesB64 === 'string') {
+          const buf = Buffer.from(rec.otherBytesB64, 'base64');
+          await this.apply({
+            kind: 'appendPdfBytes',
+            otherBytes: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
+            label: typeof rec.label === 'string' ? rec.label : undefined,
+          });
+        } else {
+          await this.apply(item as DocMutation);
+        }
       }
     }
   }

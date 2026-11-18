@@ -498,7 +498,7 @@ describe('JSONL, EPUB & Archive engines', () => {
     expect(model.rows[0].map((c) => (typeof c === 'object' && c ? c.v : c))).toEqual(['id', 'name', 'tags', 'score']);
 
     // Edit row 1 col 1 ("Alice" -> "Alicia") and row 2 col 3 (9.5 -> 12)
-    const edits = session.editCells([
+    const { edits } = session.editCells([
       { r: 1, c: 1, text: 'Alicia' },
       { r: 2, c: 3, text: '12' },
     ]);
@@ -561,5 +561,187 @@ describe('JSONL, EPUB & Archive engines', () => {
 
     const pngBytes = extractArchiveEntryBytes(zipBytes, 'bundle.zip', 'assets/icon.png')!;
     expect(classifyArchiveEntry('assets/icon.png', pngBytes).kind).toBe('image');
+  });
+
+  it('covers v0.8.0 sanitizer hardening, cross-chapter EPUB links, Zip-Slip & GNU LongLink TAR', async () => {
+    const { strToU8, zipSync } = await import('fflate');
+    const { parseEpub } = await import('../../src/host/epub/epubParser');
+    const { inspectArchive, sanitizeArchiveRelativePath } = await import('../../src/host/archive/archiveReader');
+
+    // 1. Sanitizer: '>' inside quoted attribute, stripStyles, and SVG <image> data URL
+    const tricky =
+      '<style>body{display:none}</style><span title="x > y" style="position:fixed;color:red">ok</span><svg><image xlink:href="data:image/png;base64,AA=="/></svg>';
+    const cleanEpub = sanitizeExportHtml(tricky, { stripStyles: true, allowSvgImageData: true });
+    expect(cleanEpub).not.toContain('<style');
+    expect(cleanEpub).not.toContain('position:fixed');
+    expect(cleanEpub).toContain('title="x > y"');
+    expect(cleanEpub).toContain('data:image/png;base64,AA==');
+
+    // 2. EPUB cross-chapter link rewriting + SVG cover image inlining
+    const epub2 = zipSync({
+      'META-INF/container.xml': strToU8(
+        '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+      ),
+      'OEBPS/content.opf': strToU8(
+        '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Cross Ref</dc:title></metadata><manifest><item id="c1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/><item id="cov" href="img/cover.png" media-type="image/png"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>',
+      ),
+      'OEBPS/text/ch1.xhtml': strToU8(
+        '<html><body><svg><image xlink:href="../img/cover.png"/></svg><a href="ch2.xhtml#part-b">Jump</a></body></html>',
+      ),
+      'OEBPS/text/ch2.xhtml': strToU8('<html><body><h2 id="part-b">Part B</h2></body></html>'),
+      'OEBPS/img/cover.png': new Uint8Array([137, 80, 78, 71]),
+    });
+    const parsedBook = parseEpub(epub2);
+    expect(parsedBook.chapters[0].html).toContain('href="#epub-ch-1::part-b"');
+    expect(parsedBook.chapters[0].html).toContain('data:image/png;base64,');
+
+    // 3. Zip-Slip path sanitization
+    expect(sanitizeArchiveRelativePath('../etc/passwd')).toBeUndefined();
+    expect(sanitizeArchiveRelativePath('/etc/passwd')).toBeUndefined();
+    expect(sanitizeArchiveRelativePath('a/../../secret.txt')).toBeUndefined();
+    expect(sanitizeArchiveRelativePath('src\\utils\\helper.ts')).toBe('src/utils/helper.ts');
+
+    // 4. GNU LongLink ('L') TAR header > 100 chars
+    const longPath = `packages/deeply/nested/module/${' very_long_segment_'.replace(/\s/g, '')}`.repeat(3) + 'index.ts';
+    const payload = strToU8('export default 1;\n');
+    const makeTarBlock = (name: string, size: number, typeflag: string) => {
+      const header = new Uint8Array(512);
+      header.set(strToU8(name.slice(0, 100)), 0);
+      header.set(strToU8('0000644\0'), 100);
+      header.set(strToU8(size.toString(8).padStart(11, '0') + '\0'), 124);
+      header[156] = typeflag.charCodeAt(0);
+      // Fill checksum field with spaces first
+      header.fill(0x20, 148, 156);
+      let sum = 0;
+      for (const b of header) sum += b;
+      header.set(strToU8(sum.toString(8).padStart(6, '0') + '\0 '), 148);
+      return header;
+    };
+    const pad512 = (u8: Uint8Array) => {
+      const rem = u8.length % 512;
+      if (rem === 0) return u8;
+      const out = new Uint8Array(u8.length + (512 - rem));
+      out.set(u8);
+      return out;
+    };
+    const longNameBytes = strToU8(`${longPath}\0`);
+    const tarBuf = new Uint8Array(
+      512 + pad512(longNameBytes).length + 512 + pad512(payload).length + 1024,
+    );
+    let off = 0;
+    tarBuf.set(makeTarBlock('././@LongLink', longNameBytes.length, 'L'), off);
+    off += 512;
+    tarBuf.set(pad512(longNameBytes), off);
+    off += pad512(longNameBytes).length;
+    tarBuf.set(makeTarBlock('truncated.ts', payload.length, '0'), off);
+    off += 512;
+    tarBuf.set(pad512(payload), off);
+
+    const tarInfo = inspectArchive(tarBuf, 'repo.tar');
+    expect(tarInfo.entries).toHaveLength(1);
+    expect(tarInfo.entries[0].path).toBe(longPath);
+  });
+
+  it('covers v0.8.0 JSONL schema CRUD, string-ID preservation, formula sheet refs, ISO date autofill & PNG metadata', async () => {
+    const { applyEdits } = await import('../../src/host/csv/csvParser');
+    const { rowsToJsonl } = await import('../../src/host/convert');
+    const { JsonlSession } = await import('../../src/host/jsonl/jsonlSession');
+    const { computeAutoFillChanges, shiftFormulaRefs, viewRows } = await import('../../src/webview/sheet/view');
+    const { ImageSession } = await import('../../src/host/imageSession');
+    const { extractImageMetadata } = await import('../../src/webview/image/metadata');
+
+    // 1. rowsToJsonl preserves leading-zero strings & converts numbers/booleans
+    const jsonlOut = rowsToJsonl([
+      ['code', 'qty', 'enabled'],
+      ['0042', '15', 'true'],
+    ]);
+    expect(JSON.parse(jsonlOut.trim())).toEqual({ code: '0042', qty: 15, enabled: true });
+
+    // 2. JsonlSession: preserves string type on string IDs, guards nested objects, supports Row 0 rename & col CRUD
+    const js = new JsonlSession('items.jsonl');
+    js.setText('{"code":"0042","meta":{"a":1}}\n');
+    // Editing string "0042" -> "43" keeps string type!
+    let nextTxt = applyEdits(js.currentText, js.editCells([{ r: 1, c: 0, text: '43' }]).edits);
+    js.setText(nextTxt);
+    expect(JSON.parse(nextTxt.trim()).code).toBe('43');
+
+    // Invalid JSON edit on nested object column is ignored instead of corrupting object into string
+    const badRes = js.editCells([{ r: 1, c: 1, text: '{broken' }]);
+    expect(badRes.edits).toEqual([]);
+    expect(badRes.hadInvalidJson).toBe(true);
+
+    // Rename key in Row 0 ('code' -> 'sku'), insert column, and replace whole record JSON
+    nextTxt = applyEdits(js.currentText, js.editCells([{ r: 0, c: 0, text: 'sku' }]).edits);
+    js.setText(nextTxt);
+    expect(JSON.parse(nextTxt.trim())).toEqual({ sku: '43', meta: { a: 1 } });
+
+    nextTxt = applyEdits(js.currentText, js.structure('insertCol', 1, 1));
+    js.setText(nextTxt);
+    expect(Object.keys(JSON.parse(nextTxt.trim()))).toEqual(['sku', 'field_1', 'meta']);
+
+    nextTxt = applyEdits(js.currentText, js.replaceRecordJson(0, '{"sku":"99","extra":[1,2]}')!);
+    js.setText(nextTxt);
+    expect(JSON.parse(nextTxt.trim())).toEqual({ sku: '99', extra: [1, 2] });
+
+    // 3. shiftFormulaRefs skips Sheet! prefixes and string literals
+    expect(shiftFormulaRefs('=Q1!A2 + \'Sales Q2\'!$B3 + "A1" + C4', 1, 2)).toBe(
+      '=Q1!C3 + \'Sales Q2\'!$B4 + "A1" + E5',
+    );
+
+    // 4. Calendar-accurate ISO date AutoFill across month boundary
+    const dateSrc = [['2026-01-30'], ['2026-01-31']];
+    const dateFill = computeAutoFillChanges(
+      (r, c) => dateSrc[r]?.[c] ?? '',
+      { r0: 0, c0: 0, r1: 1, c1: 0 },
+      { r0: 0, c0: 0, r1: 3, c1: 0 },
+    );
+    expect(dateFill).toEqual([
+      { r: 2, c: 0, text: '2026-02-01' },
+      { r: 3, c: 0, text: '2026-02-02' },
+    ]);
+
+    // 5. excludedValues filter mode
+    const rows: Cell[][] = [['k'], ['a'], ['b'], ['c']];
+    expect(viewRows(rows, 4, 1, { ...emptyView(), excludedValues: { 0: ['b'] } })).toEqual([0, 1, 3]);
+
+    // 6. ImageSession preserves originBytes even after markSaved()
+    const im = new ImageSession(new Uint8Array([10]));
+    const h1 = im.replace(new Uint8Array([20]));
+    im.markSaved();
+    expect(im.dirty).toBe(false);
+    expect([...h1.undo()]).toEqual([10]);
+    expect(im.dirty).toBe(true);
+
+    // 7. PNG metadata reader (IHDR + pHYs 300 DPI + tEXt Software)
+    const makePngChunk = (type: string, data: Uint8Array) => {
+      const out = new Uint8Array(12 + data.length);
+      new DataView(out.buffer).setUint32(0, data.length, false);
+      for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+      out.set(data, 8);
+      return out;
+    };
+    const ihdr = new Uint8Array(13);
+    ihdr[8] = 8; // 8-bit
+    ihdr[9] = 6; // RGBA
+    const phys = new Uint8Array(9);
+    new DataView(phys.buffer).setUint32(0, 11811, false); // ~300 DPI
+    new DataView(phys.buffer).setUint32(4, 11811, false);
+    phys[8] = 1;
+    const textPayload = new TextEncoder().encode('Software\0DocsView Studio');
+    const pngSig = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const chunks = [pngSig, makePngChunk('IHDR', ihdr), makePngChunk('pHYs', phys), makePngChunk('tEXt', textPayload), makePngChunk('IEND', new Uint8Array(0))];
+    const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+    const pngBuf = new Uint8Array(totalLen);
+    let p = 0;
+    for (const c of chunks) {
+      pngBuf.set(c, p);
+      p += c.length;
+    }
+    const meta = extractImageMetadata(pngBuf);
+    expect(meta).toEqual([
+      { key: 'Color', value: '8-bit RGBA' },
+      { key: 'DPI', value: '300 DPI' },
+      { key: 'Software', value: 'DocsView Studio' },
+    ]);
   });
 });

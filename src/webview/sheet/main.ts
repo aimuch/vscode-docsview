@@ -21,6 +21,7 @@ import {
 } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 import './sheet.css';
+import { createJsonlInspector } from './jsonlInspector';
 import {
   collectColumnUniqueValues,
   computeAutoFillChanges,
@@ -322,6 +323,10 @@ function doReplaceOne() {
     !(typeof curCell === 'object' && curCell?.ro)
   ) {
     const rawVal = cellRaw(curCell);
+    if (rawVal.startsWith('=') && !query.startsWith('=')) {
+      findNext(false);
+      return;
+    }
     const nextText = replaceSubstringCI(rawVal, query, replaceInput.value);
     if (nextText !== rawVal) {
       edit([{ r: sel.r, c: sel.c, text: nextText }]);
@@ -357,6 +362,9 @@ function doReplaceAll() {
       continue;
     }
     const rawVal = cellRaw(cell);
+    if (rawVal.startsWith('=') && !query.startsWith('=')) {
+      continue;
+    }
     const nextText = replaceSubstringCI(rawVal, query, replaceInput.value);
     if (nextText !== rawVal) {
       changes.push({ r, c, text: nextText });
@@ -370,7 +378,7 @@ function doReplaceAll() {
 
 const replaceOneBtn = textButton(t('replaceOne'), t('replaceOne'), doReplaceOne);
 const replaceAllBtn = textButton(t('replaceAll'), t('replaceAll'), doReplaceAll);
-const replaceCloseBtn = iconButton('close', t('cancel'), () => setReplaceBarOpen(false));
+const replaceCloseBtn = iconButton('close', t('close'), () => setReplaceBarOpen(false));
 const replaceBar = el('div', { class: 'sheet-replace-bar' }, [
   el('span', { class: 'dv-label', text: t('replace') }),
   replaceInput,
@@ -406,9 +414,8 @@ function setReplaceBarOpen(on: boolean) {
   replaceBar.hidden = !allowed;
   replaceToggle.set(allowed);
   if (allowed) {
-    if (!sheetFindBar.input.value.trim()) {
-      sheetFindBar.input.focus();
-    } else {
+    sheetFindBar.open();
+    if (sheetFindBar.input.value.trim()) {
       replaceInput.focus();
       replaceInput.select();
     }
@@ -480,7 +487,7 @@ function setCondFormatForSelection(kind: CondFormatKind) {
 // ---------------------------------------------------------------- column menu
 
 const columnMenu = el('div', { class: 'dv-menu sheet-col-menu' });
-columnMenu.setAttribute('role', 'menu');
+columnMenu.setAttribute('role', 'dialog');
 columnMenu.hidden = true;
 document.body.append(columnMenu);
 
@@ -526,6 +533,7 @@ function openColumnMenu(col: number, anchor: DOMRect) {
   }
   const view = viewOf(active);
   if (!view.valueFilters) view.valueFilters = {};
+  if (!view.excludedValues) view.excludedValues = {};
   if (!view.numFilters) view.numFilters = {};
   const condMap = condMapOf(active);
   const curCond: CondFormatKind = condMap[col] ?? 'none';
@@ -645,7 +653,12 @@ function openColumnMenu(col: number, anchor: DOMRect) {
   const fixed = fixedRows(model, view);
   const uniques = collectColumnUniqueValues(model.rows, model.rows.length, fixed, col);
   const allValues = uniques.map((u) => u.value);
-  let selectedSet = new Set<string>(view.valueFilters[col] ?? allValues);
+  const isTruncatedUniques = uniques.length >= 200;
+  let useExclusionMode = view.valueFilters[col] === undefined;
+  const initialExcluded = new Set<string>(view.excludedValues[col] ?? []);
+  let selectedSet = new Set<string>(
+    view.valueFilters[col] ?? allValues.filter((v) => !initialExcluded.has(v)),
+  );
 
   const uniqueList = el('div', { class: 'sheet-unique-list' });
   const selectAllInput = el('input');
@@ -654,7 +667,12 @@ function openColumnMenu(col: number, anchor: DOMRect) {
   const commitSelectedSet = () => {
     if (selectedSet.size >= allValues.length) {
       delete view.valueFilters![col];
+      delete view.excludedValues![col];
+    } else if (isTruncatedUniques && useExclusionMode) {
+      delete view.valueFilters![col];
+      view.excludedValues![col] = allValues.filter((v) => !selectedSet.has(v));
     } else {
+      delete view.excludedValues![col];
       view.valueFilters![col] = Array.from(selectedSet);
     }
     selectAllInput.checked = selectedSet.size === allValues.length;
@@ -693,6 +711,7 @@ function openColumnMenu(col: number, anchor: DOMRect) {
   selectAllInput.checked = selectedSet.size === allValues.length;
   selectAllInput.indeterminate = selectedSet.size > 0 && selectedSet.size < allValues.length;
   selectAllInput.addEventListener('change', () => {
+    useExclusionMode = selectAllInput.checked;
     selectedSet = selectAllInput.checked ? new Set(allValues) : new Set();
     renderUniqueChecklist(filter.value);
     commitSelectedSet();
@@ -722,6 +741,9 @@ function openColumnMenu(col: number, anchor: DOMRect) {
     filter,
     el('label', { class: 'dv-check sheet-col-check' }, [selectAllInput, el('span', { text: t('selectAll') })]),
     uniqueList,
+    ...(isTruncatedUniques
+      ? [el('div', { class: 'dv-menu-hint-text sheet-col-check', text: t('uniqueValuesTruncated', 200) })]
+      : []),
   );
 
   if (!model.frozenRows) {
@@ -743,6 +765,7 @@ function openColumnMenu(col: number, anchor: DOMRect) {
       menuRow('', t('clearColumnFilter'), () => {
         delete view.filters[col];
         delete view.valueFilters![col];
+        delete view.excludedValues![col];
         delete view.numFilters![col];
         apply();
       }),
@@ -776,14 +799,13 @@ function setSheetRtl(on: boolean) {
 }
 
 function convertItems(): MenuItem[] {
-  const formats: ('csv' | 'tsv' | 'xlsx')[] = ['csv', 'tsv', 'xlsx'];
+  const formats: ('csv' | 'tsv' | 'xlsx' | 'jsonl')[] = ['csv', 'tsv', 'xlsx', 'jsonl'];
   return formats.map((format) => ({
     label: t('convertTo', format.toUpperCase()),
     icon: 'export' as const,
-    // Not to its own format; a workbook converts its current sheet to CSV/TSV.
     visible: () => {
       const ext = getFileState().ext;
-      return ext !== format && !(format === 'xlsx' && ext === 'xlsm');
+      return ext !== format && !(format === 'xlsx' && ext === 'xlsm') && !(format === 'jsonl' && ext === 'ndjson');
     },
     onClick: () => post({ type: 'convert', index: active, format }),
   }));
@@ -819,6 +841,7 @@ function copySelectionJson() {
   }
 }
 
+const jsonlInspector = createJsonlInspector((msg) => flash(msg));
 const convertDropdown = moreMenu(t('convertMenu'), convertItems(), 'export');
 const condFormatDropdown = moreMenu(
   t('condFormatBar'),
@@ -829,6 +852,7 @@ const condFormatDropdown = moreMenu(
     { label: t('condFormatNone'), onClick: () => setCondFormatForSelection('none') },
   ],
   'bars',
+  { compact: true },
 );
 const copyMdBtn = iconButton('copyMd', t('copyAsMarkdown'), copySelectionMarkdown);
 const copyJsonBtn = iconButton('copy', t('copyAsJson'), copySelectionJson);
@@ -847,18 +871,17 @@ const topBar = customToolbar({
   subtitle: () => (getFileState().ext ? getFileState().ext.toUpperCase() : 'SHEET'),
   extraLeft: [filterChip],
   slots: [
-    { id: 'view', nodes: [csvView.node, excelView.node] },
+    { id: 'view', nodes: [csvView.node, excelView.node, jsonlInspector.toggleBtn] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'cellBar', nodes: [address, formulaBar] },
     { id: 'find', nodes: [...sheetFindBar.nodes, replaceToggle.node] },
     { id: 'edit', label: t('lockEdits'), nodes: [lock] },
-    { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node, freezeColBtn.node, condFormatDropdown, copyMdBtn, copyJsonBtn] },
+    { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node, freezeColBtn.node, condFormatDropdown] },
     { id: 'structure', nodes: [structureGroup] },
     {
       id: 'actions',
       label: t('convertMenu'),
-      nodes: [convertDropdown],
-      visible: () => convertItems().some((i) => i.visible?.() !== false),
+      nodes: [copyMdBtn, copyJsonBtn, convertDropdown],
     },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'rtl', nodes: [rtlToggle.node] },
@@ -915,7 +938,8 @@ const topBar = customToolbar({
   ],
 });
 
-app.append(topBar.node, replaceBar, notice.node, gridHost, statusBar);
+const sheetMain = el('div', { class: 'sheet-workspace' }, [gridHost, jsonlInspector.node]);
+app.append(topBar.node, replaceBar, notice.node, sheetMain, statusBar);
 showStatus(gridHost, t('loading'));
 
 // ---------------------------------------------------------------- helpers
@@ -1049,7 +1073,12 @@ function sourceFor(index: number, model: SheetModel): GridSource {
 
 function updateSummary() {
   const model = models.get(active);
-  summary.textContent = model ? `${t('rows', model.rowCount)} × ${t('cols', model.colCount)}` : '';
+  if (!model) {
+    summary.textContent = '';
+    return;
+  }
+  const displayRowCount = info?.isJsonl ? Math.max(0, model.rows.length - 1) : model.rowCount;
+  summary.textContent = `${t('rows', displayRowCount)} × ${t('cols', model.colCount)}`;
 }
 
 /** Cell targeted when the user started editing inside the formula bar. */
@@ -1214,6 +1243,9 @@ function onSelection(sel: Selection) {
     : `${columnName(sel.c0)}${row(sel.r0)}:${columnName(sel.c1)}${row(sel.r1)}`;
   syncFormulaFromSelection(sel);
   updateSelectionStats(sel);
+  if (info?.isJsonl) {
+    jsonlInspector.syncSelection(models.get(active), toSource(sel.r), canEdit());
+  }
 }
 
 // ---------------------------------------------------------------- context menu (grid & sheet tabs)
@@ -1237,9 +1269,16 @@ function closeCtxPopup() {
 }
 
 ctxPopup.addEventListener('keydown', (e) => {
+  const items = [...ctxPopup.querySelectorAll<HTMLButtonElement>('.dv-menu-item:not(:disabled)')];
+  const idx = items.indexOf(document.activeElement as HTMLButtonElement);
   if (e.key === 'Escape') {
+    e.preventDefault();
     closeCtxPopup();
     grid?.focus();
+  } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && items.length) {
+    e.preventDefault();
+    const next = (idx + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
   }
 });
 
@@ -1258,6 +1297,7 @@ function showCtxPopup(x: number, y: number, rows: (HTMLElement | '-')[]) {
   ctxPopup.style.left = `${left}px`;
   ctxPopup.style.top = `${top}px`;
   ctxPopup.style.right = 'auto';
+  ctxPopup.querySelector<HTMLButtonElement>('.dv-menu-item:not(:disabled)')?.focus();
 }
 
 function ctxAction(label: string, onClick: () => void, disabled = false): HTMLButtonElement {
@@ -1363,6 +1403,22 @@ function ensureGrid(): Grid {
         if (!model) {
           return;
         }
+        if (rowMap) {
+          let hasFormula = false;
+          outer: for (let r = src.r0; r <= src.r1; r++) {
+            const sr = toSource(r);
+            for (let c = src.c0; c <= src.c1; c++) {
+              if (sr >= 0 && cellRaw(model.rows[sr]?.[c]).startsWith('=')) {
+                hasFormula = true;
+                break outer;
+              }
+            }
+          }
+          if (hasFormula) {
+            flash(t('structureBlocked'));
+            return;
+          }
+        }
         const changes = computeAutoFillChanges(
           (r, c) => {
             const srcR = toSource(r);
@@ -1461,6 +1517,7 @@ function show(index: number, keepView: boolean) {
   g.setData(src, keepView);
   updateSummary();
   updateFilterChip(model);
+  sheetFindBar.refreshCount();
   post({ type: 'status', ok: true, detail: `${model.name}: ${model.rowCount}x${model.colCount}` });
 }
 
@@ -1567,6 +1624,13 @@ onMessage((message) => {
       models.clear();
       showNotice();
       const isCsv = Boolean(info.hasSource);
+      const isJsonl = Boolean(info.isJsonl);
+      const supportsFx = info.supportsFormulas !== false;
+      fxBadge.hidden = !supportsFx;
+      const ph = supportsFx ? t('formulaPlaceholder') : t('cellValuePlaceholder');
+      formula.placeholder = ph;
+      formula.setAttribute('aria-label', ph);
+      jsonlInspector.setVisibleForFormat(isJsonl);
       csvView.node.hidden = !isCsv;
       excelView.node.hidden = isCsv;
       structureGroup.hidden = !info.canStructure;
@@ -1606,7 +1670,12 @@ onMessage((message) => {
       }
       if (message.index === active && grid) {
         findDataEpoch++;
-        grid.invalidate();
+        const hasCond = Object.keys(condMapOf(active)).length > 0;
+        if (hasCond) {
+          show(active, true);
+        } else {
+          grid.invalidate();
+        }
         onSelection(grid.selection);
       }
       break;
@@ -1626,7 +1695,8 @@ onMessage((message) => {
       model.rowCount = message.rowCount;
       model.colCount = message.colCount;
       if (message.index === active && grid) {
-        if (sizeChanged) {
+        const hasCond = Object.keys(condMapOf(active)).length > 0;
+        if (sizeChanged || hasCond) {
           show(active, true);
         } else {
           // Rows stay where the current sort put them until it is applied again.

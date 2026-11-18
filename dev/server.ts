@@ -80,6 +80,11 @@ function kindFor(
     case '.epub':
       return { kind: 'epub', engine: 'epub' };
     case '.zip':
+    case '.vsix':
+    case '.whl':
+    case '.jar':
+    case '.apk':
+    case '.nupkg':
     case '.tar':
     case '.tgz':
       return { kind: 'archive', engine: 'archive' };
@@ -201,13 +206,17 @@ function createSession(file: string): Session {
           case 'getSheet':
             return [{ type: 'sheet', index: 0, model: session.model() }];
           case 'edit':
-            return [session.setText(applyEdits(session.currentText, session.editCells(message.changes)))];
+            return [session.setText(applyEdits(session.currentText, session.editCells(message.changes).edits))];
           case 'structure':
             return [
               session.setText(
                 applyEdits(session.currentText, session.structure(message.op, message.at, message.count)),
               ),
             ];
+          case 'editJsonlRecord': {
+            const edits = session.replaceRecordJson(message.recordIndex, message.jsonText);
+            return edits ? [session.setText(applyEdits(session.currentText, edits))] : [];
+          }
           case 'dev-save':
             mkdirSync(savedDir, { recursive: true });
             writeFileSync(join(savedDir, name), session.currentText);
@@ -543,9 +552,9 @@ const server = http.createServer(async (req, res) => {
       const ext = extname(file).slice(1).toLowerCase();
       const fileState = (): HostMessage => ({
         type: 'fileState',
-        isDefault: ['md', 'markdown', 'csv', 'tsv'].includes(ext) ? defaults.has(ext) : undefined,
+        isDefault: ['md', 'markdown', 'csv', 'tsv', 'jsonl', 'ndjson'].includes(ext) ? defaults.has(ext) : undefined,
         ext,
-        history: ['md', 'markdown', 'csv', 'tsv', 'xlsx', 'xlsm', 'docx', 'pptx', 'pdf'].includes(ext),
+        history: ['md', 'markdown', 'csv', 'tsv', 'jsonl', 'ndjson', 'xlsx', 'xlsm', 'docx', 'pptx', 'pdf'].includes(ext),
       });
       if (message.type === 'setDefault') {
         if (message.on) {

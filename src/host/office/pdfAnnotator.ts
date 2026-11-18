@@ -1,6 +1,6 @@
 // Reads and writes standard ISO 32000 PDF annotations (/Annots: /Square box comments,
-// /Text sticky-note pins, and /Highlight text highlights) plus page restructuring
-// (rotation, deletion, reordering, extraction, and merging) via pdf-lib.
+// /Text sticky-note pins, and multi-quad /Highlight text highlights) with full 0°/90°/180°/270°
+// page-rotation coordinate transforms, plus page restructuring via pdf-lib.
 import {
   degrees,
   PDFArray,
@@ -14,6 +14,108 @@ import {
 import type { DocComment, DocMutation } from '../../common/protocol';
 
 const SKIP_SUBTYPES = new Set(['Link', 'Widget', 'Popup', 'Watermark', 'PrinterMark', 'TrapNet', '3D', 'Movie', 'Screen']);
+
+export interface PdfBoxBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface NormRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
+function normAngle(angle: number): 0 | 90 | 180 | 270 {
+  const m = (((Math.round(angle / 90) * 90) % 360) + 360) % 360;
+  return (m === 90 || m === 180 || m === 270 ? m : 0) as 0 | 90 | 180 | 270;
+}
+
+function pdfUnitToVisual(u: number, v: number, rot: 0 | 90 | 180 | 270): [number, number] {
+  switch (rot) {
+    case 90:
+      return [v, u];
+    case 180:
+      return [1 - u, v];
+    case 270:
+      return [1 - v, 1 - u];
+    default:
+      return [u, 1 - v];
+  }
+}
+
+function visualUnitToPdf(vx: number, vy: number, rot: 0 | 90 | 180 | 270): [number, number] {
+  switch (rot) {
+    case 90:
+      return [vy, vx];
+    case 180:
+      return [1 - vx, vy];
+    case 270:
+      return [1 - vy, 1 - vx];
+    default:
+      return [vx, 1 - vy];
+  }
+}
+
+/** Maps a PDF user-space `[x1, y1, x2, y2]` rectangle onto normalised `[0..1]` visual screen coordinates. */
+export function pdfRectToVisualRect(
+  pdfCoords: readonly [number, number, number, number],
+  box: PdfBoxBounds,
+  rotationAngle = 0,
+): NormRect {
+  const bw = box.width || 612;
+  const bh = box.height || 792;
+  const bx = box.x || 0;
+  const by = box.y || 0;
+  const rot = normAngle(rotationAngle);
+
+  const u1 = (pdfCoords[0] - bx) / bw;
+  const v1 = (pdfCoords[1] - by) / bh;
+  const u2 = (pdfCoords[2] - bx) / bw;
+  const v2 = (pdfCoords[3] - by) / bh;
+
+  const [vx1, vy1] = pdfUnitToVisual(u1, v1, rot);
+  const [vx2, vy2] = pdfUnitToVisual(u2, v2, rot);
+
+  const x = clamp01(Math.min(vx1, vx2));
+  const y = clamp01(Math.min(vy1, vy2));
+  const xMax = clamp01(Math.max(vx1, vx2));
+  const yMax = clamp01(Math.max(vy1, vy2));
+  return { x, y, w: Math.max(0, xMax - x), h: Math.max(0, yMax - y) };
+}
+
+/** Maps a normalised `[0..1]` visual screen rectangle back into PDF user-space `[xMin, yMin, xMax, yMax]`. */
+export function visualRectToPdfRect(
+  r: NormRect,
+  box: PdfBoxBounds,
+  rotationAngle = 0,
+  minSpan = 0,
+): [number, number, number, number] {
+  const bw = box.width || 612;
+  const bh = box.height || 792;
+  const bx = box.x || 0;
+  const by = box.y || 0;
+  const rot = normAngle(rotationAngle);
+
+  const vx1 = clamp01(r.x);
+  const vy1 = clamp01(r.y);
+  const vx2 = clamp01(r.x + Math.max(minSpan, r.w));
+  const vy2 = clamp01(r.y + Math.max(minSpan, r.h));
+
+  const [u1, v1] = visualUnitToPdf(vx1, vy1, rot);
+  const [u2, v2] = visualUnitToPdf(vx2, vy2, rot);
+
+  const xMin = bx + Math.min(u1, u2) * bw;
+  const xMax = bx + Math.max(u1, u2) * bw;
+  const yMin = by + Math.min(v1, v2) * bh;
+  const yMax = by + Math.max(v1, v2) * bh;
+  return [xMin, yMin, xMax, yMax];
+}
 
 function decodePdfText(dict: PDFDict, key: string): string {
   const val = dict.lookupMaybe(PDFName.of(key), PDFString, PDFHexString);
@@ -82,10 +184,7 @@ export async function inspectPdf(bytes: Uint8Array): Promise<DocComment[]> {
       return;
     }
     const box = page.getCropBox() ?? page.getMediaBox();
-    const bw = box.width || 612;
-    const bh = box.height || 792;
-    const bx = box.x || 0;
-    const by = box.y || 0;
+    const rot = page.getRotation().angle || 0;
 
     for (let i = 0; i < annots.size(); i++) {
       const dict = annots.lookupMaybe(i, PDFDict);
@@ -105,22 +204,30 @@ export async function inspectPdf(bytes: Uint8Array): Promise<DocComment[]> {
         continue;
       }
 
-      let rect = { x: 0.1, y: 0.1, w: 0, h: 0 };
+      let rect: NormRect = { x: 0.1, y: 0.1, w: 0, h: 0 };
       const rectArr = dict.lookupMaybe(PDFName.of('Rect'), PDFArray);
       if (rectArr && rectArr.size() >= 4) {
         const n0 = rectArr.lookupMaybe(0, PDFNumber)?.asNumber() ?? 0;
         const n1 = rectArr.lookupMaybe(1, PDFNumber)?.asNumber() ?? 0;
         const n2 = rectArr.lookupMaybe(2, PDFNumber)?.asNumber() ?? 0;
         const n3 = rectArr.lookupMaybe(3, PDFNumber)?.asNumber() ?? 0;
-        const xMin = Math.min(n0, n2);
-        const xMax = Math.max(n0, n2);
-        const yMin = Math.min(n1, n3);
-        const yMax = Math.max(n1, n3);
-        const nx = Math.max(0, Math.min(1, (xMin - bx) / bw));
-        const ny = Math.max(0, Math.min(1, 1 - (yMax - by) / bh));
-        const nw = Math.max(0, Math.min(1 - nx, (xMax - xMin) / bw));
-        const nh = Math.max(0, Math.min(1 - ny, (yMax - yMin) / bh));
-        rect = subtypeName === 'Text' ? { x: nx, y: ny, w: 0, h: 0 } : { x: nx, y: ny, w: nw, h: nh };
+        const mapped = pdfRectToVisualRect([n0, n1, n2, n3], box, rot);
+        rect = subtypeName === 'Text' ? { x: mapped.x, y: mapped.y, w: 0, h: 0 } : mapped;
+      }
+
+      let quads: NormRect[] | undefined;
+      if (isHighlight) {
+        const qpArr = dict.lookupMaybe(PDFName.of('QuadPoints'), PDFArray);
+        if (qpArr && qpArr.size() >= 8) {
+          quads = [];
+          for (let q = 0; q + 7 < qpArr.size(); q += 8) {
+            const xs = [0, 2, 4, 6].map((k) => qpArr.lookupMaybe(q + k, PDFNumber)?.asNumber() ?? 0);
+            const ys = [1, 3, 5, 7].map((k) => qpArr.lookupMaybe(q + k, PDFNumber)?.asNumber() ?? 0);
+            quads.push(
+              pdfRectToVisualRect([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], box, rot),
+            );
+          }
+        }
       }
 
       const mRaw = decodePdfText(dict, 'M');
@@ -138,6 +245,7 @@ export async function inspectPdf(bytes: Uint8Array): Promise<DocComment[]> {
         quote: subj || undefined,
         page: pageIdx + 1,
         rect,
+        quads: quads && quads.length > 1 ? quads : undefined,
         color,
         subtype,
       });
@@ -154,7 +262,6 @@ export async function applyPdfMutations(bytes: Uint8Array, mutations: readonly D
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
   let seq = 1;
 
-  // Ensure new NM IDs never collide with existing ones.
   for (const page of doc.getPages()) {
     const annots = page.node.Annots();
     if (!annots) {
@@ -183,23 +290,39 @@ export async function applyPdfMutations(bytes: Uint8Array, mutations: readonly D
       const bh = box.height || 792;
       const bx = box.x || 0;
       const by = box.y || 0;
+      const rot = page.getRotation().angle || 0;
 
       const r = mut.rect ?? { x: 0.1, y: 0.1, w: 0, h: 0 };
       const isHighlight = mut.subtype === 'highlight';
       const isBox = !isHighlight && r.w > 0.004 && r.h > 0.004;
-      const x1 = bx + r.x * bw;
-      const x2 = bx + (r.x + Math.max(isHighlight ? 0.01 : 0, r.w)) * bw;
-      const y1 = by + (1 - r.y - Math.max(isHighlight ? 0.01 : 0, r.h)) * bh;
-      const y2 = by + (1 - r.y) * bh;
-      const pdfRect =
-        isHighlight || isBox
-          ? [x1, y1, x2, y2]
-          : [
-              x1,
-              Math.max(by, y2 - 20),
-              Math.min(bx + bw, x1 + 20),
-              y2,
-            ];
+
+      let pdfRect: [number, number, number, number];
+      let quadPoints: number[] | undefined;
+
+      if (isHighlight && mut.quads?.length) {
+        const mappedQuads = mut.quads.map((q) => visualRectToPdfRect(q, box, rot, 0.006));
+        quadPoints = mappedQuads.flatMap(([qx1, qy1, qx2, qy2]) => [qx1, qy2, qx2, qy2, qx1, qy1, qx2, qy1]);
+        pdfRect = [
+          Math.min(...mappedQuads.map((q) => q[0])),
+          Math.min(...mappedQuads.map((q) => q[1])),
+          Math.max(...mappedQuads.map((q) => q[2])),
+          Math.max(...mappedQuads.map((q) => q[3])),
+        ];
+      } else if (isHighlight || isBox) {
+        const [x1, y1, x2, y2] = visualRectToPdfRect(r, box, rot, isHighlight ? 0.008 : 0);
+        pdfRect = [x1, y1, x2, y2];
+        if (isHighlight) {
+          quadPoints = [x1, y2, x2, y2, x1, y1, x2, y1];
+        }
+      } else {
+        const [px, py] = visualRectToPdfRect({ x: r.x, y: r.y, w: 0, h: 0 }, box, rot, 0);
+        pdfRect = [
+          px,
+          Math.max(by, py - 20),
+          Math.min(bx + bw, px + 20),
+          py,
+        ];
+      }
 
       const id = `dv-${seq++}`;
       const [cr, cg, cb] = hexToRgbNumbers(mut.color ?? (isHighlight ? '#fde047' : undefined));
@@ -208,7 +331,7 @@ export async function applyPdfMutations(bytes: Uint8Array, mutations: readonly D
         Type: 'Annot',
         Subtype: isHighlight ? 'Highlight' : isBox ? 'Square' : 'Text',
         ...(isHighlight
-          ? { QuadPoints: [x1, y2, x2, y2, x1, y1, x2, y1] }
+          ? { QuadPoints: quadPoints! }
           : isBox
             ? { BS: { W: 2 } }
             : { Name: 'Comment' }),

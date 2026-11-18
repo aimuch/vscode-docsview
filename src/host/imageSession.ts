@@ -28,7 +28,8 @@ export interface ImageReplaceHandle {
 }
 
 export class ImageSession {
-  private initialBytes: Uint8Array;
+  private originBytes: Uint8Array;
+  private savedBytes: Uint8Array;
   private current: Uint8Array;
   private steps: ImageStep[] = [];
   private nextVer = 1;
@@ -37,7 +38,8 @@ export class ImageSession {
 
   constructor(bytes: Uint8Array) {
     const clean = plainU8(bytes);
-    this.initialBytes = clean;
+    this.originBytes = clean;
+    this.savedBytes = clean;
     this.current = clean;
   }
 
@@ -55,7 +57,8 @@ export class ImageSession {
 
   reset(bytes: Uint8Array): void {
     const clean = plainU8(bytes);
-    this.initialBytes = clean;
+    this.originBytes = clean;
+    this.savedBytes = clean;
     this.current = clean;
     for (const s of this.steps) {
       s.before = undefined;
@@ -71,13 +74,36 @@ export class ImageSession {
     const clean = plainU8(bytes);
     this.current = clean;
     if (!this.dirty) {
-      this.initialBytes = clean;
+      this.originBytes = clean;
+      this.savedBytes = clean;
     }
   }
 
   markSaved(): void {
     this.savedVer = this.currentVer;
-    this.initialBytes = this.current;
+    this.savedBytes = this.current;
+  }
+
+  private resolveSnapshotForVer(targetVer: number): { ver: number; bytes: Uint8Array } {
+    if (targetVer === this.savedVer) {
+      return { ver: targetVer, bytes: this.savedBytes };
+    }
+    if (targetVer === 0) {
+      return { ver: 0, bytes: this.originBytes };
+    }
+    for (const s of this.steps) {
+      if (s.beforeVer === targetVer && s.before) {
+        return { ver: targetVer, bytes: s.before };
+      }
+      if (s.afterVer === targetVer && s.after) {
+        return { ver: targetVer, bytes: s.after };
+      }
+    }
+    // Step was evicted due to memory cap: fall back to saved snapshot (if <= targetVer) or origin.
+    if (this.savedVer <= targetVer) {
+      return { ver: this.savedVer, bytes: this.savedBytes };
+    }
+    return { ver: 0, bytes: this.originBytes };
   }
 
   replace(nextBytes: Uint8Array): ImageReplaceHandle {
@@ -104,14 +130,19 @@ export class ImageSession {
     return {
       step,
       undo: () => {
-        this.currentVer = step.beforeVer;
-        const restored = step.before ?? (step.beforeVer === 0 ? this.initialBytes : this.current);
-        this.current = restored;
-        return restored;
+        if (step.before) {
+          this.currentVer = step.beforeVer;
+          this.current = step.before;
+          return step.before;
+        }
+        const fallback = this.resolveSnapshotForVer(step.beforeVer);
+        this.currentVer = fallback.ver;
+        this.current = fallback.bytes;
+        return fallback.bytes;
       },
       redo: () => {
-        this.currentVer = step.afterVer;
         if (step.after) {
+          this.currentVer = step.afterVer;
           this.current = step.after;
         }
         return this.current;

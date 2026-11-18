@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import { serializeRecord } from './csv/csvParser';
 import { parseCellInput } from './excel/cellInput';
 
-export type ConvertFormat = 'csv' | 'tsv' | 'xlsx';
+export type ConvertFormat = 'csv' | 'tsv' | 'xlsx' | 'jsonl';
 
 export const DELIMITERS: Record<'csv' | 'tsv', string> = { csv: ',', tsv: '\t' };
 
@@ -86,4 +86,68 @@ export function workbookToXlsx(bytes: Uint8Array): Uint8Array {
 export function sanitizeSheetName(name: string): string {
   const clean = name.replace(/\.[^.]+$/, '').replace(/[:\\/?*[\]]/g, '_').trim();
   return (clean || 'Sheet1').slice(0, 31);
+}
+
+function inferJsonlScalar(raw: string): unknown {
+  const t = raw.trim();
+  if (t === '') return null;
+  if (t === 'true' || t === 'TRUE') return true;
+  if (t === 'false' || t === 'FALSE') return false;
+  if (t === 'null') return null;
+  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(t)) {
+    const n = Number(t);
+    if (Number.isFinite(n)) return n;
+  }
+  if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+    try {
+      return JSON.parse(t);
+    } catch {
+      // keep as string
+    }
+  }
+  return raw;
+}
+
+/** Converts a 2D table (row 0 = field names, rows 1..N = records) into JSON Lines text. */
+export function rowsToJsonl(rows: string[][], eol = '\n'): string {
+  const trimmed = trim(rows);
+  if (trimmed.length < 2) {
+    return '';
+  }
+  const used = new Set<string>();
+  const keys = trimmed[0].map((h, i) => {
+    const base = (h ?? '').trim() || `col_${i + 1}`;
+    let candidate = base;
+    let seq = 2;
+    while (used.has(candidate)) {
+      candidate = `${base}_${seq++}`;
+    }
+    used.add(candidate);
+    return candidate;
+  });
+  const lines: string[] = [];
+  for (let r = 1; r < trimmed.length; r++) {
+    const row = trimmed[r];
+    if (!row.length || row.every((c) => (c ?? '').trim() === '')) {
+      continue;
+    }
+    const obj: Record<string, unknown> = {};
+    for (let c = 0; c < keys.length; c++) {
+      obj[keys[c]] = inferJsonlScalar(row[c] ?? '');
+    }
+    lines.push(JSON.stringify(obj));
+  }
+  return lines.length ? lines.join(eol) + eol : '';
+}
+
+/** One sheet of a workbook as JSON Lines text. */
+export function workbookToJsonl(bytes: Uint8Array, sheetIndex: number, eol = '\n'): string {
+  const workbook = XLSX.read(bytes, { type: 'array' });
+  const name = workbook.SheetNames[sheetIndex] ?? workbook.SheetNames[0];
+  const sheet = workbook.Sheets[name];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '', blankrows: false });
+  return rowsToJsonl(
+    rows.map((row) => row.map((cell) => (cell == null ? '' : String(cell)))),
+    eol,
+  );
 }

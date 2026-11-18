@@ -33,16 +33,21 @@ function toBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64');
 }
 
-function guessImageMime(path: string, declared?: string): string {
+function guessImageMime(path: string, declared?: string): string | undefined {
   if (declared && declared.startsWith('image/')) {
     return declared;
   }
-  const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
+  const dot = path.lastIndexOf('.');
+  const ext = dot >= 0 ? path.slice(dot + 1).toLowerCase() : '';
   if (ext === 'svg') return 'image/svg+xml';
+  if (ext === 'png') return 'image/png';
   if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
   if (ext === 'gif') return 'image/gif';
   if (ext === 'webp') return 'image/webp';
-  return 'image/png';
+  if (ext === 'bmp') return 'image/bmp';
+  if (ext === 'avif') return 'image/avif';
+  if (ext === 'ico') return 'image/x-icon';
+  return undefined;
 }
 
 function extractBodyInnerHtml(rawXhtml: string): { title: string; bodyHtml: string } {
@@ -145,21 +150,35 @@ export function parseEpub(bytes: Uint8Array): EpubBookData {
         if (ln === 'ol' || ln === 'ul') {
           walkOl(el, level);
         } else if (ln === 'li') {
+          const findFirstAnchor = (node: XElement): XElement | undefined => {
+            for (let n = node.firstChild; n; n = n.nextSibling) {
+              if (n.nodeType !== 1) continue;
+              const child = n as XElement;
+              const tag = child.localName || child.tagName;
+              if (tag === 'ol' || tag === 'ul') continue;
+              if (tag === 'a') return child;
+              const nested = findFirstAnchor(child);
+              if (nested) return nested;
+            }
+            return undefined;
+          };
+          const aEl = findFirstAnchor(el);
+          if (aEl) {
+            const rawHref = aEl.getAttribute('href') ?? '';
+            const text = (aEl.textContent ?? '').replace(/\s+/g, ' ').trim();
+            const targetPath = resolveZipPath(navDir, rawHref);
+            const hashIdx = rawHref.indexOf('#');
+            const anchor = hashIdx >= 0 ? rawHref.slice(hashIdx + 1) : undefined;
+            const chIdx = chapterIndexByPath.get(targetPath) ?? 0;
+            if (text) {
+              toc.push({ level, text, chapterIndex: chIdx, anchor });
+            }
+          }
           for (let lc = el.firstChild; lc; lc = lc.nextSibling) {
             if (lc.nodeType !== 1) continue;
             const lel = lc as XElement;
             const ltag = lel.localName || lel.tagName;
-            if (ltag === 'a') {
-              const rawHref = lel.getAttribute('href') ?? '';
-              const text = (lel.textContent ?? '').replace(/\s+/g, ' ').trim();
-              const targetPath = resolveZipPath(navDir, rawHref);
-              const hashIdx = rawHref.indexOf('#');
-              const anchor = hashIdx >= 0 ? rawHref.slice(hashIdx + 1) : undefined;
-              const chIdx = chapterIndexByPath.get(targetPath) ?? 0;
-              if (text) {
-                toc.push({ level, text, chapterIndex: chIdx, anchor });
-              }
-            } else if (ltag === 'ol' || ltag === 'ul') {
+            if (ltag === 'ol' || ltag === 'ul') {
               walkOl(lel, level + 1);
             }
           }
@@ -203,7 +222,7 @@ export function parseEpub(bytes: Uint8Array): EpubBookData {
     const raw = strFromU8(files[sp.path]);
     const { title, bodyHtml } = extractBodyInnerHtml(raw);
 
-    // Inline relative <img src="..."> and SVG <image href/xlink:href="...">
+    // Inline relative <img src="..."> and SVG <image href/xlink:href="...">, and rewrite intra-book chapter links
     const inlined = bodyHtml.replace(
       /\b(src|href|xlink:href)\s*=\s*(["'])([^"']+)\2/gi,
       (full, attr: string, quote: string, url: string) => {
@@ -211,19 +230,18 @@ export function parseEpub(bytes: Uint8Array): EpubBookData {
           return full;
         }
         const resolved = resolveZipPath(chDir, url);
+        const hashAt = url.indexOf('#');
+        const anchor = hashAt >= 0 ? url.slice(hashAt + 1) : '';
+        const targetIdx = chapterIndexByPath.get(resolved);
+        if (targetIdx !== undefined && attr.toLowerCase() === 'href') {
+          return `href=${quote}#epub-ch-${targetIdx}${anchor ? `::${anchor}` : ''}${quote}`;
+        }
         const imgBytes = files[resolved];
         if (!imgBytes) {
-          // Rewrite intra-book chapter links as `data-epub-ch` hash anchors if matching a spine chapter
-          const hashAt = url.indexOf('#');
-          const anchor = hashAt >= 0 ? url.slice(hashAt) : '';
-          const targetIdx = chapterIndexByPath.get(resolved);
-          if (targetIdx !== undefined && attr.toLowerCase() === 'href') {
-            return `href=${quote}#epub-ch-${targetIdx}${anchor ? `-${anchor.slice(1)}` : ''}${quote}`;
-          }
           return full;
         }
         const mime = guessImageMime(resolved, pathToManifestMedia.get(resolved));
-        if (!mime.startsWith('image/')) {
+        if (!mime || !mime.startsWith('image/')) {
           return full;
         }
         return `${attr}=${quote}data:${mime};base64,${toBase64(imgBytes)}${quote}`;
@@ -232,12 +250,12 @@ export function parseEpub(bytes: Uint8Array): EpubBookData {
 
     const headingMatch = /<h[1-3]\b[^>]*>([\s\S]*?)<\/h[1-3]>/i.exec(inlined);
     const fallbackHeading = headingMatch ? headingMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : '';
-    const chapterTitle = title || fallbackHeading || `Chapter ${idx + 1}`;
+    const chapterTitle = title || fallbackHeading || `#${idx + 1}`;
 
     return {
       id: sp.id,
       title: chapterTitle,
-      html: sanitizeExportHtml(inlined),
+      html: sanitizeExportHtml(inlined, { stripStyles: true, allowSvgImageData: true }),
     };
   });
 

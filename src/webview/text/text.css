@@ -25,17 +25,6 @@
   margin: 0;
 }
 
-.text-page .dv-status {
+.text-page .dv-status:not(.dv-error) {
   color: #555;
-}
-
-.text-statusbar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  min-height: 26px;
-  padding: 2px 12px;
-  font-size: 11.5px;
-  border-top: 1px solid var(--dv-border);
-  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 }

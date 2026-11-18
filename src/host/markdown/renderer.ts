@@ -29,13 +29,79 @@ interface Env {
 }
 
 /** Splits a leading YAML front matter block off, keeping line numbers stable. */
-function splitFrontMatter(text: string): { frontMatter?: string; body: string } {
+function splitFrontMatter(text: string): { frontMatter?: string; frontMatterEndLine?: number; body: string } {
   const match = /^---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(text);
   if (!match) {
     return { body: text };
   }
   const lines = match[0].split('\n').length - 1;
-  return { frontMatter: match[1], body: '\n'.repeat(lines) + text.slice(match[0].length) };
+  return { frontMatter: match[1], frontMatterEndLine: lines, body: '\n'.repeat(lines) + text.slice(match[0].length) };
+}
+
+function stripYamlQuotes(raw: string): string {
+  const t = raw.trim();
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+function renderFrontMatterHtml(frontMatter: string, endLine: number): string {
+  const lines = frontMatter.split(/\r?\n/);
+  const props: { key: string; scalar?: string; list?: string[] }[] = [];
+  let currentListProp: { key: string; list: string[] } | undefined;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+    const listMatch = /^[ \t]+-[ \t]+(.+)$/.exec(line);
+    if (listMatch && currentListProp) {
+      currentListProp.list.push(stripYamlQuotes(listMatch[1]));
+      continue;
+    }
+    const kvMatch = /^([A-Za-z0-9_.\u4e00-\u9fff-]+)[ \t]*:[ \t]*(.*)$/.exec(line);
+    if (!kvMatch) {
+      return `<pre class="md-frontmatter" data-line="0" data-line-end="${endLine}"><code>${escapeHtml(frontMatter)}</code></pre>`;
+    }
+    const key = kvMatch[1];
+    const rest = kvMatch[2].trim();
+    if (!rest) {
+      currentListProp = { key, list: [] };
+      props.push(currentListProp);
+      continue;
+    }
+    if (rest === '|' || rest === '>' || rest.startsWith('{')) {
+      return `<pre class="md-frontmatter" data-line="0" data-line-end="${endLine}"><code>${escapeHtml(frontMatter)}</code></pre>`;
+    }
+    currentListProp = undefined;
+    if (rest.startsWith('[') && rest.endsWith(']')) {
+      const items = rest
+        .slice(1, -1)
+        .split(',')
+        .map((s) => stripYamlQuotes(s))
+        .filter(Boolean);
+      props.push({ key, list: items });
+    } else {
+      props.push({ key, scalar: stripYamlQuotes(rest) });
+    }
+  }
+
+  if (!props.length) {
+    return `<pre class="md-frontmatter" data-line="0" data-line-end="${endLine}"><code>${escapeHtml(frontMatter)}</code></pre>`;
+  }
+
+  const rowsHtml = props
+    .map((p) => {
+      const valHtml = p.list
+        ? p.list.map((it) => `<span class="md-fm-tag">${escapeHtml(it)}</span>`).join(' ')
+        : escapeHtml(p.scalar ?? '');
+      return `<tr><th>${escapeHtml(p.key)}</th><td>${valHtml}</td></tr>`;
+    })
+    .join('');
+
+  return `<div class="md-frontmatter" data-line="0" data-line-end="${endLine}"><table class="md-fm-table"><tbody>${rowsHtml}</tbody></table></div>`;
 }
 
 const ALERT_META: Record<string, { label: string; icon: string }> = {
@@ -200,11 +266,11 @@ export class MarkdownRenderer {
   }
 
   render(text: string): RenderResult {
-    const { frontMatter, body } = splitFrontMatter(text);
+    const { frontMatter, frontMatterEndLine, body } = splitFrontMatter(text);
     const env: Env = { toc: [] };
     let html = this.md.render(body, env as never);
     if (frontMatter !== undefined) {
-      html = `<pre class="md-frontmatter" data-line="0"><code>${escapeHtml(frontMatter)}</code></pre>\n${html}`;
+      html = `${renderFrontMatterHtml(frontMatter, frontMatterEndLine ?? 1)}\n${html}`;
     }
     return { html, toc: env.toc };
   }

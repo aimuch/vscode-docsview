@@ -294,8 +294,11 @@ export function themeToolbarButton(): HTMLElement {
     button.setAttribute('aria-expanded', 'true');
     document.addEventListener('mousedown', onOutside);
     const rect = button.getBoundingClientRect();
-    popup.style.top = `${rect.bottom + 6}px`;
-    popup.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    const mw = popup.offsetWidth || 372;
+    const mh = popup.offsetHeight || 280;
+    popup.style.left = `${Math.max(8, Math.min(window.innerWidth - mw - 8, rect.right - mw))}px`;
+    popup.style.right = 'auto';
+    popup.style.top = `${Math.max(8, Math.min(window.innerHeight - mh - 8, rect.bottom + 6))}px`;
     popup.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
   });
   popup.addEventListener('keydown', (e) => {
@@ -399,7 +402,9 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
 
   const themeHeader = el('div', { class: 'dv-st-subhead' }, [
     el('span', { class: 'dv-st-label', text: t('theme') }),
-    ...(config.kind !== 'markdown' ? [el('span', { class: 'dv-st-muted', text: t('themeMarkdownHint') })] : []),
+    ...(config.kind !== 'markdown' && config.kind !== 'epub'
+      ? [el('span', { class: 'dv-st-muted', text: t('themeMarkdownHint') })]
+      : []),
   ]);
 
   const loupeRow =
@@ -440,10 +445,14 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
         ])
       : undefined;
 
+  const themeGrid = el('div', { class: 'dv-theme-grid' }, themeCards);
+  themeGrid.setAttribute('role', 'radiogroup');
+  themeGrid.setAttribute('aria-label', t('theme'));
+
   const appearanceSection = el('section', { class: 'dv-st-section' }, [
     el('h3', { class: 'dv-st-heading', text: t('appearanceAll') }),
     themeHeader,
-    el('div', { class: 'dv-theme-grid' }, themeCards),
+    themeGrid,
     mdWidthRow,
     splitRow,
     ...(sidebarPosRow ? [sidebarPosRow] : []),

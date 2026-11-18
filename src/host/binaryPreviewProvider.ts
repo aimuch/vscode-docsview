@@ -19,9 +19,28 @@ function isSvgUri(uri: vscode.Uri): boolean {
   return uri.path.toLowerCase().endsWith('.svg');
 }
 
+const IMAGE_FILE_RE = /\.(?:png|jpe?g|webp|gif|bmp|ico|avif|svg)$/i;
+const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+async function listSiblingImages(uri: vscode.Uri): Promise<vscode.Uri[]> {
+  try {
+    const dir = parentUri(uri);
+    const entries = await vscode.workspace.fs.readDirectory(dir);
+    const names = entries
+      .filter(([name, type]) => (type & vscode.FileType.File) !== 0 && IMAGE_FILE_RE.test(name))
+      .map(([name]) => name)
+      .sort((a, b) => naturalCollator.compare(a, b));
+    return names.map((name) => vscode.Uri.joinPath(dir, name));
+  } catch {
+    return [];
+  }
+}
+
 class ImageDocument implements vscode.CustomDocument {
   loadError: string | undefined;
   session: ImageSession | undefined;
+  siblingIndex: number | undefined;
+  siblingCount: number | undefined;
   ignoreWatcherUntil = 0;
   diskChangedWhileDirty = false;
   post: (message: HostMessage) => void = () => undefined;
@@ -64,6 +83,11 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
       } else {
         document.session = new ImageSession(bytes);
       }
+      const siblings = await listSiblingImages(document.uri);
+      const myName = baseName(document.uri);
+      const idx = siblings.findIndex((u) => baseName(u) === myName);
+      document.siblingIndex = idx >= 0 ? idx : undefined;
+      document.siblingCount = idx >= 0 ? siblings.length : undefined;
       document.loadError = undefined;
       document.diskChangedWhileDirty = false;
     } catch (err) {
@@ -76,12 +100,52 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
     if (document.loadError || !document.session) {
       post({ type: 'error', message: document.loadError ?? t('loadFailed', '') });
     } else {
+      const bytes = plainU8(document.session.bytes);
       post({
         type: 'load',
         name: baseName(document.uri),
-        bytes: plainU8(document.session.bytes),
+        bytes,
+        byteLength: bytes.byteLength,
+        siblingIndex: document.siblingIndex,
+        siblingCount: document.siblingCount,
         editable: true,
       });
+    }
+  }
+
+  private async tryAutoLoadSiblingAnnotations(
+    document: ImageDocument,
+    post: (m: HostMessage) => void,
+  ): Promise<void> {
+    const dir = parentUri(document.uri);
+    const stem = stemOf(document.uri);
+    for (const ext of ['txt', 'json'] as const) {
+      const candidate = vscode.Uri.joinPath(dir, `${stem}.${ext}`);
+      try {
+        const stat = await vscode.workspace.fs.stat(candidate);
+        if ((stat.type & vscode.FileType.File) === 0 || stat.size === 0 || stat.size > 4 * 1024 * 1024) {
+          continue;
+        }
+        const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(candidate));
+        let classesText: string | undefined;
+        if (ext === 'txt') {
+          try {
+            const clsUri = vscode.Uri.joinPath(dir, 'classes.txt');
+            classesText = new TextDecoder().decode(await vscode.workspace.fs.readFile(clsUri));
+          } catch {
+            // Optional classes.txt not present.
+          }
+        }
+        post({
+          type: 'annotationsLoaded',
+          format: ext === 'txt' ? 'yolo' : 'coco',
+          content,
+          classesText,
+        });
+        return;
+      } catch {
+        // Candidate file does not exist.
+      }
     }
   }
 
@@ -113,7 +177,25 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
         switch (message.type) {
           case 'ready':
             this.sendCurrent(document, post);
+            void this.tryAutoLoadSiblingAnnotations(document, post);
             break;
+          case 'stepFolderImage': {
+            void (async () => {
+              const siblings = await listSiblingImages(document.uri);
+              if (siblings.length <= 1) {
+                return;
+              }
+              const myName = baseName(document.uri);
+              const idx = siblings.findIndex((u) => baseName(u) === myName);
+              if (idx < 0) {
+                return;
+              }
+              const nextIdx = (idx + message.delta + siblings.length) % siblings.length;
+              const target = siblings[nextIdx];
+              await vscode.commands.executeCommand('vscode.openWith', target, 'docsview.image', panel.viewColumn);
+            })();
+            break;
+          }
           case 'imageReplace': {
             if (!document.session || !message.bytes.byteLength) {
               break;

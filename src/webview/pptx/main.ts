@@ -83,6 +83,7 @@ const annotateToggle = toggleButton('commentPlus', t('addComment'), (on) => {
 
 const commentsPanel = new CommentsPanel({
   docName: () => docFileName,
+  editable: () => editable,
   targetLabel: (c) => (c.page ? t('slideN', c.page) : ''),
   onSelect: (c) => {
     if (c.page) {
@@ -123,7 +124,7 @@ const view = segmented<'list' | 'single'>(
   },
 );
 
-const pager = createPager((n) => goTo(n - 1), t('slideN', ''));
+const pager = createPager((n) => goTo(n - 1), t('slide'));
 const zoom = createZoom((value) => host.style.setProperty('zoom', String(value)), stage);
 stage.tabIndex = -1;
 const pptFind = new PreviewFind(host, stage, {
@@ -204,11 +205,15 @@ notesBody.addEventListener('dblclick', () => {
   }
 });
 
-// Fullscreen Presentation Mode (F5) + Virtual Laser Pointer
+// Fullscreen Presentation Mode (F5) + Virtual Laser Pointer + Speaker Notes Caption
 let presenting = false;
+let enteredOsFullscreen = false;
 let laserOn = false;
+let presentNotesOn = false;
 const presentStageWrap = el('div', { class: 'pptx-present-stage' });
 const presentCounter = el('span', { class: 'dv-label' });
+const presentNotesBubble = el('div', { class: 'pptx-present-notes' });
+presentNotesBubble.hidden = true;
 const laserDot = el('div', { class: 'dv-laser-dot' });
 laserDot.hidden = true;
 
@@ -220,18 +225,52 @@ const laserToggle = toggleButton('laser', `${t('laserPointer')} (L)`, (on) => {
   }
 });
 
+const presentNotesToggle = toggleButton('notes', `${t('speakerNotes')} (N)`, (on) => {
+  presentNotesOn = on;
+  syncPresentNotes();
+});
+
+function syncPresentNotes() {
+  if (!presenting || !presentNotesOn || !slides.length) {
+    presentNotesBubble.hidden = true;
+    return;
+  }
+  const note = (pptxNotes[current] ?? '').trim();
+  presentNotesBubble.textContent = note || t('noSpeakerNotes');
+  presentNotesBubble.classList.toggle('pptx-notes-empty', !note);
+  presentNotesBubble.hidden = false;
+}
+
 const presentHud = el('div', { class: 'dv-present-hud' }, [
   iconButton('left', t('prevPage'), () => stepPresentation(-1)),
   presentCounter,
   iconButton('right', t('nextPage'), () => stepPresentation(1)),
+  presentNotesToggle.node,
   laserToggle.node,
   iconButton('close', t('exitPresentation'), () => exitPresentation()),
 ]);
 presentHud.addEventListener('click', (e) => e.stopPropagation());
+presentNotesBubble.addEventListener('click', (e) => e.stopPropagation());
 
-const presentOverlay = el('div', { class: 'dv-present-overlay' }, [presentStageWrap, presentHud, laserDot]);
+const presentOverlay = el('div', { class: 'dv-present-overlay' }, [
+  presentStageWrap,
+  presentNotesBubble,
+  presentHud,
+  laserDot,
+]);
 presentOverlay.hidden = true;
 document.body.append(presentOverlay);
+
+document.addEventListener('fullscreenchange', () => {
+  if (document.fullscreenElement) {
+    enteredOsFullscreen = true;
+  } else if (enteredOsFullscreen) {
+    enteredOsFullscreen = false;
+    if (presenting) {
+      exitPresentation();
+    }
+  }
+});
 
 presentOverlay.addEventListener('mousemove', (e) => {
   if (presenting && laserOn) {
@@ -244,7 +283,7 @@ presentOverlay.addEventListener('mouseleave', () => {
   laserDot.hidden = true;
 });
 presentOverlay.addEventListener('click', (e) => {
-  if ((e.target as HTMLElement | null)?.closest('.dv-present-hud')) {
+  if ((e.target as HTMLElement | null)?.closest('.dv-present-hud, .pptx-present-notes')) {
     return;
   }
   stepPresentation(1);
@@ -257,7 +296,6 @@ function renderPresentSlide() {
   const srcSlide = slides[current];
   const clone = srcSlide.cloneNode(true) as HTMLElement;
   clone.hidden = false;
-  clone.classList.remove('dv-page-invert');
   clone.querySelectorAll('.dv-annot-layer').forEach((n) => n.remove());
   const sw = srcSlide.offsetWidth || 960;
   const sh = srcSlide.offsetHeight || 540;
@@ -266,6 +304,7 @@ function renderPresentSlide() {
   clone.style.transform = `scale(${Math.max(0.2, scale)})`;
   presentStageWrap.replaceChildren(clone);
   presentCounter.textContent = `${current + 1} / ${slides.length}`;
+  syncPresentNotes();
 }
 
 function stepPresentation(delta: -1 | 1) {
@@ -284,7 +323,7 @@ function enterPresentation() {
   presentOverlay.hidden = false;
   renderPresentSlide();
   try {
-    void document.documentElement.requestFullscreen?.();
+    void document.documentElement.requestFullscreen?.()?.catch(() => undefined);
   } catch {
     // Webview sandbox may disallow OS fullscreen; fixed overlay still fills viewport.
   }
@@ -296,8 +335,10 @@ function exitPresentation() {
   }
   presenting = false;
   presentOverlay.hidden = true;
+  presentNotesBubble.hidden = true;
   laserDot.hidden = true;
   if (document.fullscreenElement) {
+    enteredOsFullscreen = false;
     void document.exitFullscreen?.().catch(() => undefined);
   }
 }
@@ -309,6 +350,7 @@ window.addEventListener('resize', () => {
 });
 
 const presentBtn = iconButton('play', t('presentSlides'), () => enterPresentation());
+const exportMdBtn = iconButton('export', t('exportMarkdown'), () => post({ type: 'exportDocMarkdown' }));
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
 const topBar = customToolbar({
@@ -321,12 +363,14 @@ const topBar = customToolbar({
     { id: 'find', nodes: findWidget.nodes },
     { id: 'edit', label: t('pptxEditMode'), nodes: [editToggle.node], visible: () => editable },
     { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
+    { id: 'actions', nodes: [exportMdBtn] },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
     openExternalMenuItem(),
     { label: t('presentSlides'), icon: 'play', onClick: () => enterPresentation() },
+    { label: t('exportMarkdown'), icon: 'export', onClick: () => post({ type: 'exportDocMarkdown' }) },
     {
       label: t('exportCommentsMd'),
       icon: 'export',
@@ -484,6 +528,18 @@ function normShapeText(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
+host.addEventListener('click', (e) => {
+  if (annotateMode || editMode) {
+    return;
+  }
+  const anchor = (e.target as HTMLElement | null)?.closest<HTMLAnchorElement>('a[href]');
+  const href = anchor?.getAttribute('href')?.trim();
+  if (anchor && href && /^(?:https?:|mailto:)/i.test(href)) {
+    e.preventDefault();
+    post({ type: 'openLink', href });
+  }
+});
+
 host.addEventListener('dblclick', (e) => {
   if (!editable || !editMode) {
     return;
@@ -570,7 +626,7 @@ stage.addEventListener('scroll', () => {
 
 window.addEventListener('keydown', (e) => {
   const target = e.target as HTMLElement;
-  if (target?.closest('input, textarea')) {
+  if (target?.closest('input, textarea, select, button, [role="menu"], [role="dialog"], .dv-st-drawer')) {
     return;
   }
   if (e.key === 'F5') {
@@ -596,6 +652,11 @@ window.addEventListener('keydown', (e) => {
       if (!laserOn) {
         laserDot.hidden = true;
       }
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'n') {
+      e.preventDefault();
+      presentNotesOn = !presentNotesOn;
+      presentNotesToggle.set(presentNotesOn);
+      syncPresentNotes();
     }
     return;
   }
@@ -643,7 +704,6 @@ async function load(bytes: Uint8Array) {
       return;
     }
     slides = [...host.querySelectorAll<HTMLElement>('.pptx-preview-slide-wrapper')];
-    slides.forEach((slide) => slide.classList.add('dv-page-invert'));
     slideList.setItems(
       slides.map((slide, i) => {
         const title = slideTitle(slide);
@@ -673,6 +733,9 @@ onMessage((message) => {
     pptxNotes = message.pptxNotes ?? [];
     if (pptxNotes.some((n) => n.trim().length > 0) && readState().pptxNotesOpen === undefined) {
       setNotesOpen(true);
+    }
+    if (message.initialPage && message.initialPage >= 1) {
+      current = message.initialPage - 1;
     }
     lastSlideAspect = message.slideAspect;
     topBar.refresh();

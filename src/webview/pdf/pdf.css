@@ -106,10 +106,6 @@
   outline-offset: 2px;
 }
 
-.dv-side:has(.pdf-thumbs) {
-  width: 200px;
-}
-
 .pdf-thumb-wrap {
   position: relative;
   display: flex;
@@ -142,6 +138,9 @@
 }
 
 .pdf-thumb-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
   height: 20px;
   padding: 0;
@@ -152,6 +151,11 @@
   font-size: 11px;
   line-height: 1;
   cursor: pointer;
+}
+
+.pdf-thumb-act svg {
+  width: 12px;
+  height: 12px;
 }
 
 .pdf-thumb-act:hover:not(:disabled) {

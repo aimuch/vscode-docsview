@@ -94,10 +94,25 @@ export class JsonlEditorProvider implements vscode.CustomTextEditorProvider {
           case 'getSheet':
             post({ type: 'sheet', index: 0, model: session.model() });
             break;
-          case 'edit':
+          case 'edit': {
             sync();
-            void apply(session.editCells(message.changes));
+            const res = session.editCells(message.changes);
+            if (res.hadInvalidJson) {
+              void vscode.window.showWarningMessage(t('jsonlInvalidJson'));
+            }
+            void apply(res.edits);
             break;
+          }
+          case 'editJsonlRecord': {
+            sync();
+            const edits = session.replaceRecordJson(message.recordIndex, message.jsonText);
+            if (!edits) {
+              void vscode.window.showWarningMessage(t('jsonlInvalidJson'));
+              break;
+            }
+            void apply(edits);
+            break;
+          }
           case 'structure':
             sync();
             void apply(session.structure(message.op, message.at, message.count));
@@ -107,6 +122,9 @@ export class JsonlEditorProvider implements vscode.CustomTextEditorProvider {
             const rows = session.exportRows();
             const format = message.format;
             const currentEol = eol();
+            if (format === 'jsonl') {
+              break;
+            }
             const run = async () => {
               const { rowsToDelimited, rowsToXlsx } = await import('../spreadsheet');
               const bytes =

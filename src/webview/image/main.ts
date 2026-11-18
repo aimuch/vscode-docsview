@@ -10,7 +10,6 @@ import type { AnnotationExportFormat, ImageExportFormat, LoupePosition } from '.
 import { app, el, errorText, onMessage, post, showStatus, t, toArrayBuffer } from '../shared/api';
 import { getAppearance, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
-import { icons } from '../shared/icons';
 import { readState, Sidebar, writeState } from '../shared/sidebar';
 import {
   customToolbar,
@@ -50,6 +49,7 @@ import {
 } from './encoder';
 import { LOUPE_H, LOUPE_W, paintPixelLoupe, sampleCanvasPixel } from './loupe';
 import { MARKUP_COLORS, renderMarkupToCanvas, type MarkupItem, type MarkupTool } from './markup';
+import { extractImageMetadata, formatAspectRatio, formatFileSize, type ImageMetaEntry } from './metadata';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const svgEl = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string> = {}) => {
@@ -72,6 +72,12 @@ type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
 let fileName = '';
 let rawFileBytes: Uint8Array | undefined;
+let fileByteLength = 0;
+let siblingIndex: number | undefined;
+let siblingCount: number | undefined;
+let imageMetaEntries: ImageMetaEntry[] = [];
+let imgLoadGen = 0;
+let pendingAnnotations: { content: string; classesText?: string; auto?: boolean } | undefined;
 let naturalW = 0;
 let naturalH = 0;
 let zoom = 1;
@@ -200,8 +206,69 @@ loupe.addEventListener('mousedown', (e) => {
   window.addEventListener('mouseup', up);
 });
 
-// Status bar
+// Status bar & EXIF / PNG metadata popover
 const metaLabel = el('span', { class: 'dv-label' });
+const metaInfoBtn = iconButton('info', t('imgMetaInfo'), () => toggleMetaPopover());
+metaInfoBtn.classList.add('dv-cm-mini');
+const metaPopover = el('div', { class: 'dv-menu img-meta-popover' });
+metaPopover.hidden = true;
+document.body.append(metaPopover);
+
+function closeMetaPopover() {
+  metaPopover.hidden = true;
+  metaInfoBtn.classList.remove('dv-active');
+}
+
+function toggleMetaPopover() {
+  if (!metaPopover.hidden) {
+    closeMetaPopover();
+    return;
+  }
+  const rows: ImageMetaEntry[] = [];
+  if (naturalW && naturalH) {
+    rows.push({ key: 'Dimensions', value: `${naturalW} × ${naturalH} px (${formatAspectRatio(naturalW, naturalH)})` });
+  }
+  const sizeStr = formatFileSize(fileByteLength || rawFileBytes?.byteLength || 0);
+  if (sizeStr) {
+    rows.push({ key: 'Size', value: sizeStr });
+  }
+  const ext = currentExt();
+  if (ext) {
+    rows.push({ key: 'Format', value: ext.toUpperCase() });
+  }
+  rows.push(...imageMetaEntries);
+
+  if (!rows.length) {
+    metaPopover.replaceChildren(el('div', { class: 'dv-ol-empty', text: t('imgNoMeta') }));
+  } else {
+    metaPopover.replaceChildren(
+      ...rows.map((r) => {
+        const row = el('button', { class: 'img-meta-row', title: t('copy') }, [
+          el('span', { class: 'img-meta-key', text: r.key }),
+          el('span', { class: 'img-meta-val', text: r.value }),
+        ]);
+        row.type = 'button';
+        row.addEventListener('click', () => copyText(r.value));
+        return row;
+      }),
+    );
+  }
+  metaPopover.hidden = false;
+  metaInfoBtn.classList.add('dv-active');
+  const btnRect = metaInfoBtn.getBoundingClientRect();
+  const popRect = metaPopover.getBoundingClientRect();
+  const left = clamp(btnRect.left, 8, Math.max(8, window.innerWidth - (popRect.width || 300) - 8));
+  const top = Math.max(40, btnRect.top - (popRect.height || 180) - 8);
+  metaPopover.style.left = `${left}px`;
+  metaPopover.style.top = `${top}px`;
+}
+
+window.addEventListener('mousedown', (e) => {
+  if (!metaPopover.hidden && !metaPopover.contains(e.target as Node) && !metaInfoBtn.contains(e.target as Node)) {
+    closeMetaPopover();
+  }
+});
+
 const recentSwatchesRow = el('div', { class: 'img-swatch-history' });
 const coordPill = el('button', { class: 'img-pill', text: '(—, —)' });
 coordPill.type = 'button';
@@ -215,6 +282,7 @@ const hslPill = el('button', { class: 'img-pill', text: 'hsl(—, —, —)' });
 hslPill.type = 'button';
 const statusBar = el('div', { class: 'img-statusbar' }, [
   metaLabel,
+  metaInfoBtn,
   el('div', { class: 'dv-spacer' }),
   recentSwatchesRow,
   coordPill,
@@ -387,7 +455,7 @@ function aspectValue(preset: AspectPreset): number | undefined {
 }
 
 const aspectSeg = segmented<AspectPreset>(
-  'Aspect ratio',
+  t('imgAspectRatio'),
   [
     ['free', t('imgRatioFree')],
     ['1:1', '1:1'],
@@ -511,16 +579,32 @@ async function applyCropInPlace(): Promise<void> {
   if (!naturalW || !naturalH) {
     return;
   }
-  const w = cropRect.x2 - cropRect.x1;
-  const h = cropRect.y2 - cropRect.y1;
+  const ox = cropRect.x1;
+  const oy = cropRect.y1;
+  const w = cropRect.x2 - ox;
+  const h = cropRect.y2 - oy;
   if (w <= 0 || h <= 0 || (w === naturalW && h === naturalH)) {
     setToolMode('inspect');
     return;
   }
+  const shiftBoxesForCrop = () => {
+    if (boxes.length > 0) {
+      boxes = boxes
+        .map((b) => ({
+          ...b,
+          x1: clamp(b.x1 - ox, 0, Math.max(0, w - 1)),
+          y1: clamp(b.y1 - oy, 0, Math.max(0, h - 1)),
+          x2: clamp(b.x2 - ox, 0, w),
+          y2: clamp(b.y2 - oy, 0, h),
+        }))
+        .filter((b) => b.x2 > b.x1 && b.y2 > b.y1);
+    }
+  };
   const ext = currentExt();
   if (ext === 'svg' && rawFileBytes) {
     const svgText = new TextDecoder().decode(rawFileBytes);
     const nextSvg = cropSvgMarkup(svgText, naturalW, naturalH, cropRect);
+    shiftBoxesForCrop();
     setToolMode('inspect');
     post({ type: 'imageReplace', bytes: nextSvg, label: 'Crop SVG' });
     return;
@@ -531,6 +615,7 @@ async function applyCropInPlace(): Promise<void> {
     return;
   }
   const bytes = await encodeRegion(cropRect, currentNativeFormat());
+  shiftBoxesForCrop();
   setToolMode('inspect');
   post({ type: 'imageReplace', bytes, label: 'Crop image' });
 }
@@ -656,8 +741,11 @@ function setResizeOpen(open: boolean) {
   resizeBar.hidden = !open;
   resizeBtn.classList.toggle('dv-active', open);
   if (open) {
-    if (toolMode === 'crop') {
+    if (toolMode === 'crop' || toolMode === 'markup') {
       setToolMode('inspect');
+    }
+    if (diffActive) {
+      exitCompareMode();
     }
     if (naturalW && naturalH) {
       resizeWInput.value = String(naturalW);
@@ -769,7 +857,7 @@ function annotMenuItems(): (MenuItem | '-')[] {
   ];
 }
 
-const sidebarAnnotDropdown = moreMenu(t('imgImportAnnot'), annotMenuItems(), 'export');
+const sidebarAnnotDropdown = moreMenu(t('imgImportAnnot'), annotMenuItems(), 'export', { compact: true });
 
 const boxInput = el('input', { class: 'dv-input' });
 boxInput.type = 'text';
@@ -841,7 +929,7 @@ const markupToolSeg = segmented<MarkupTool>(
 const markupTextInput = el('input', { class: 'dv-input img-markup-text-input' });
 markupTextInput.type = 'text';
 markupTextInput.placeholder = t('imgMarkupText');
-markupTextInput.value = 'Note';
+markupTextInput.value = t('imgMarkupDefaultText');
 markupTextInput.hidden = true;
 markupTextInput.addEventListener('keydown', (e) => e.stopPropagation());
 
@@ -879,9 +967,7 @@ function refreshMarkupPreview(draft?: MarkupItem) {
   markupPreviewCanvas.hidden = false;
 }
 
-const markupUndoBtn = el('button', { class: 'dv-btn', text: '↶' });
-markupUndoBtn.type = 'button';
-markupUndoBtn.addEventListener('click', () => {
+const markupUndoBtn = iconButton('undo', t('imgMarkupUndo'), () => {
   markupItems.pop();
   refreshMarkupPreview();
 });
@@ -1042,6 +1128,9 @@ async function activateCompareImage(_otherName: string, otherBytes: Uint8Array):
   heatCanvas.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(diff.out), diff.width, diff.height), 0, 0);
   diffHeatmapUrl = heatCanvas.toDataURL('image/png');
 
+  if (resizeOpen) {
+    setResizeOpen(false);
+  }
   diffActive = true;
   setToolMode('inspect');
   syncDiffView();
@@ -1147,8 +1236,8 @@ function convertMenuItems(): MenuItem[] {
   }));
 }
 
-const convertDropdown = moreMenu(t('convertMenu'), convertMenuItems(), 'export');
-const annotDropdown = moreMenu(t('imgImportAnnot'), annotMenuItems(), 'folder');
+const convertDropdown = moreMenu(t('convertMenu'), convertMenuItems(), 'export', { compact: true });
+const annotDropdown = moreMenu(t('imgImportAnnot'), annotMenuItems(), 'folder', { compact: true });
 const compareDropdown = moreMenu(
   t('imgCompare'),
   [
@@ -1167,7 +1256,13 @@ const compareDropdown = moreMenu(
     },
   ],
   'compare',
+  { compact: true },
 );
+const prevImgBtn = iconButton('left', `${t('imgPrevFile')} ([)`, () => post({ type: 'stepFolderImage', delta: -1 }));
+const siblingLabel = el('span', { class: 'dv-label img-sibling-label' });
+const nextImgBtn = iconButton('right', `${t('imgNextFile')} (])`, () => post({ type: 'stepFolderImage', delta: 1 }));
+const folderNavGroup = el('div', { class: 'dv-pager' }, [prevImgBtn, siblingLabel, nextImgBtn]);
+
 const copyImgBtn = iconButton('copy', t('imgCopyClipboard'), () => void copyImageToClipboard());
 const rotCCWBtn = iconButton('rotateCCW', t('imgRotateCCW'), () => void applyTransform('rotCCW'));
 const rotCWBtn = iconButton('rotateCW', t('imgRotateCW'), () => void applyTransform('rotCW'));
@@ -1188,16 +1283,18 @@ const topBar = customToolbar({
   subtitle: () => (fileName ? fileName : 'IMAGE'),
   slots: [
     { id: 'nav', nodes: [sidebar.toggle] },
+    { id: 'pager', nodes: [folderNavGroup], visible: () => (siblingCount ?? 0) > 1 },
     { id: 'view', nodes: [svgViewSeg.node, modeSeg.node] },
     { id: 'zoom', nodes: [zoomGroup] },
     {
       id: 'transform',
-      nodes: [rotCCWBtn, rotCWBtn, flipHBtn, flipVBtn, resizeBtn, copyImgBtn, compareDropdown, convertDropdown],
+      nodes: [rotCCWBtn, rotCWBtn, flipHBtn, flipVBtn, resizeBtn, copyImgBtn, compareDropdown],
     },
     {
       id: 'bbox',
       nodes: [loupePosSeg.node, annotDropdown, copyJsonBtn, clearBtn],
     },
+    { id: 'actions', nodes: [convertDropdown] },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
@@ -1273,6 +1370,9 @@ function setToolMode(mode: ToolMode, seedCrop?: PixelRect) {
     if (resizeOpen) {
       setResizeOpen(false);
     }
+    if (diffActive) {
+      exitCompareMode();
+    }
     if (mode === 'crop') {
       const activeBox = seedCrop ?? boxes.find((b) => b.id === selectedBoxId);
       initDefaultCropRect(activeBox);
@@ -1305,11 +1405,21 @@ app.append(
 // ---------------------------------------------------------------- zoom & layout
 
 function updateMetaLabel() {
+  if (siblingIndex !== undefined && siblingCount && siblingCount > 1) {
+    siblingLabel.textContent = `${siblingIndex + 1} / ${siblingCount}`;
+  } else {
+    siblingLabel.textContent = '';
+  }
+  const sizePart = formatFileSize(fileByteLength || rawFileBytes?.byteLength || 0);
   if (!naturalW || !naturalH) {
-    metaLabel.textContent = fileName;
+    metaLabel.textContent = sizePart ? `${fileName} · ${sizePart}` : fileName;
     return;
   }
-  metaLabel.textContent = `${fileName} · ${naturalW} × ${naturalH} px`;
+  const parts = [fileName, `${naturalW} × ${naturalH} px`];
+  if (sizePart) {
+    parts.push(sizePart);
+  }
+  metaLabel.textContent = parts.join(' · ');
 }
 
 function applyZoomLayout() {
@@ -1749,8 +1859,7 @@ function renderBoxes() {
         cropToBtn.classList.add('img-box-mini');
         cropToBtn.addEventListener('click', (e) => e.stopPropagation());
 
-        const copyBtn = iconButton('check', t('copy'), () => copyText(tupleStr));
-        copyBtn.innerHTML = icons.export;
+        const copyBtn = iconButton('copy', t('copy'), () => copyText(tupleStr));
         copyBtn.classList.add('img-box-mini');
         copyBtn.addEventListener('click', (e) => e.stopPropagation());
 
@@ -1868,7 +1977,7 @@ stage.addEventListener('mousedown', (e) => {
       const sx = clamp(Math.round(start.x), 0, naturalW - 1);
       const sy = clamp(Math.round(start.y), 0, naturalH - 1);
       if (markupTool === 'text') {
-        const label = markupTextInput.value.trim() || 'Note';
+        const label = markupTextInput.value.trim() || t('imgMarkupDefaultText');
         markupItems.push({
           id: nextMarkupId++,
           kind: 'text',
@@ -2144,11 +2253,21 @@ stage.addEventListener('mousedown', (e) => {
 });
 
 window.addEventListener('keydown', (e) => {
-  const activeTag = (e.target as HTMLElement | null)?.tagName;
-  if (activeTag === 'INPUT' || activeTag === 'TEXTAREA') {
+  const activeEl = e.target as HTMLElement | null;
+  if (
+    activeEl?.closest('input, textarea, select, [role="menu"], .dv-st-drawer') ||
+    document.querySelector('.dv-st-drawer.dv-st-open')
+  ) {
     return;
   }
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    if (!e.shiftKey && e.key.toLowerCase() === 'z' && toolMode === 'markup' && markupItems.length > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      markupItems.pop();
+      refreshMarkupPreview();
+      return;
+    }
     if (e.key === '=' || e.key === '+') {
       e.preventDefault();
       stepZoom(1);
@@ -2173,6 +2292,9 @@ window.addEventListener('keydown', (e) => {
 
   if (e.key === ' ') {
     spaceHeld = true;
+  } else if (!metaPopover.hidden && e.key === 'Escape') {
+    e.preventDefault();
+    closeMetaPopover();
   } else if (resizeOpen && e.key === 'Escape') {
     e.preventDefault();
     setResizeOpen(false);
@@ -2192,6 +2314,12 @@ window.addEventListener('keydown', (e) => {
   } else if (diffActive && e.key === 'Escape') {
     e.preventDefault();
     exitCompareMode();
+  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === '[' && (siblingCount ?? 0) > 1) {
+    e.preventDefault();
+    post({ type: 'stepFolderImage', delta: -1 });
+  } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === ']' && (siblingCount ?? 0) > 1) {
+    e.preventDefault();
+    post({ type: 'stepFolderImage', delta: 1 });
   } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'c') {
     if (hoverPx || getAppearance().loupePosition === 'fixed') {
       e.preventDefault();
@@ -2228,10 +2356,33 @@ const statusHost = el('div');
 stage.append(statusHost);
 showStatus(statusHost, t('loading'));
 
+function applyLoadedAnnotations(content: string, classesText?: string) {
+  if (!naturalW || !naturalH) {
+    pendingAnnotations = { content, classesText };
+    return;
+  }
+  const imported = parseAnnotationContent(content, naturalW, naturalH, {
+    classesText,
+    fileName,
+  });
+  if (!imported.length) {
+    return;
+  }
+  boxes = imported.map((b) => ({ id: nextBoxId++, ...b }));
+  selectedBoxId = boxes[0]?.id;
+  if (boxes.length && !sidebar.open) {
+    sidebar.setOpen(true);
+  }
+  renderBoxes();
+}
+
 async function loadImage(name: string, bytes: Uint8Array) {
+  const myGen = ++imgLoadGen;
   const prevName = fileName;
   fileName = name;
   rawFileBytes = bytes;
+  imageMetaEntries = extractImageMetadata(bytes);
+  closeMetaPopover();
   if (prevName && prevName !== name) {
     boxes = [];
     selectedBoxId = undefined;
@@ -2260,6 +2411,9 @@ async function loadImage(name: string, bytes: Uint8Array) {
       imgEl.onerror = () => reject(new Error('Image decode failed'));
       imgEl.src = nextUrl;
     });
+    if (myGen !== imgLoadGen) {
+      return;
+    }
     naturalW = imgEl.naturalWidth || (ext === 'svg' ? 800 : 0);
     naturalH = imgEl.naturalHeight || (ext === 'svg' ? 600 : 0);
     if (!naturalW || !naturalH) {
@@ -2296,10 +2450,19 @@ async function loadImage(name: string, bytes: Uint8Array) {
     updateMetaLabel();
     fitToStage();
     setToolMode(toolMode);
-    renderBoxes();
+    if (pendingAnnotations) {
+      const queued = pendingAnnotations;
+      pendingAnnotations = undefined;
+      applyLoadedAnnotations(queued.content, queued.classesText);
+    } else {
+      renderBoxes();
+    }
     syncLoupeVisibility();
     post({ type: 'status', ok: true, detail: `${naturalW}x${naturalH}` });
   } catch (err) {
+    if (myGen !== imgLoadGen) {
+      return;
+    }
     canvasWrap.hidden = true;
     statusHost.hidden = false;
     showStatus(statusHost, t('loadFailed', errorText(err)), true);
@@ -2309,22 +2472,14 @@ async function loadImage(name: string, bytes: Uint8Array) {
 
 onMessage((message) => {
   if (message.type === 'load') {
+    fileByteLength = message.byteLength ?? message.bytes.byteLength;
+    siblingIndex = message.siblingIndex;
+    siblingCount = message.siblingCount;
     void loadImage(message.name, message.bytes);
   } else if (message.type === 'compareImage') {
     void activateCompareImage(message.name, message.bytes).catch((err) => notice.flash(errorText(err), 3500));
   } else if (message.type === 'annotationsLoaded') {
-    if (naturalW && naturalH) {
-      const imported = parseAnnotationContent(message.content, naturalW, naturalH, {
-        classesText: message.classesText,
-        fileName,
-      });
-      boxes = imported.map((b) => ({ id: nextBoxId++, ...b }));
-      selectedBoxId = boxes[0]?.id;
-      if (boxes.length && !sidebar.open) {
-        sidebar.setOpen(true);
-      }
-      renderBoxes();
-    }
+    applyLoadedAnnotations(message.content, message.classesText);
   } else if (message.type === 'viewState') {
     svgViewSeg.set(message.split ? 'split' : 'canvas');
   } else if (message.type === 'error') {

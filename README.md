@@ -8,17 +8,17 @@ Preview common document formats inside VS Code and edit spreadsheets in place. *
 
 | 格式 | 扩展名 | 打开方式 | 能力 |
 | --- | --- | --- | --- |
-| Markdown | `.md` `.markdown` | 标题栏预览按钮 | GitHub 风格渲染、GitHub Alerts、可勾选任务列表、Mermaid 点击全屏交互灯箱（缩放/平移/导出 SVG 与 2× PNG）、`F5` 幻灯片演示模式（带激光笔）、编辑模式 `Ctrl/Cmd+V` 粘贴剪贴板图片自动落盘 `assets/`、悬停本地图片一键打开像素/BBox 检查器、字数统计、目录与滚动同步 |
-| CSV / TSV / JSONL | `.csv` `.tsv` `.jsonl` `.ndjson` | 标题栏预览按钮 | 表格 / 分栏 / 文本三态视图、多选唯一值筛选与数值比较筛选（`>` / `>=` / `Between` / `Top N`）、`Ctrl/Cmd+H` 查找替换与全表高亮、单元格内数据条与红黄绿热力色阶、右下角拖拽自动序列填充、复制选区为 Markdown 或 JSON、冻结首行/首列、改单元格与增删行列 |
-| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、多选值筛选与数值筛选、`Ctrl/Cmd+H` 查找替换、数据条/色阶条件格式、拖拽序列与公式自动填充、复制为 Markdown / JSON、选区实时统计、`fx` 公式栏与实时计算、多工作表编辑 |
-| Excel（旧版等） | `.xls` `.ods` | 单击即预览 | 只读（支持多选筛选、条件格式、选区统计与复制为 Markdown / JSON） |
-| Word | `.docx` | 单击即预览 | 页面版式、`Ctrl/Cmd+F` 全文搜索、中英文字体映射、双击段落就地修改文字、标准 OOXML 批注（与 Word/WPS 互通）及导出 Markdown 评审清单 |
-| Word（旧版） | `.doc` | 单击即预览 | **仅文字**，支持缩放、`Ctrl/Cmd+F` 全文搜索、字数段落统计与一键调用本地 Office/WPS 打开 |
-| PDF | `.pdf` | 单击即预览 | 翻页、页面重组（`90°` 旋转写回保存、删除页、缩略图拖拽重排页序、提取页码范围、合并外部 PDF）、鼠标划词浮动荧光笔高亮（`/Highlight`）与摘录批注、ISO 32000 框选/图钉批注、导出批注 Markdown |
-| PowerPoint | `.pptx` | 单击即预览 | 原生画幅比例（`4:3` / `16:10` / `16:9`）、演讲者备注栏（`notesSlide` 查看与就地修改）、`F5` 全屏放映与虚拟红点激光笔、全文搜索、双击文本框改字、标准幻灯片批注及导出 Markdown |
-| 图片编辑与视觉标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览（`.svg` 支持 `图像/分栏/源码` 实时热更新） | 15×11 十字准星放大镜取色（`C` 复制、`Shift` 切换 RGB/HEX/HSL、最近 12 色色板、复制整图到剪贴板）、纯像素 BBox 类别标注与 **YOLO `.txt` / COCO `.json` / LabelMe `.json`** 双向导入导出、图像视觉对比 Diff（拉帘 / 洋葱皮 / 像素差异热力图）、涂鸦与马赛克打码画笔、旋转/翻转/缩放/裁剪及 PNG/JPG/WebP/BMP/ICO 互转 |
-| EPUB 电子书 | `.epub` | 单击即预览 | 纯离线解析 EPUB 2/3 目录、章节与内嵌图片，共享编辑器/GitHub/纸张/学术主题、缩放与全文搜索 |
-| 压缩包检视 | `.zip` `.tar` `.tar.gz` `.tgz` | 单击即预览 | 免解压秒读目录树、原始大小/压缩率统计、分栏直接预览内部代码/文本/图片或一键解压到编辑器打开 |
+| Markdown | `.md` `.markdown` | 标题栏预览按钮 | GitHub 风格渲染、YAML Frontmatter 属性卡片、GitHub Alerts、可勾选任务列表、Mermaid 全屏交互灯箱、`.pdf#page=N` / `.pptx#slide=N` 深链接跳转、`F5` 幻灯片演示模式、`Ctrl/Cmd+V` 粘贴图片自动落盘 `assets/`、悬停本地图片一键打开像素/BBox 检查器 |
+| CSV / TSV / JSONL | `.csv` `.tsv` `.jsonl` `.ndjson` | 标题栏预览按钮 | 表格 / 分栏 / 文本三态视图、**JSONL 单条记录详情抽屉（完整嵌套 JSON 检视与写回）**、CSV/Excel ↔ JSONL 互转、多选唯一值筛选与数值比较筛选、`Ctrl/Cmd+H` 查找替换、数据条/色阶、日期与公式拖拽自动填充、复制为 Markdown / JSON、冻结与增删行列 |
+| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、多选值筛选与数值筛选、`Ctrl/Cmd+H` 查找替换（自动保护公式）、数据条/色阶条件格式、拖拽序列/日期/公式自动填充、复制为 Markdown / JSON、转为 CSV/TSV/JSONL、`fx` 公式栏与实时计算、多工作表编辑 |
+| Excel（旧版等） | `.xls` `.ods` | 单击即预览 | 只读（支持多选筛选、条件格式、选区统计、复制为 Markdown / JSON 及另存为 `.xlsx` / `.jsonl`） |
+| Word | `.docx` | 单击即预览 | 页面版式、**一键导出整篇 Markdown（`.md`）**、`Ctrl/Cmd+F` 全文搜索、中英文字体映射、双击段落就地修改文字、标准 OOXML 批注及导出批注清单 |
+| Word（旧版） | `.doc` | 单击即预览 | **仅文字**，支持缩放、`Ctrl/Cmd+F` 全文搜索、**导出 `.md`**、字数段落统计与调用本地 Office/WPS 打开 |
+| PDF | `.pdf` | 单击即预览 | 翻页、页面重组（`90°` 旋转写回保存、删除页、缩略图重排、提取页码范围、合并 PDF）、跨行多段精准划词高亮（`QuadPoints` `/Highlight`）与摘录批注、旋转页自适应 ISO 32000 框选/图钉批注、导出批注 Markdown |
+| PowerPoint | `.pptx` | 单击即预览 | 原生画幅比例、**一键导出整份幻灯片 + 备注为 Markdown（`.md`）**、演讲者备注栏与 `F5` 全屏放映提词器浮窗 + 激光笔、全文搜索、双击文本框改字、标准幻灯片批注 |
+| 图片编辑与视觉标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览（`.svg` 支持分栏源码实时同步） | 15×11 放大镜取色（RGB/HEX/HSL、最近色板）、**EXIF / PNG DPI / AI Prompt 元数据检视**、**`[` / `]` 同目录数据集上下张翻图与自动加载同名 YOLO/COCO 标注**、视觉对比 Diff、涂鸦与马赛克画笔、旋转/翻转/缩放/裁剪及格式互转 |
+| EPUB 电子书 | `.epub` | 单击即预览 | 纯离线解析 EPUB 2/3 目录、跨章超链接与内嵌图片，共享编辑器/GitHub/纸张/学术主题、自适应页宽、**导出整书 Markdown（`.md`）**、缩放与全文搜索 |
+| 压缩包检视 | `.zip` `.vsix` `.whl` `.jar` `.apk` `.nupkg` `.tar` `.tar.gz` `.tgz` | 单击即预览 | 免解压秒读目录树（含 GNU LongLink / PAX 长路径与防炸弹保护）、分栏直接预览内部代码/文本/SVG/图片、**双击免弹窗直开**、一键整包安全解压 |
 
 Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一致：点编辑器右上角的预览图标，或在命令面板运行 **DocsView：在侧边打开预览**。想让 CSV 默认用表格打开，可在设置里加：
 
@@ -148,17 +148,17 @@ npm run package     # 生成 .vsix
 
 | Format | Extensions | Opens | Features |
 | --- | --- | --- | --- |
-| Markdown | `.md` `.markdown` | preview button in the editor title | GitHub-style rendering, Alerts, task-list checkboxes, Mermaid fullscreen lightbox (SVG / 2× PNG export), `F5` slide deck mode with laser pointer, `Ctrl/Cmd+V` clipboard image paste to `assets/`, local image inspector shortcut, KaTeX, outline & scroll sync |
-| CSV / TSV / JSONL | `.csv` `.tsv` `.jsonl` `.ndjson` | preview button in the editor title | table / split / text views, multi-select value & numeric filters (`>`, `>=`, `Between`, `Top N`), `Ctrl/Cmd+H` find & replace, in-cell data bars & color scales, drag fill handle, copy as Markdown / JSON, freeze row/col, in-place editing |
-| Excel | `.xlsx` `.xlsm` | on click | styles, merged cells, multi-select & numeric filters, `Ctrl/Cmd+H` replace, conditional formatting, drag series/formula autofill, copy as Markdown / JSON, live stats, `fx` formula bar & multi-sheet editing |
-| Excel (legacy) | `.xls` `.ods` | on click | read-only (with advanced filters, conditional formatting, selection stats & copy as Markdown / JSON) |
-| Word | `.docx` | on click | paged layout, `Ctrl/Cmd+F` search, CJK font aliases, double-click paragraph editing, interoperable OOXML comments & Markdown comment export |
-| Word (legacy) | `.doc` | on click | **text only**, with zoom, `Ctrl/Cmd+F` search, word/paragraph stats & open in system app |
-| PDF | `.pdf` | on click | page restructuring (saveable `90°` rotation, delete/reorder/extract/merge pages), text-selection `/Highlight` marker & quote comments, ISO 32000 box/pin annotations & Markdown comment export |
-| PowerPoint | `.pptx` | on click | native slide aspect ratio, Speaker Notes (`notesSlide` view & edit), `F5` fullscreen presentation with virtual laser pointer, cross-slide search, shape text editing & OOXML comments |
-| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click (`.svg` live-syncs split source) | 15×11 pixel loupe (RGB/HEX/HSL, recent swatches, copy image to clipboard), labeled BBoxes with **YOLO / COCO / LabelMe** import & export, visual Image Diff (slider / onion / pixel heatmap), markup & mosaic redaction brush, rotate/flip/resize/crop & format conversion |
-| EPUB Books | `.epub` | on click | offline EPUB 2/3 TOC, chapters & embedded images with DocsView themes, zoom & search |
-| Archives | `.zip` `.tar` `.tar.gz` `.tgz` | on click | instant directory tree, compression ratio stats, inline text/image preview & one-click extract |
+| Markdown | `.md` `.markdown` | preview button in the editor title | GitHub-style rendering, YAML frontmatter property card, Alerts, task checkboxes, Mermaid lightbox, `.pdf#page=N` / `.pptx#slide=N` deep links, `F5` slide deck, `Ctrl/Cmd+V` image paste to `assets/`, KaTeX, outline & scroll sync |
+| CSV / TSV / JSONL | `.csv` `.tsv` `.jsonl` `.ndjson` | preview button in the editor title | table / split / text views, **JSONL Record Inspector drawer (nested JSON tree & write-back)**, CSV/Excel ↔ JSONL conversion, multi-select & numeric filters, `Ctrl/Cmd+H` replace, conditional formatting, ISO date & formula autofill |
+| Excel | `.xlsx` `.xlsm` | on click | styles, merged cells, multi-select & numeric filters, formula-safe `Ctrl/Cmd+H` replace, conditional formatting, drag series/date/formula autofill, copy as Markdown / JSON, convert to CSV/TSV/JSONL, `fx` formula bar & multi-sheet editing |
+| Excel (legacy) | `.xls` `.ods` | on click | read-only (with advanced filters, conditional formatting, selection stats & convert to `.xlsx` / `.jsonl`) |
+| Word | `.docx` | on click | paged layout, **one-click Export to Markdown (`.md`)**, `Ctrl/Cmd+F` search, CJK font aliases, double-click paragraph editing, interoperable OOXML comments & Markdown comment export |
+| Word (legacy) | `.doc` | on click | **text only**, with zoom, `Ctrl/Cmd+F` search, **export as `.md`**, word/paragraph stats & open in system app |
+| PDF | `.pdf` | on click | page restructuring (`90°` rotation, delete/reorder/extract/merge), multi-quad per-line `/Highlight` & quote comments, rotation-aware ISO 32000 box/pin annotations & Markdown comment export |
+| PowerPoint | `.pptx` | on click | native slide aspect ratio, **one-click Export to Markdown (`.md`)**, Speaker Notes & `F5` fullscreen teleprompter + virtual laser pointer, cross-slide search, shape text editing & OOXML comments |
+| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click (`.svg` live-syncs split source) | 15×11 pixel loupe, **EXIF / PNG DPI / AI prompt metadata inspector**, **`[` / `]` folder dataset stepping & sibling YOLO/COCO auto-load**, Image Diff, markup & mosaic brush, rotate/flip/resize/crop & format conversion |
+| EPUB Books | `.epub` | on click | offline EPUB 2/3 TOC, cross-chapter links & embedded images with DocsView themes, fluid width, **Export to Markdown (`.md`)**, zoom & search |
+| Archives | `.zip` `.vsix` `.whl` `.jar` `.apk` `.nupkg` `.tar` `.tar.gz` `.tgz` | on click | instant directory tree (GNU LongLink / PAX + zip-bomb & Zip-Slip guards), inline code/SVG/image preview, **double-click zero-dialog open** & Extract All |
 
 Markdown and CSV keep opening as text; use the preview icon in the editor title or **DocsView: Open Preview to the Side**. Use **Reopen Editor With…** to switch any file between DocsView and the text editor.
 

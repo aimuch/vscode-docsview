@@ -52,9 +52,17 @@ export class MarkdownSlideDeck {
   private active = false;
   private laserOn = false;
 
-  constructor(private readonly article: HTMLElement) {
+  constructor(
+    private readonly article: HTMLElement,
+    private readonly getScroller?: () => HTMLElement,
+  ) {
     window.addEventListener('keydown', (e) => {
-      if ((e.target as HTMLElement | null)?.closest('input, textarea')) {
+      if (
+        (e.target as HTMLElement | null)?.closest(
+          'input, textarea, select, button, [role="menu"], [role="dialog"], .dv-st-drawer',
+        ) ||
+        document.querySelector('.md-lightbox:not([hidden])')
+      ) {
         return;
       }
       if (e.key === 'F5' && !this.active) {
@@ -135,7 +143,31 @@ export class MarkdownSlideDeck {
       }
     });
     this.overlay.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement | null)?.closest('.dv-present-hud, a, button, .md-slide-card pre')) {
+      const target = e.target as HTMLElement | null;
+      const anchor = target?.closest<HTMLAnchorElement>('a[href]');
+      if (anchor) {
+        const href = anchor.getAttribute('href') ?? '';
+        if (href.startsWith('#')) {
+          e.preventDefault();
+          e.stopPropagation();
+          let id = href.slice(1);
+          try {
+            id = decodeURIComponent(id);
+          } catch {
+            // use raw id
+          }
+          const hitIdx = this.slides.findIndex((bucket) =>
+            bucket.some((n) => n.id === id || (id ? n.querySelector(`[id="${CSS.escape(id)}"]`) !== null : false)),
+          );
+          if (hitIdx >= 0) {
+            this.index = hitIdx;
+            this.renderCurrent();
+          }
+          return;
+        }
+        return;
+      }
+      if (target?.closest('.dv-present-hud, button, .md-slide-card pre')) {
         return;
       }
       this.step(1);
@@ -148,7 +180,18 @@ export class MarkdownSlideDeck {
       return;
     }
     this.ensureDom();
-    this.index = 0;
+    const scroller = this.getScroller?.();
+    let startIdx = 0;
+    if (scroller) {
+      const topThreshold = scroller.getBoundingClientRect().top + 80;
+      for (let i = 0; i < this.slides.length; i++) {
+        const firstNode = this.slides[i][0];
+        if (firstNode && firstNode.getBoundingClientRect().top <= topThreshold) {
+          startIdx = i;
+        }
+      }
+    }
+    this.index = startIdx;
     this.active = true;
     this.overlay!.hidden = false;
     this.renderCurrent();

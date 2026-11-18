@@ -15,10 +15,18 @@ describe('MarkdownRenderer', () => {
     expect(html).toContain('<pre data-line="7" data-line-end="10"><code class="language-js">');
   });
 
-  it('keeps line numbers correct after front matter', () => {
-    const { html } = renderer.render('---\ntitle: x\n---\n\n# Heading\n');
-    expect(html).toContain('<pre class="md-frontmatter" data-line="0"><code>title: x</code></pre>');
-    expect(html).toContain('<h1 data-line="4"');
+  it('keeps line numbers correct after front matter and renders property table or fallback', () => {
+    const { html } = renderer.render('---\ntitle: "Hello World"\ntags: [ai, docs]\n---\n\n# Heading\n');
+    expect(html).toContain('<div class="md-frontmatter" data-line="0" data-line-end="4"><table class="md-fm-table">');
+    expect(html).toContain('<th>title</th><td>Hello World</td>');
+    expect(html).toContain('<span class="md-fm-tag">ai</span>');
+    expect(html).toContain('<span class="md-fm-tag">docs</span>');
+    expect(html).toContain('<h1 data-line="5"');
+
+    // Complex multiline YAML falls back cleanly to <pre class="md-frontmatter">
+    const { html: fallback } = renderer.render('---\nsummary: |\n  line 1\n  line 2\n---\n\n# Next\n');
+    expect(fallback).toContain('<pre class="md-frontmatter" data-line="0" data-line-end="5"><code>');
+    expect(fallback).toContain('<h1 data-line="6"');
   });
 
   it('builds a table of contents with unique GitHub-style ids', () => {

@@ -5,6 +5,15 @@ import { snapshot } from '../history';
 import type { OfficeEditResult, OfficeFormat, OfficeSession } from '../office';
 import { configureWebview, debounce, handleCommonMessage, onWebviewMessage, parentUri, t } from '../webviewHtml';
 
+const pendingInitialPages = new Map<string, number>();
+
+/** Queues a 1-based page/slide number to jump to when `uri` opens or focuses (e.g. `spec.pdf#page=12`). */
+export function setPendingOfficePage(uri: vscode.Uri, page: number): void {
+  if (Number.isFinite(page) && page >= 1) {
+    pendingInitialPages.set(uri.toString(), Math.floor(page));
+  }
+}
+
 function defaultCommentAuthor(uri: vscode.Uri): string {
   const configured = vscode.workspace.getConfiguration('docsview', uri).get<string>('comments.author')?.trim();
   if (configured) {
@@ -104,10 +113,19 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
   }
 
   private sendCurrent(document: OfficeDocument, post: (m: HostMessage) => void): void {
+    const key = document.uri.toString();
+    const initialPage = pendingInitialPages.get(key);
+    if (initialPage !== undefined) {
+      pendingInitialPages.delete(key);
+    }
     if (document.loadError) {
       post({ type: 'error', message: document.loadError });
     } else if (document.session) {
-      post(document.session.loadMessage());
+      const msg = document.session.loadMessage();
+      if (msg.type === 'load' && initialPage !== undefined) {
+        msg.initialPage = initialPage;
+      }
+      post(msg);
     } else if (document.legacyDocText !== undefined) {
       post({ type: 'text', name: baseName(document.uri), body: document.legacyDocText });
     }
@@ -165,6 +183,32 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
             .catch((err: unknown) => {
               void vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err));
             });
+          return;
+        }
+        if (message.type === 'exportDocMarkdown' && document.session) {
+          const session = document.session;
+          const fmt = document.officeFormat;
+          void (async () => {
+            const { docxToMarkdown, pptxToMarkdown } = await import('../office');
+            const md =
+              fmt === 'docx'
+                ? docxToMarkdown(session.export())
+                : fmt === 'pptx'
+                  ? pptxToMarkdown(session.export(), baseName(document.uri))
+                  : '';
+            if (!md) return;
+            const stem = baseName(document.uri).replace(/\.[^.]+$/, '');
+            const target = await vscode.window.showSaveDialog({
+              defaultUri: vscode.Uri.joinPath(parentUri(document.uri), `${stem}.md`),
+              filters: { Markdown: ['md'] },
+            });
+            if (!target) return;
+            await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(md));
+            await vscode.commands.executeCommand('vscode.open', target);
+            void vscode.window.showInformationMessage(t('exportSaved', target.fsPath));
+          })().catch((err: unknown) =>
+            vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+          );
           return;
         }
         if (message.type === 'extractPdfPages' && document.officeFormat === 'pdf' && document.session) {

@@ -492,6 +492,12 @@ export function handleCommonMessage(
       void vscode.env.openExternal(uri);
       break;
     }
+    case 'openLink': {
+      if (kind !== 'markdown' && /^(?:https?:|mailto:)/i.test(message.href.trim())) {
+        void vscode.env.openExternal(vscode.Uri.parse(message.href.trim()));
+      }
+      break;
+    }
     case 'showSource':
       if (message.beside) {
         void openSplitPreview(uri, 'source');

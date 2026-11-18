@@ -312,17 +312,6 @@ body[data-theme='paper'] .markdown-body h2 {
   --alert-color: #f85149;
 }
 
-.md-statusbar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 2px 12px;
-  font-size: 11.5px;
-  border-top: 1px solid var(--dv-border);
-  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-}
-
 .markdown-body blockquote {
   padding: 0 1em;
   color: var(--md-muted);
@@ -373,6 +362,55 @@ body[data-theme='paper'] .markdown-body h2 {
   border: 1px dashed var(--md-border);
   background: transparent;
   color: var(--md-muted);
+}
+
+.markdown-body div.md-frontmatter {
+  margin: 0 0 1.4em;
+  border: 1px solid var(--md-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-code-bg) 72%, var(--md-bg));
+  overflow: hidden;
+  font-size: 0.88em;
+}
+
+.markdown-body table.md-fm-table {
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+}
+
+.markdown-body .md-fm-table th,
+.markdown-body .md-fm-table td {
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--md-border) 55%, transparent);
+  padding: 6px 12px;
+  background: transparent !important;
+  vertical-align: baseline;
+}
+
+.markdown-body .md-fm-table tr:last-child th,
+.markdown-body .md-fm-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-body .md-fm-table th {
+  width: 1%;
+  white-space: nowrap;
+  color: var(--md-muted);
+  font-weight: 600;
+}
+
+.markdown-body .md-fm-tag {
+  display: inline-block;
+  margin: 1px 4px 1px 0;
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--md-border);
+  background: var(--md-bg);
+  color: var(--md-fg);
+  font-size: 0.9em;
+  line-height: 1.4;
 }
 
 .md-copy {
@@ -658,15 +696,6 @@ body[data-theme='paper'].dv-dark .hljs-string {
   min-width: 34px;
 }
 
-::highlight(dv-find) {
-  background-color: rgba(255, 210, 0, 0.45);
-}
-
-::highlight(dv-find-current) {
-  background-color: rgba(255, 140, 0, 0.8);
-  color: #000;
-}
-
 /* ------------------------------------------------------------------ edit mode */
 
 .md-scroll:focus {
@@ -795,7 +824,10 @@ body[data-theme='paper'].dv-dark .hljs-string {
 
 .md-img-inspect-pill {
   position: fixed;
-  z-index: 160;
+  z-index: 25;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   height: 24px;
   padding: 0 9px;
   border-radius: 12px;
@@ -806,6 +838,11 @@ body[data-theme='paper'].dv-dark .hljs-string {
   font-weight: 600;
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.md-img-inspect-pill svg {
+  width: 12px;
+  height: 12px;
 }
 
 .md-img-inspect-pill[hidden] {

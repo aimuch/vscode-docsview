@@ -146,6 +146,7 @@ body {
 }
 
 .dv-btn {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -247,7 +248,8 @@ body {
   grid-auto-columns: minmax(0, 1fr);
 }
 
-.dv-input {
+.dv-input,
+.dv-select {
   box-sizing: border-box;
   font: inherit;
   color: var(--vscode-input-foreground);
@@ -258,9 +260,36 @@ body {
   height: 26px;
 }
 
-.dv-input:focus {
+.dv-select {
+  color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  border-color: var(--vscode-dropdown-border, var(--dv-input-border));
+}
+
+.dv-input:focus,
+.dv-select:focus {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
+}
+
+body.vscode-high-contrast .dv-btn.dv-active,
+body.vscode-high-contrast-light .dv-btn.dv-active,
+body.vscode-high-contrast .dv-seg-btn[aria-pressed='true'],
+body.vscode-high-contrast-light .dv-seg-btn[aria-pressed='true'] {
+  outline: 1px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  outline-offset: -1px;
+}
+
+.dv-statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 2px 12px;
+  font-size: 11.5px;
+  border-top: 1px solid var(--dv-border);
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 }
 
 .dv-search {
@@ -424,7 +453,7 @@ body {
 
 .dv-menu {
   position: fixed;
-  z-index: 100;
+  z-index: 130;
   box-sizing: border-box;
   width: 372px;
   max-width: calc(100vw - 16px);
@@ -908,6 +937,11 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
   filter: invert(0.92) hue-rotate(180deg);
 }
 
+/* Counter-invert UI annotation pins & badges inside inverted pages so colours stay crisp. */
+.dv-invert-pages .dv-page-invert :is(.dv-annot-pin, .dv-annot-tag, .docx-cm-pill) {
+  filter: invert(1) hue-rotate(180deg);
+}
+
 .dv-zoom,
 .dv-pager {
   flex: none;
@@ -932,8 +966,27 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
   display: flex;
 }
 
+.dv-more-btn.dv-more-compact {
+  padding: 0 5px;
+  gap: 2px;
+}
+
+.dv-more-caret {
+  display: inline-flex;
+  opacity: 0.72;
+}
+
+.dv-more-caret svg {
+  width: 11px;
+  height: 11px;
+}
+
 .dv-more-btn[aria-expanded=true] {
   border-color: var(--vscode-focusBorder);
+}
+
+.dv-overflow-popover {
+  z-index: 100;
 }
 
 .dv-more-menu {
@@ -988,18 +1041,18 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
 /* ------------------------------------------------------------------ toolbar zones & slots */
 
 .dv-zone {
+  flex: none;
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 6px 8px;
-  min-width: 0;
+  gap: 6px;
 }
 
 .dv-slot {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  min-width: 0;
 }
 
 /* ------------------------------------------------------------------ Settings Drawer (slide-over) */
@@ -1007,7 +1060,7 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
 .dv-st-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 98;
+  z-index: 300;
   background: rgba(0, 0, 0, 0.18);
 }
 
@@ -1016,7 +1069,7 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
   top: 0;
   right: 0;
   bottom: 0;
-  z-index: 99;
+  z-index: 301;
   width: min(500px, calc(100vw - 32px));
   box-sizing: border-box;
   display: flex;
@@ -1052,6 +1105,10 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
 }
 
 .dv-st-subtitle {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   padding: 2px 8px;
   border-radius: 10px;
@@ -1499,6 +1556,7 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
 }
 
 .dv-cm-card:hover .dv-cm-actions,
+.dv-cm-card:focus-within .dv-cm-actions,
 .dv-cm-card.dv-cm-active .dv-cm-actions {
   opacity: 1;
 }

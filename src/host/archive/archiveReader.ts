@@ -1,7 +1,12 @@
-// Pure ZIP & TAR/TGZ archive directory reader and on-demand single-entry extractor (`fflate`).
-// Parses ZIP Central Directory headers in O(entries) without decompressing payload streams!
-import { gunzipSync, unzipSync } from 'fflate';
+// Pure ZIP, VSIX/WHL/JAR & TAR/TGZ archive directory reader and safe extractor (`fflate`).
+// Parses ZIP Central Directory headers in O(entries) without decompressing payload streams,
+// enforces decompression size caps against zip/gzip bombs, and prevents Zip-Slip path traversal.
+import { Gunzip, unzipSync } from 'fflate';
 import type { ArchiveEntryInfo } from '../../common/protocol';
+
+export const MAX_GUNZIP_BYTES = 256 * 1024 * 1024;
+export const MAX_PREVIEW_ENTRY_BYTES = 32 * 1024 * 1024;
+export const MAX_EXTRACT_ALL_BYTES = 512 * 1024 * 1024;
 
 const IMAGE_MIME: Record<string, string> = {
   png: 'image/png',
@@ -19,20 +24,68 @@ const TEXT_EXTS = new Set([
   'md', 'markdown', 'txt', 'log', 'json', 'jsonl', 'ndjson', 'csv', 'tsv', 'xml', 'html', 'htm',
   'css', 'scss', 'less', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'rb', 'go', 'rs', 'java',
   'kt', 'swift', 'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'sh', 'zsh', 'bash', 'yml', 'yaml', 'toml',
-  'ini', 'cfg', 'conf', 'env', 'sql', 'graphql', 'svg', 'gitignore', 'vscodeignore',
+  'ini', 'cfg', 'conf', 'env', 'sql', 'graphql', 'svg', 'gitignore', 'vscodeignore', 'properties',
+  'mf', 'pom', 'gradle', 'lock', 'dockerfile', 'makefile',
 ]);
 
-function isTarName(name: string): boolean {
+export function isTarName(name: string): boolean {
   const lower = name.toLowerCase();
   return lower.endsWith('.tar') || lower.endsWith('.tar.gz') || lower.endsWith('.tgz');
 }
 
-function uncompressIfGzip(bytes: Uint8Array, name: string): Uint8Array {
-  const lower = name.toLowerCase();
-  if (lower.endsWith('.gz') || lower.endsWith('.tgz') || (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b)) {
-    return gunzipSync(bytes);
+/** Sanitises an archive path into a safe relative POSIX path, or `undefined` if Zip-Slip / absolute. */
+export function sanitizeArchiveRelativePath(rawPath: string): string | undefined {
+  const trimmedRaw = rawPath.trim();
+  if (!trimmedRaw || trimmedRaw.startsWith('/') || trimmedRaw.startsWith('\\') || /^[A-Za-z]:/.test(trimmedRaw)) {
+    return undefined;
   }
-  return bytes;
+  const norm = trimmedRaw.replace(/\\/g, '/');
+  const parts: string[] = [];
+  for (const seg of norm.split('/')) {
+    const trimmed = seg.trim();
+    if (!trimmed || trimmed === '.') {
+      continue;
+    }
+    if (trimmed === '..') {
+      if (parts.length === 0) {
+        return undefined;
+      }
+      parts.pop();
+      continue;
+    }
+    parts.push(trimmed.replace(/[\u0000-\u001f]/g, '_'));
+  }
+  return parts.length > 0 ? parts.join('/') : undefined;
+}
+
+/** Streams gzip decompression with a hard byte ceiling so gzip bombs cannot OOM the host. */
+export function uncompressIfGzip(bytes: Uint8Array, name: string, maxBytes = MAX_GUNZIP_BYTES): Uint8Array {
+  const lower = name.toLowerCase();
+  const isGz =
+    lower.endsWith('.gz') || lower.endsWith('.tgz') || (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b);
+  if (!isGz) {
+    return bytes;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const gz = new Gunzip((chunk) => {
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      throw new Error(`Uncompressed archive exceeds ${Math.round(maxBytes / (1024 * 1024))} MB safety limit.`);
+    }
+    chunks.push(chunk);
+  });
+  gz.push(bytes, true);
+  if (chunks.length === 1) {
+    return chunks[0];
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    merged.set(c, offset);
+    offset += c.byteLength;
+  }
+  return merged;
 }
 
 function dosDateTimeToIso(dosTime: number, dosDate: number): string | undefined {
@@ -46,7 +99,6 @@ function dosDateTimeToIso(dosTime: number, dosDate: number): string | undefined 
 }
 
 function listZipCentralDirectory(bytes: Uint8Array): ArchiveEntryInfo[] | undefined {
-  // Find End of Central Directory (EOCD) signature 0x06054b50 within last 65KB
   const minPos = Math.max(0, bytes.byteLength - 65557);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = -1;
@@ -65,7 +117,7 @@ function listZipCentralDirectory(bytes: Uint8Array): ArchiveEntryInfo[] | undefi
     return undefined;
   }
 
-  const decoder = new TextDecoder();
+  const utf8 = new TextDecoder('utf-8');
   const entries: ArchiveEntryInfo[] = [];
   let pos = cdOffset;
   const end = cdOffset + cdSize;
@@ -81,10 +133,10 @@ function listZipCentralDirectory(bytes: Uint8Array): ArchiveEntryInfo[] | undefi
     const nameLen = view.getUint16(pos + 28, true);
     const extraLen = view.getUint16(pos + 30, true);
     const commentLen = view.getUint16(pos + 32, true);
-    const path = decoder.decode(bytes.subarray(pos + 46, pos + 46 + nameLen));
-    const isDir = path.endsWith('/');
+    const rawName = utf8.decode(bytes.subarray(pos + 46, pos + 46 + nameLen)).replace(/\\/g, '/');
+    const isDir = rawName.endsWith('/');
     entries.push({
-      path: isDir ? path.slice(0, -1) : path,
+      path: isDir ? rawName.replace(/\/+$/, '') : rawName,
       isDir,
       size,
       compressedSize,
@@ -95,11 +147,27 @@ function listZipCentralDirectory(bytes: Uint8Array): ArchiveEntryInfo[] | undefi
   return entries;
 }
 
-function parseTarEntries(tarBytes: Uint8Array, collectPayloadFor?: string): { entries: ArchiveEntryInfo[]; payload?: Uint8Array } {
+function parsePaxPath(payload: Uint8Array, decoder: TextDecoder): string | undefined {
+  const text = decoder.decode(payload);
+  for (const line of text.split('\n')) {
+    const m = /^\d+\s+path=(.+)$/.exec(line);
+    if (m) {
+      return m[1];
+    }
+  }
+  return undefined;
+}
+
+function parseTarEntries(
+  tarBytes: Uint8Array,
+  collectPayloadFor?: string,
+  collectAll?: Map<string, Uint8Array>,
+): { entries: ArchiveEntryInfo[]; payload?: Uint8Array } {
   const entries: ArchiveEntryInfo[] = [];
   const decoder = new TextDecoder();
   let pos = 0;
   let foundPayload: Uint8Array | undefined;
+  let pendingLongName: string | undefined;
 
   while (pos + 512 <= tarBytes.byteLength) {
     const header = tarBytes.subarray(pos, pos + 512);
@@ -113,23 +181,53 @@ function parseTarEntries(tarBytes: Uint8Array, collectPayloadFor?: string): { en
     };
     const name = readStr(0, 100);
     const prefix = readStr(345, 155);
-    const fullName = (prefix ? `${prefix}/${name}` : name).replace(/^\.\//, '');
     const sizeOctal = readStr(124, 12);
     const size = parseInt(sizeOctal || '0', 8) || 0;
     const mtimeSec = parseInt(readStr(136, 12) || '0', 8) || 0;
     const typeFlag = header[156];
-    const isDir = typeFlag === 53 /* '5' */ || fullName.endsWith('/');
-    const cleanPath = isDir ? fullName.replace(/\/+$/, '') : fullName;
+    const dataStart = pos + 512;
+    const dataEnd = Math.min(tarBytes.byteLength, dataStart + size);
 
-    if (cleanPath && typeFlag !== 76 && typeFlag !== 120 && typeFlag !== 103) {
+    // GNU LongLink ('L' = 76) or PAX extended header ('x' = 120)
+    if (typeFlag === 76) {
+      pendingLongName = decoder.decode(tarBytes.subarray(dataStart, dataEnd)).replace(/\0+$/, '').trim();
+      pos += 512 + Math.ceil(size / 512) * 512;
+      continue;
+    }
+    if (typeFlag === 120) {
+      const paxPath = parsePaxPath(tarBytes.subarray(dataStart, dataEnd), decoder);
+      if (paxPath) {
+        pendingLongName = paxPath;
+      }
+      pos += 512 + Math.ceil(size / 512) * 512;
+      continue;
+    }
+
+    const rawFull = (pendingLongName ?? (prefix ? `${prefix}/${name}` : name)).replace(/\\/g, '/').replace(/^\.\//, '');
+    pendingLongName = undefined;
+
+    // Skip global PAX ('g'=103) and symlinks/hardlinks ('2'=50, '1'=49) when extracting files
+    const isSymlink = typeFlag === 50 || typeFlag === 49;
+    const isDir = typeFlag === 53 /* '5' */ || rawFull.endsWith('/');
+    const cleanPath = isDir ? rawFull.replace(/\/+$/, '') : rawFull;
+
+    if (cleanPath && typeFlag !== 103 && !isSymlink) {
       const dt = mtimeSec > 0 ? new Date(mtimeSec * 1000) : undefined;
       const pad = (n: number) => String(n).padStart(2, '0');
       const mtime = dt
         ? `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`
         : undefined;
       entries.push({ path: cleanPath, isDir, size, compressedSize: size, mtime });
-      if (collectPayloadFor && cleanPath === collectPayloadFor && !isDir) {
-        foundPayload = tarBytes.slice(pos + 512, pos + 512 + size);
+      if (!isDir) {
+        if (collectPayloadFor && cleanPath === collectPayloadFor) {
+          foundPayload = tarBytes.slice(dataStart, dataEnd);
+        }
+        if (collectAll) {
+          const safeRel = sanitizeArchiveRelativePath(cleanPath);
+          if (safeRel) {
+            collectAll.set(safeRel, tarBytes.slice(dataStart, dataEnd));
+          }
+        }
       }
     }
     pos += 512 + Math.ceil(size / 512) * 512;
@@ -140,18 +238,17 @@ function parseTarEntries(tarBytes: Uint8Array, collectPayloadFor?: string): { en
 export function inspectArchive(
   bytes: Uint8Array,
   fileName: string,
-): { totalSize: number; compressedTotal: number; entries: ArchiveEntryInfo[] } {
+): { totalSize: number; compressedTotal: number; entries: ArchiveEntryInfo[]; uncompressedTar?: Uint8Array } {
   if (isTarName(fileName)) {
     const rawTar = uncompressIfGzip(bytes, fileName);
     const { entries } = parseTarEntries(rawTar);
     const filesOnly = entries.filter((e) => !e.isDir);
     const totalSize = filesOnly.reduce((s, e) => s + e.size, 0);
-    // Attribute overall gzip compression ratio proportionally across entries
     const ratio = totalSize > 0 ? Math.min(1, bytes.byteLength / totalSize) : 1;
     for (const e of entries) {
       e.compressedSize = Math.round(e.size * ratio);
     }
-    return { totalSize, compressedTotal: bytes.byteLength, entries };
+    return { totalSize, compressedTotal: bytes.byteLength, entries, uncompressedTar: rawTar };
   }
 
   const cdEntries = listZipCentralDirectory(bytes);
@@ -164,13 +261,13 @@ export function inspectArchive(
     };
   }
 
-  // Fallback for zip64 / unusual streams via fflate unzipSync filter
   const fallback: ArchiveEntryInfo[] = [];
   unzipSync(bytes, {
     filter(file) {
-      const isDir = file.name.endsWith('/');
+      const norm = file.name.replace(/\\/g, '/');
+      const isDir = norm.endsWith('/');
       fallback.push({
-        path: isDir ? file.name.slice(0, -1) : file.name,
+        path: isDir ? norm.replace(/\/+$/, '') : norm,
         isDir,
         size: file.originalSize ?? file.size,
         compressedSize: file.size,
@@ -186,13 +283,69 @@ export function inspectArchive(
   };
 }
 
-export function extractArchiveEntryBytes(bytes: Uint8Array, fileName: string, entryPath: string): Uint8Array | undefined {
+export function extractArchiveEntryBytes(
+  bytes: Uint8Array,
+  fileName: string,
+  entryPath: string,
+  opts?: { cachedTar?: Uint8Array; maxBytes?: number },
+): Uint8Array | undefined {
   if (isTarName(fileName)) {
-    const rawTar = uncompressIfGzip(bytes, fileName);
-    return parseTarEntries(rawTar, entryPath).payload;
+    const rawTar = opts?.cachedTar ?? uncompressIfGzip(bytes, fileName);
+    const payload = parseTarEntries(rawTar, entryPath).payload;
+    if (payload && opts?.maxBytes && payload.byteLength > opts.maxBytes) {
+      return undefined;
+    }
+    return payload;
   }
-  const out = unzipSync(bytes, { filter: (f) => f.name === entryPath });
-  return out[entryPath];
+  let matchedKey: string | undefined;
+  const out = unzipSync(bytes, {
+    filter: (f) => {
+      const norm = f.name.replace(/\\/g, '/');
+      if (norm === entryPath) {
+        if (opts?.maxBytes && (f.originalSize ?? 0) > opts.maxBytes) {
+          return false;
+        }
+        matchedKey = f.name;
+        return true;
+      }
+      return false;
+    },
+  });
+  return matchedKey ? out[matchedKey] : undefined;
+}
+
+export function extractAllArchiveEntries(
+  bytes: Uint8Array,
+  fileName: string,
+  cachedTar?: Uint8Array,
+  maxTotalBytes = MAX_EXTRACT_ALL_BYTES,
+): Map<string, Uint8Array> {
+  const result = new Map<string, Uint8Array>();
+  if (isTarName(fileName)) {
+    const rawTar = cachedTar ?? uncompressIfGzip(bytes, fileName);
+    parseTarEntries(rawTar, undefined, result);
+    return result;
+  }
+  let runningTotal = 0;
+  const all = unzipSync(bytes, {
+    filter(f) {
+      if (f.name.endsWith('/') || f.name.endsWith('\\')) {
+        return false;
+      }
+      runningTotal += f.originalSize ?? f.size;
+      if (runningTotal > maxTotalBytes) {
+        throw new Error(`Archive exceeds ${Math.round(maxTotalBytes / (1024 * 1024))} MB extraction limit.`);
+      }
+      return true;
+    },
+  });
+  for (const [k, v] of Object.entries(all)) {
+    const safeRel = sanitizeArchiveRelativePath(k);
+    if (safeRel) {
+      result.set(safeRel, v);
+    }
+  }
+  return result;
 }
 
 export function classifyArchiveEntry(
@@ -204,11 +357,11 @@ export function classifyArchiveEntry(
   const dot = base.lastIndexOf('.');
   const ext = dot >= 0 ? base.slice(dot + 1).toLowerCase() : '';
 
-  if (IMAGE_MIME[ext] && ext !== 'svg') {
+  if (IMAGE_MIME[ext]) {
     return { kind: 'image', mime: IMAGE_MIME[ext], bytes: payload, size };
   }
 
-  const knownText = TEXT_EXTS.has(ext) || /^(?:readme|license|changelog|makefile|dockerfile)/i.test(base);
+  const knownText = TEXT_EXTS.has(ext) || /^(?:readme|license|changelog|makefile|dockerfile|manifest)/i.test(base);
   const maxTextPreview = 512 * 1024;
   if (knownText || size <= maxTextPreview) {
     const slice = payload.subarray(0, Math.min(size, maxTextPreview));

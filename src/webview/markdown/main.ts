@@ -6,6 +6,7 @@ import './markdown.css';
 import { app, el, errorText, isDark, onMessage, onThemeChange, post, t } from '../shared/api';
 import { getAppearance, highlightToggle, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
+import { icons } from '../shared/icons';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
 import { createFindWidget } from '../shared/find';
 import { customToolbar, iconButton, moreMenu, segmented, toggleButton } from '../shared/ui';
@@ -63,9 +64,10 @@ const findWidget = createFindWidget(find, scroller);
 /** Full Markdown source of the last render, split lazily only when editing a block in place. */
 let rawSource = '';
 let cachedSourceLines: string[] | undefined;
-let editing: { block: HTMLElement; box: HTMLElement } | undefined;
+let editing: { block: HTMLElement; box: HTMLElement; commit: () => number } | undefined;
 /** A render that arrived while a block was being edited; applied once editing ends. */
 let deferredRender: { html: string; toc: TocEntry[] } | undefined;
+const modEnterHint = /Mac|iPhone|iPad/i.test(navigator.platform) ? '⌘↵' : 'Ctrl+↵';
 
 function getSourceLines(): string[] {
   return (cachedSourceLines ??= rawSource.split(/\r?\n/));
@@ -122,7 +124,7 @@ function openEditor(block: HTMLElement) {
   textarea.value = text;
   textarea.spellcheck = false;
   textarea.setAttribute('aria-label', label);
-  const save = el('button', { class: 'dv-btn md-edit-save', text: `${t('save')} ⌘↵` });
+  const save = el('button', { class: 'dv-btn md-edit-save', text: `${t('save')} ${modEnterHint}` });
   save.type = 'button';
   const cancel = el('button', { class: 'dv-btn', text: `${t('cancel')} Esc` });
   cancel.type = 'button';
@@ -133,16 +135,19 @@ function openEditor(block: HTMLElement) {
     ]),
     textarea,
   ]);
-  const commit = () => {
+  const commit = (): number => {
     const value = textarea.value;
+    let nextLineCount = original.split('\n').length;
     if (value !== text) {
       const trailing = original.slice(text.length);
       const nextText = value === '' ? '' : value + trailing;
+      nextLineCount = nextText === '' ? 0 : nextText.split('\n').length;
       post({ type: 'editBlock', start, end: start + original.split('\n').length, text: nextText, expected: original });
     }
     closeEditor();
+    return Math.max(0, start + nextLineCount - 1);
   };
-  save.addEventListener('click', commit);
+  save.addEventListener('click', () => commit());
   cancel.addEventListener('click', closeEditor);
   textarea.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -161,7 +166,7 @@ function openEditor(block: HTMLElement) {
   textarea.addEventListener('input', fit);
   block.after(box);
   block.hidden = true;
-  editing = { block, box };
+  editing = { block, box, commit };
   fit();
   textarea.focus();
 }
@@ -212,9 +217,10 @@ const exportDropdown = moreMenu(
     { label: t('exportPdf'), hint: t('exportPdfHint'), onClick: () => exportAs('pdf') },
   ],
   'export',
+  { compact: true },
 );
 
-const slideDeck = new MarkdownSlideDeck(article);
+const slideDeck = new MarkdownSlideDeck(article, () => scroller);
 const slideModeBtn = iconButton('play', `${t('mdSlideMode')} (F5)`, () => slideDeck.open());
 const historyBtn = iconButton('history', t('slotHistory'), () => post({ type: 'history' }));
 
@@ -263,7 +269,7 @@ const topBar = customToolbar({
 });
 
 const statusLabel = el('span', { class: 'dv-label' });
-const mdStatusBar = el('div', { class: 'md-statusbar' }, [el('div', { class: 'dv-spacer' }), statusLabel]);
+const mdStatusBar = el('div', { class: 'dv-statusbar' }, [el('div', { class: 'dv-spacer' }), statusLabel]);
 
 scroller.tabIndex = -1;
 app.append(
@@ -288,8 +294,7 @@ window.addEventListener('paste', (e) => {
   const ext = file.type.includes('jpeg') ? 'jpg' : file.type.includes('webp') ? 'webp' : file.type.includes('gif') ? 'gif' : 'png';
   let insertAtLine: number | undefined;
   if (editing) {
-    insertAtLine = Number(editing.block.dataset.lineEnd);
-    closeEditor();
+    insertAtLine = editing.commit();
   }
   void file.arrayBuffer().then((buf) => {
     post({ type: 'pasteImage', bytes: new Uint8Array(buf), ext, insertAtLine });
@@ -300,7 +305,7 @@ window.addEventListener('paste', (e) => {
 let hoveredImgSrc = '';
 const inspectImgBtn = el('button', { class: 'md-img-inspect-pill', title: t('mdInspectImage') });
 inspectImgBtn.type = 'button';
-inspectImgBtn.textContent = '🔍 BBox / RGB';
+inspectImgBtn.innerHTML = `${icons.search}<span>${t('mdInspectImageShort')}</span>`;
 inspectImgBtn.hidden = true;
 inspectImgBtn.addEventListener('click', (e) => {
   e.preventDefault();

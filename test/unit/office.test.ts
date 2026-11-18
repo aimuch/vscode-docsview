@@ -384,4 +384,92 @@ describe('OfficeSession undo, redo, stale rejection & hot-exit backup', () => {
     expect(mdChecklist).toContain('- [ ] **#1** [Page 2]');
     expect(mdChecklist).toContain('> Sample PDF Page 1');
   });
+
+  it('maps rotated PDF annotations (0/90/180/270), multi-quad highlights, appendPdfBytes backup & DOCX/PPTX -> Markdown', async () => {
+    const {
+      docxToMarkdown,
+      pdfRectToVisualRect,
+      pptxToMarkdown,
+      visualRectToPdfRect,
+    } = await import('../../src/host/office');
+
+    // 1. Exact inverse across all 4 PDF /Rotate angles
+    const box = { x: 0, y: 0, width: 600, height: 800 };
+    const vis = { x: 0.15, y: 0.25, w: 0.4, h: 0.1 };
+    for (const angle of [0, 90, 180, 270]) {
+      const pdfR = visualRectToPdfRect(vis, box, angle);
+      const back = pdfRectToVisualRect(pdfR, box, angle);
+      expect(back.x).toBeCloseTo(vis.x, 4);
+      expect(back.y).toBeCloseTo(vis.y, 4);
+      expect(back.w).toBeCloseTo(vis.w, 4);
+      expect(back.h).toBeCloseTo(vis.h, 4);
+    }
+
+    // 2. Multi-quad /Highlight on a 90° rotated PDF page + appendPdfBytes hot-exit backup/restore
+    const basePdf = await makeSamplePdf();
+    const rotatedPdf = await applyPdfMutations(basePdf, [{ kind: 'rotatePdfPages', pages: [1], delta: 90 }]);
+    const quads = [
+      { x: 0.1, y: 0.2, w: 0.7, h: 0.03 },
+      { x: 0.1, y: 0.24, w: 0.45, h: 0.03 },
+    ];
+    const pdfSession = await OfficeSession.open('pdf', rotatedPdf, 'rot.pdf');
+    await pdfSession.apply({
+      kind: 'addComment',
+      page: 1,
+      text: 'Two-line highlight',
+      rect: { x: 0.1, y: 0.2, w: 0.7, h: 0.07 },
+      quads,
+      subtype: 'highlight',
+    });
+    await pdfSession.apply({ kind: 'appendPdfBytes', otherBytes: basePdf });
+    const backupStr = pdfSession.backup();
+    const restoredPdf = await OfficeSession.open('pdf', rotatedPdf, 'rot.pdf');
+    await restoredPdf.restore(backupStr);
+    expect((await PDFDocument.load(restoredPdf.export())).getPageCount()).toBe(4);
+    expect(restoredPdf.comments[0].quads).toHaveLength(2);
+    expect(restoredPdf.comments[0].quads![1].w).toBeCloseTo(0.45, 2);
+
+    // 3. DOCX -> Markdown & PPTX -> Markdown converters
+    const { Table, TableCell, TableRow } = await import('docx');
+    const richDoc = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({ text: '项目立项报告', heading: HeadingLevel.HEADING_1 }),
+            new Paragraph({ children: [new TextRun({ text: '核心结论', bold: true })] }),
+            new Paragraph({ text: '里程碑一', bullet: { level: 0 } }),
+            new Table({
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph('指标')] }),
+                    new TableCell({ children: [new Paragraph('数值')] }),
+                  ],
+                }),
+                new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph('达成率')] }),
+                    new TableCell({ children: [new Paragraph('108%')] }),
+                  ],
+                }),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    const richBuf = await Packer.toBuffer(richDoc);
+    const docxMd = docxToMarkdown(new Uint8Array(richBuf.buffer, richBuf.byteOffset, richBuf.byteLength));
+    expect(docxMd).toContain('# 项目立项报告');
+    expect(docxMd).toContain('**核心结论**');
+    expect(docxMd).toContain('- 里程碑一');
+    expect(docxMd).toContain('| 指标 | 数值 |');
+
+    const pptBytes = applyPptxMutations(await makeSamplePptx('LAYOUT_16x9'), [
+      { kind: 'editPptxNote', slideIndex: 0, text: 'Speaker cue 1' },
+    ]);
+    const pptMd = pptxToMarkdown(pptBytes);
+    expect(pptMd).toContain('## Slide 1');
+    expect(pptMd).toContain('Speaker cue 1');
+  });
 });

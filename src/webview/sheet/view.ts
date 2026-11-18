@@ -20,6 +20,8 @@ export interface SheetView {
   filters: Record<number, string>;
   /** Column → exact trimmed cell values allowed (`''` = blanks). `undefined` = all values allowed. */
   valueFilters?: Record<number, string[] | undefined>;
+  /** Column → exact trimmed cell values excluded (used when unchecking from a >200-unique list). */
+  excludedValues?: Record<number, string[] | undefined>;
   /** Column → numeric comparison filter. */
   numFilters?: Record<number, NumFilter | undefined>;
   /** Keep the first row in place (a header). Ignored when the sheet has frozen rows. */
@@ -27,7 +29,7 @@ export interface SheetView {
 }
 
 export function emptyView(): SheetView {
-  return { filters: {}, valueFilters: {}, numFilters: {}, headerRow: true };
+  return { filters: {}, valueFilters: {}, excludedValues: {}, numFilters: {}, headerRow: true };
 }
 
 export function hasColumnFilter(view: SheetView, col: number): boolean {
@@ -35,6 +37,9 @@ export function hasColumnFilter(view: SheetView, col: number): boolean {
     return true;
   }
   if (view.valueFilters?.[col] !== undefined) {
+    return true;
+  }
+  if (view.excludedValues?.[col]?.length) {
     return true;
   }
   if (view.numFilters?.[col] !== undefined) {
@@ -48,6 +53,9 @@ export function hasAnyFilter(view: SheetView): boolean {
     return true;
   }
   if (view.valueFilters && Object.values(view.valueFilters).some((v) => v !== undefined)) {
+    return true;
+  }
+  if (view.excludedValues && Object.values(view.excludedValues).some((v) => Boolean(v?.length))) {
     return true;
   }
   if (view.numFilters && Object.values(view.numFilters).some((v) => v !== undefined)) {
@@ -126,6 +134,14 @@ export function viewRows(rows: Cell[][], dataRows: number, fixed: number, view: 
       .map(([c, arr]) => [Number(c), new Set(arr!)] as const);
     if (valSets.length) {
       body = body.filter((r) => valSets.every(([c, set]) => set.has(text(rows[r]?.[c]).trim())));
+    }
+  }
+  if (view.excludedValues) {
+    const exSets = Object.entries(view.excludedValues)
+      .filter(([, arr]) => Boolean(arr?.length))
+      .map(([c, arr]) => [Number(c), new Set(arr!)] as const);
+    if (exSets.length) {
+      body = body.filter((r) => exSets.every(([c, set]) => !set.has(text(rows[r]?.[c]).trim())));
     }
   }
   if (view.numFilters) {
@@ -434,16 +450,95 @@ function colIndexToLetters(index: number): string {
   return name;
 }
 
-/** Shifts unanchored (`$`) A1 cell references in a formula by `(dr, dc)`. */
+/**
+ * Shifts unanchored (`$`) A1 cell references in a formula by `(dr, dc)`, skipping string
+ * literals (`"..."`) and sheet prefixes (`Sheet1!` or `'Sales Q1'!`) so cross-sheet names
+ * like `=Q1!A2` never mutate into `=Q2!A3`.
+ */
 export function shiftFormulaRefs(formula: string, dr: number, dc: number): string {
   if (!formula.startsWith('=') || (dr === 0 && dc === 0)) {
     return formula;
   }
-  return formula.replace(/(\$?)([A-Za-z]{1,3})(\$?)([1-9]\d*)(?![A-Za-z0-9_(])/g, (_m, absC: string, col: string, absR: string, row: string) => {
-    const nextC = absC ? colLettersToIndex(col) : Math.max(0, colLettersToIndex(col) + dc);
-    const nextR = absR ? Number(row) : Math.max(1, Number(row) + dr);
-    return `${absC}${colIndexToLetters(nextC)}${absR}${nextR}`;
-  });
+  let out = '=';
+  let i = 1;
+  const len = formula.length;
+  while (i < len) {
+    const ch = formula[i];
+    if (ch === '"') {
+      let end = i + 1;
+      while (end < len) {
+        if (formula[end] === '"') {
+          if (formula[end + 1] === '"') {
+            end += 2;
+            continue;
+          }
+          end++;
+          break;
+        }
+        end++;
+      }
+      out += formula.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === "'") {
+      let end = i + 1;
+      while (end < len) {
+        if (formula[end] === "'") {
+          if (formula[end + 1] === "'") {
+            end += 2;
+            continue;
+          }
+          end++;
+          break;
+        }
+        end++;
+      }
+      out += formula.slice(i, end);
+      i = end;
+      continue;
+    }
+    const prev = i > 1 ? formula[i - 1] : '';
+    if (!/[A-Za-z0-9_.]/.test(prev)) {
+      const m = /^(\$?)([A-Za-z]{1,3})(\$?)([1-9]\d*)/.exec(formula.slice(i));
+      if (m) {
+        const afterIdx = i + m[0].length;
+        const nextCh = afterIdx < len ? formula[afterIdx] : '';
+        if (!/[A-Za-z0-9_(!]/.test(nextCh)) {
+          const [, absC, col, absR, row] = m;
+          const nextC = absC ? colLettersToIndex(col) : Math.max(0, colLettersToIndex(col) + dc);
+          const nextR = absR ? Number(row) : Math.max(1, Number(row) + dr);
+          out += `${absC}${colIndexToLetters(nextC)}${absR}${nextR}`;
+          i = afterIdx;
+          continue;
+        }
+      }
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+function parseIsoDateUtc(rawStr: string): number | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(rawStr.trim());
+  if (!m) return undefined;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) {
+    return undefined;
+  }
+  return dt.getTime();
+}
+
+function formatIsoDateUtc(ms: number): string {
+  const dt = new Date(ms);
+  const y = String(dt.getUTCFullYear()).padStart(4, '0');
+  const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(dt.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 function extrapolateSeries(values: string[], stepOffset: number, drPerStep: number, dcPerStep: number): string {
@@ -461,7 +556,21 @@ function extrapolateSeries(values: string[], stepOffset: number, drPerStep: numb
     return shiftFormulaRefs(baseVal, deltaSteps * drPerStep, deltaSteps * dcPerStep);
   }
 
-  // 2. Multi-cell numeric progression (e.g. [1, 2] -> 3, 4 or [10, 20] -> 30).
+  // 2. ISO calendar dates (YYYY-MM-DD): advance real calendar days ("2026-01-30" -> "2026-01-31", "2026-02-01").
+  const baseDateMs = parseIsoDateUtc(baseVal);
+  if (baseDateMs !== undefined) {
+    const DAY = 86_400_000;
+    if (n >= 2) {
+      const parsedAll = values.map(parseIsoDateUtc);
+      if (parsedAll.every((v): v is number => v !== undefined)) {
+        const dayStep = Math.round((parsedAll[n - 1] - parsedAll[0]) / DAY / (n - 1));
+        return formatIsoDateUtc(parsedAll[0] + stepOffset * dayStep * DAY);
+      }
+    }
+    return formatIsoDateUtc(baseDateMs + cycles * DAY);
+  }
+
+  // 3. Multi-cell numeric progression (e.g. [1, 2] -> 3, 4 or [10, 20] -> 30).
   if (n >= 2 && values.every((v) => v.trim() !== '' && /^-?\d+(\.\d+)?$/.test(v.trim()))) {
     const nums = values.map((v) => Number(v.trim()));
     const diff = (nums[n - 1] - nums[0]) / (n - 1);

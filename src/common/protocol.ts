@@ -70,12 +70,16 @@ export interface WorkbookInfo {
   sheets: { name: string }[];
   /** Cell values can be edited. */
   editable: boolean;
-  /** Rows/columns can be inserted and deleted (CSV and editable xlsx/xlsm). */
+  /** Rows/columns can be inserted and deleted (CSV, JSONL and editable xlsx/xlsm). */
   canStructure: boolean;
   /** Sheets can be added, renamed and deleted (editable xlsx/xlsm). */
   canManageSheets?: boolean;
-  /** Backed by a plain-text file (CSV/TSV), enabling the Table/Text switch. */
+  /** Backed by a plain-text file (CSV/TSV/JSONL), enabling the Table/Text switch. */
   hasSource?: boolean;
+  /** Whether cells support `=formula` evaluation (`false` for JSONL). */
+  supportsFormulas?: boolean;
+  /** True when backed by `.jsonl` / `.ndjson` records (enables Record JSON Inspector & schema row semantics). */
+  isJsonl?: boolean;
   /** Informational banner, as a string key so the webview can show it in the current UI language. */
   noticeKey?: StringKey;
 }
@@ -103,6 +107,8 @@ export interface DocComment {
   quote?: string;
   /** Normalised [0..1] box/pin coordinates on the page or slide. */
   rect?: { x: number; y: number; w: number; h: number };
+  /** Normalised [0..1] per-line highlight rectangles for multi-line PDF text highlights. */
+  quads?: { x: number; y: number; w: number; h: number }[];
   color?: string;
   subtype?: 'pin' | 'box' | 'highlight';
 }
@@ -116,6 +122,7 @@ export type DocMutation =
       pIndex?: number;
       quote?: string;
       rect?: { x: number; y: number; w: number; h: number };
+      quads?: { x: number; y: number; w: number; h: number }[];
       color?: string;
       subtype?: 'pin' | 'box' | 'highlight';
     }
@@ -283,6 +290,8 @@ export const DEFAULT_TOOLBAR: ToolbarConfig = {
     'comments',
     'highlight',
     'structure',
+    'actions',
+    'theme',
     'openApp',
   ],
   right: [],
@@ -327,6 +336,10 @@ export type HostMessage =
       pptxShapes?: string[][];
       pptxNotes?: string[];
       slideAspect?: number;
+      byteLength?: number;
+      siblingIndex?: number;
+      siblingCount?: number;
+      initialPage?: number;
     }
   | { type: 'comments'; comments: DocComment[]; docxParagraphs?: string[]; pptxNotes?: string[] }
   | { type: 'text'; name: string; body: string }
@@ -390,7 +403,13 @@ export type WebviewMessage =
   /** Markdown: replace source lines [start, end) with `text`. */
   | { type: 'editBlock'; start: number; end: number; text: string; expected: string }
   /** Sheets: save a copy of sheet `index` in another format. */
-  | { type: 'convert'; index: number; format: 'csv' | 'tsv' | 'xlsx' }
+  | { type: 'convert'; index: number; format: 'csv' | 'tsv' | 'xlsx' | 'jsonl' }
+  /** JSONL: replace an entire record object (from the Record JSON Inspector) at 0-based `recordIndex`. */
+  | { type: 'editJsonlRecord'; recordIndex: number; jsonText: string }
+  /** Image: step to previous/next sibling image in the same directory (`[` / `]`). */
+  | { type: 'stepFolderImage'; delta: -1 | 1 }
+  /** Office (.docx / .pptx): convert document content to a clean Markdown `.md` file. */
+  | { type: 'exportDocMarkdown' }
   /** Image: replace current image bytes in-place (e.g. crop), backed by VS Code undo/redo & save. */
   | { type: 'imageReplace'; bytes: Uint8Array; label?: string }
   /** Image: save a converted or cropped copy to a user-chosen path. */
@@ -415,8 +434,12 @@ export type WebviewMessage =
   | { type: 'mergePdfs' }
   /** Archive: preview an entry inside a ZIP/TAR archive. */
   | { type: 'previewArchiveEntry'; path: string }
-  /** Archive: extract an entry to disk and open it in VS Code. */
+  /** Archive: extract an entry to a session temp folder and open immediately in VS Code (double-click). */
+  | { type: 'openArchiveEntryTemp'; path: string }
+  /** Archive: extract an entry to a user-chosen disk path and open it in VS Code. */
   | { type: 'extractArchiveEntry'; path: string }
+  /** Archive: extract all archive contents into a user-chosen directory. */
+  | { type: 'extractAllArchive' }
   /** Sent once per load: the document is on screen, or could not be rendered. */
   | { type: 'status'; ok: boolean; detail?: string };
 

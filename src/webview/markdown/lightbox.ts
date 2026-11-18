@@ -57,6 +57,9 @@ async function exportCurrentPng2x(width: number, height: number): Promise<void> 
   canvas.height = Math.max(1, height * 2);
   const ctx = canvas.getContext('2d')!;
   ctx.scale(2, 2);
+  const bg = getComputedStyle(document.body).getPropertyValue('--md-bg').trim() || '#ffffff';
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
   ctx.drawImage(img, 0, 0, width, height);
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
@@ -94,7 +97,7 @@ function ensureModal(): HTMLElement {
   const exportPngBtn = el('button', { class: 'dv-btn dv-cm-primary', text: t('mdExportPng') });
   exportPngBtn.type = 'button';
   exportPngBtn.addEventListener('click', () => {
-    void exportCurrentPng2x(currentDims.width, currentDims.height);
+    void exportCurrentPng2x(currentDims.width, currentDims.height).catch(() => undefined);
   });
 
   const bar = el('div', { class: 'dv-present-hud md-lightbox-hud' }, [
@@ -109,7 +112,7 @@ function ensureModal(): HTMLElement {
     }),
     exportSvgBtn,
     exportPngBtn,
-    iconButton('close', t('cancel'), () => closeMermaidLightbox()),
+    iconButton('close', t('close'), () => closeMermaidLightbox()),
   ]);
 
   modal = el('div', { class: 'md-lightbox' }, [canvasStage, bar]);
@@ -150,6 +153,7 @@ function ensureModal(): HTMLElement {
   window.addEventListener('keydown', (e) => {
     if (modal && !modal.hidden && e.key === 'Escape') {
       e.preventDefault();
+      e.stopPropagation();
       closeMermaidLightbox();
     }
   });

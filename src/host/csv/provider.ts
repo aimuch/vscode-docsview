@@ -112,11 +112,13 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
             const format = message.format;
             const currentEol = eol();
             const run = async () => {
-              const { rowsToDelimited, rowsToXlsx } = await import('../spreadsheet');
+              const { rowsToDelimited, rowsToJsonl, rowsToXlsx } = await import('../spreadsheet');
               const bytes =
                 format === 'xlsx'
                   ? await rowsToXlsx(rows, name)
-                  : new TextEncoder().encode(rowsToDelimited(rows, format, currentEol));
+                  : format === 'jsonl'
+                    ? new TextEncoder().encode(rowsToJsonl(rows, currentEol))
+                    : new TextEncoder().encode(rowsToDelimited(rows, format, currentEol));
               await saveConverted(document.uri, format, bytes);
             };
             void run().catch((err: unknown) =>

@@ -3,7 +3,7 @@ import '../shared/base.css';
 import './text.css';
 import { app, el, onMessage, post, showStatus, t } from '../shared/api';
 import { createFindWidget, PreviewFind } from '../shared/find';
-import { customToolbar, noticeBanner, openExternalButton, openExternalMenuItem } from '../shared/ui';
+import { customToolbar, iconButton, noticeBanner, openExternalButton, openExternalMenuItem } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 
 const notice = noticeBanner(t('docNotice'));
@@ -16,8 +16,15 @@ const docFind = new PreviewFind(page, stage);
 const findWidget = createFindWidget(docFind, stage);
 const zoom = createZoom((value) => page.style.setProperty('zoom', String(value)), stage);
 
+let currentBody = '';
+const exportMdBtn = iconButton('export', t('exportMarkdown'), () => {
+  if (currentBody) {
+    post({ type: 'saveTextExport', ext: 'md', content: currentBody });
+  }
+});
+
 const statusText = el('span', { class: 'dv-label' });
-const statusBar = el('div', { class: 'text-statusbar' }, [el('div', { class: 'dv-spacer' }), statusText]);
+const statusBar = el('div', { class: 'dv-statusbar' }, [el('div', { class: 'dv-spacer' }), statusText]);
 
 app.append(
   customToolbar({
@@ -25,9 +32,21 @@ app.append(
     slots: [
       { id: 'zoom', nodes: zoom.nodes },
       { id: 'find', nodes: findWidget.nodes },
+      { id: 'actions', nodes: [exportMdBtn] },
       { id: 'openApp', nodes: [openExternalButton()] },
     ],
-    documentActions: [openExternalMenuItem()],
+    documentActions: [
+      openExternalMenuItem(),
+      {
+        label: t('exportMarkdown'),
+        icon: 'export',
+        onClick: () => {
+          if (currentBody) {
+            post({ type: 'saveTextExport', ext: 'md', content: currentBody });
+          }
+        },
+      },
+    ],
   }).node,
   notice.node,
   stage,
@@ -37,6 +56,7 @@ showStatus(page, t('loading'));
 
 onMessage((message) => {
   if (message.type === 'text') {
+    currentBody = message.body;
     const lines = message.body.split('\n');
     const paragraphs = lines.map((line) => {
       const p = el('p', { text: line });

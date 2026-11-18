@@ -227,7 +227,11 @@ export class ExcelSession {
     if (!s) {
       return undefined;
     }
+    const firstVisit = !this.materializedSheets.has(s);
     this.materializedSheets.add(s);
+    if (firstVisit && this.history.length > 0) {
+      this.recalculate(index);
+    }
     return s.model;
   }
 

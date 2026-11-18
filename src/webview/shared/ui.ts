@@ -218,14 +218,29 @@ export interface MenuItem {
 }
 
 /** A compact button with a drop-down menu of actions. Items are re-evaluated on every open. */
-export function moreMenu(label: string, items: (MenuItem | '-')[], icon: IconName = 'more'): HTMLElement {
-  const button = el('button', { class: 'dv-btn dv-more-btn', title: label });
+export function moreMenu(
+  label: string,
+  items: (MenuItem | '-')[],
+  icon: IconName = 'more',
+  opts: { compact?: boolean } = {},
+): HTMLElement {
+  const button = el('button', {
+    class: opts.compact ? 'dv-btn dv-more-btn dv-more-compact' : 'dv-btn dv-more-btn',
+    title: label,
+  });
   button.type = 'button';
+  button.setAttribute('aria-label', label);
   button.setAttribute('aria-haspopup', 'menu');
   button.setAttribute('aria-expanded', 'false');
   const iconHolder = el('span', { class: 'dv-more-icon' });
   iconHolder.innerHTML = icons[icon];
-  button.append(iconHolder, el('span', { text: label }));
+  if (opts.compact) {
+    const caret = el('span', { class: 'dv-more-caret' });
+    caret.innerHTML = icons.chevronDown;
+    button.append(iconHolder, caret);
+  } else {
+    button.append(iconHolder, el('span', { text: label }));
+  }
 
   const menu = el('div', { class: 'dv-menu dv-more-menu' });
   menu.setAttribute('role', 'menu');
@@ -292,8 +307,11 @@ export function moreMenu(label: string, items: (MenuItem | '-')[], icon: IconNam
     button.setAttribute('aria-expanded', 'true');
     document.addEventListener('mousedown', onOutside);
     const rect = button.getBoundingClientRect();
-    menu.style.top = `${rect.bottom + 6}px`;
-    menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    const mw = menu.offsetWidth || 270;
+    const mh = menu.offsetHeight || 220;
+    menu.style.left = `${Math.max(8, Math.min(window.innerWidth - mw - 8, rect.right - mw))}px`;
+    menu.style.right = 'auto';
+    menu.style.top = `${Math.max(8, Math.min(window.innerHeight - mh - 8, rect.bottom + 6))}px`;
     menu.querySelector<HTMLElement>('.dv-menu-item')?.focus();
   });
   menu.addEventListener('keydown', (e) => {
@@ -434,7 +452,7 @@ export interface CustomToolbar {
   dispose(): void;
 }
 
-const PAGED_KINDS = new Set(['docx', 'pdf', 'pptx', 'text']);
+const PAGED_KINDS = new Set(['docx', 'pdf', 'text']);
 
 export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
   const slotMap = new Map<ToolbarItemId, { spec: ToolbarSlot; wrap: HTMLElement }>();
@@ -451,7 +469,7 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     register(s);
   }
   // Automatically register shared appearance/language slots supported by this viewer.
-  if (config.kind === 'markdown') {
+  if (config.kind === 'markdown' || config.kind === 'epub') {
     register({ id: 'width', nodes: [mdWidthToggle()] });
     register({ id: 'theme', nodes: [themeToolbarButton()] });
   }

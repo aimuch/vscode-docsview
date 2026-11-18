@@ -21,6 +21,9 @@ const escapeHtml = (s: string) =>
 
 const DANGEROUS_PAIRED = /<(script|iframe|frameset|object|applet)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const DANGEROUS_TAGS = /<\/?(?:script|iframe|frame|frameset|object|embed|applet|base|meta|link|form)\b[^>]*>/gi;
+const STYLE_PAIRED = /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi;
+const STYLE_TAGS = /<\/?style\b[^>]*>/gi;
+const TAG_OPEN_RE = /<([a-zA-Z][\w:-]*)(\s+(?:[^>"'/]|"[^"]*"|'[^']*'|\/(?!>))*)?\s*(\/?)>/g;
 const ATTR_RE = /([^\s=/>"']+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 
 function decodeEntities(raw: string): string {
@@ -32,7 +35,14 @@ function decodeEntities(raw: string): string {
     .replace(/&newline;/gi, '\n');
 }
 
-function isUnsafeUrl(attrName: string, value: string): boolean {
+export interface SanitizeHtmlOptions {
+  /** Strip `<style>` blocks and `position: fixed` inline declarations (for untrusted EPUB chapters). */
+  stripStyles?: boolean;
+  /** Allow raster `data:image/*` on SVG `<image href/xlink:href>` (for EPUB SVG cover wrappers). */
+  allowSvgImageData?: boolean;
+}
+
+function isUnsafeUrl(tagLower: string, attrName: string, value: string, opts?: SanitizeHtmlOptions): boolean {
   const normalized = decodeEntities(value).replace(/[\u0000-\u0020]+/g, '').toLowerCase();
   if (normalized.startsWith('javascript:') || normalized.startsWith('vbscript:')) {
     return true;
@@ -41,6 +51,13 @@ function isUnsafeUrl(attrName: string, value: string): boolean {
     if (attrName === 'src') {
       return !/^data:(?:image|audio|video)\//i.test(normalized);
     }
+    if (
+      opts?.allowSvgImageData &&
+      (tagLower === 'image' || tagLower.endsWith(':image')) &&
+      (attrName === 'href' || attrName === 'xlink:href')
+    ) {
+      return !/^data:image\/(?:png|jpe?g|gif|webp|bmp|avif|x-icon)\b/i.test(normalized);
+    }
     return true;
   }
   return false;
@@ -48,19 +65,23 @@ function isUnsafeUrl(attrName: string, value: string): boolean {
 
 /**
  * Strips executable markup (scripts, active embeds, event handlers and javascript:/data:
- * navigation URLs) from rendered Markdown HTML before writing a standalone file.
+ * navigation URLs) from rendered HTML before displaying or writing a standalone file.
  */
-export function sanitizeExportHtml(html: string): string {
+export function sanitizeExportHtml(html: string, opts?: SanitizeHtmlOptions): string {
   let prev = '';
   let clean = html;
   while (clean !== prev) {
     prev = clean;
     clean = clean.replace(DANGEROUS_PAIRED, '').replace(DANGEROUS_TAGS, '');
+    if (opts?.stripStyles) {
+      clean = clean.replace(STYLE_PAIRED, '').replace(STYLE_TAGS, '');
+    }
   }
-  return clean.replace(/<([a-zA-Z][\w:-]*)(\s[^>]*?)?(\/?)>/g, (whole, tag: string, attrs: string | undefined, selfClose: string) => {
+  return clean.replace(TAG_OPEN_RE, (whole, tag: string, attrs: string | undefined, selfClose: string) => {
     if (!attrs) {
       return whole;
     }
+    const tagLower = tag.toLowerCase();
     const kept: string[] = [];
     for (const m of attrs.matchAll(ATTR_RE)) {
       const name = m[1];
@@ -68,18 +89,24 @@ export function sanitizeExportHtml(html: string): string {
       if (lower.startsWith('on') || lower === 'srcdoc') {
         continue;
       }
-      const val = m[2] ?? m[3] ?? m[4];
-      if (val !== undefined && (lower === 'href' || lower === 'src' || lower === 'xlink:href' || lower === 'action' || lower === 'formaction')) {
-        if (isUnsafeUrl(lower, val)) {
+      let val = m[2] ?? m[3] ?? m[4];
+      if (
+        val !== undefined &&
+        (lower === 'href' || lower === 'src' || lower === 'xlink:href' || lower === 'action' || lower === 'formaction')
+      ) {
+        if (isUnsafeUrl(tagLower, lower, val, opts)) {
           continue;
         }
       }
+      if (opts?.stripStyles && lower === 'style' && val !== undefined) {
+        val = val.replace(/position\s*:\s*(?:fixed|sticky)/gi, 'position: static');
+      }
       if (m[2] !== undefined) {
-        kept.push(`${name}="${m[2]}"`);
+        kept.push(`${name}="${val}"`);
       } else if (m[3] !== undefined) {
-        kept.push(`${name}='${m[3]}'`);
+        kept.push(`${name}='${val}'`);
       } else if (m[4] !== undefined) {
-        kept.push(`${name}=${m[4]}`);
+        kept.push(`${name}=${val}`);
       } else {
         kept.push(name);
       }

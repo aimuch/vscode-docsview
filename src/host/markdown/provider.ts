@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
+import { setPendingOfficePage } from '../office/provider';
 import { configureWebview, debounce, handleCommonMessage, parentUri, onWebviewMessage, t } from '../webviewHtml';
 import type { MarkdownRenderer } from './renderer';
 
@@ -58,6 +59,12 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
     // Each side ignores scroll events for a moment after it was scrolled programmatically,
     // otherwise the two views chase each other.
     let ignoreEditorScrollUntil = 0;
+    let editQueue: Promise<void> = Promise.resolve();
+    const enqueueEdit = (task: () => Promise<void>) => {
+      editQueue = editQueue.then(task).catch((err: unknown) => {
+        void vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err));
+      });
+    };
     const scrollSync = () =>
       vscode.workspace.getConfiguration('docsview', document.uri).get<boolean>('markdown.scrollSync', true);
 
@@ -94,16 +101,25 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
               .catch((err: unknown) => vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)));
             break;
           case 'editBlock':
-            void this.editBlock(document, message.start, message.end, message.text, message.expected);
+            enqueueEdit(() => this.editBlock(document, message.start, message.end, message.text, message.expected));
             break;
           case 'pasteImage': {
-            void (async () => {
+            enqueueEdit(async () => {
               const safeExt = /^(png|jpg|webp|gif)$/i.test(message.ext) ? message.ext.toLowerCase() : 'png';
               const assetsDir = vscode.Uri.joinPath(parentUri(document.uri), 'assets');
               await vscode.workspace.fs.createDirectory(assetsDir);
-              const stamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 15);
-              const fileName = `paste-${stamp}.${safeExt}`;
-              const fileUri = vscode.Uri.joinPath(assetsDir, fileName);
+              const stamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 17);
+              let fileName = `paste-${stamp}.${safeExt}`;
+              let fileUri = vscode.Uri.joinPath(assetsDir, fileName);
+              for (let suffix = 2; suffix < 100; suffix++) {
+                try {
+                  await vscode.workspace.fs.stat(fileUri);
+                  fileName = `paste-${stamp}-${suffix}.${safeExt}`;
+                  fileUri = vscode.Uri.joinPath(assetsDir, fileName);
+                } catch {
+                  break;
+                }
+              }
               const bytes =
                 message.bytes instanceof Uint8Array
                   ? message.bytes
@@ -119,9 +135,7 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
               const wsEdit = new vscode.WorkspaceEdit();
               wsEdit.insert(document.uri, pos, snippet);
               await vscode.workspace.applyEdit(wsEdit);
-            })().catch((err: unknown) =>
-              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
-            );
+            });
             break;
           }
           case 'inspectImage': {
@@ -231,6 +245,14 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
       : vscode.Uri.joinPath(parentUri(document.uri), decoded);
     try {
       await vscode.workspace.fs.stat(target);
+      const pageMatch = /^(?:page|slide)=(\d+)$/i.exec(fragment);
+      if (pageMatch && /\.(?:pdf|pptx)$/i.test(target.path)) {
+        const pageNum = Math.max(1, Number(pageMatch[1]));
+        setPendingOfficePage(target, pageNum);
+        const viewType = target.path.toLowerCase().endsWith('.pdf') ? 'docsview.pdf' : 'docsview.pptx';
+        await vscode.commands.executeCommand('vscode.openWith', target, viewType);
+        return;
+      }
       const lineMatch = /^L(\d+)(?:-L?(\d+))?$/i.exec(fragment);
       if (lineMatch) {
         const startLine = Math.max(0, Number(lineMatch[1]) - 1);

@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -161,7 +161,12 @@
           { "filenamePattern": "*.zip" },
           { "filenamePattern": "*.tar" },
           { "filenamePattern": "*.tar.gz" },
-          { "filenamePattern": "*.tgz" }
+          { "filenamePattern": "*.tgz" },
+          { "filenamePattern": "*.vsix" },
+          { "filenamePattern": "*.whl" },
+          { "filenamePattern": "*.jar" },
+          { "filenamePattern": "*.apk" },
+          { "filenamePattern": "*.nupkg" }
         ],
         "priority": "default"
       }
@@ -219,6 +224,11 @@
           "command": "docsview.showPreview",
           "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|jsonl|ndjson|svg)$/i",
           "group": "navigation@90"
+        },
+        {
+          "command": "docsview.showPreviewToSide",
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|jsonl|ndjson|svg)$/i",
+          "group": "navigation@91"
         }
       ],
       "commandPalette": [
@@ -402,6 +412,8 @@
               "comments",
               "highlight",
               "structure",
+              "actions",
+              "theme",
               "openApp"
             ],
             "right": []
