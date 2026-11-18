@@ -185,6 +185,7 @@ export type ToolbarItemId =
   | 'pager'
   | 'zoom'
   | 'width'
+  | 'transform'
   | 'bbox'
   | 'cellBar'
   | 'find'
@@ -207,6 +208,7 @@ export const ALL_TOOLBAR_ITEMS: readonly ToolbarItemId[] = [
   'pager',
   'zoom',
   'width',
+  'transform',
   'bbox',
   'cellBar',
   'find',
@@ -235,6 +237,7 @@ export const DEFAULT_TOOLBAR: ToolbarConfig = {
     'view',
     'pager',
     'zoom',
+    'transform',
     'bbox',
     'cellBar',
     'find',
@@ -286,7 +289,7 @@ export type HostMessage =
       pptxShapes?: string[][];
       slideAspect?: number;
     }
-  | { type: 'comments'; comments: DocComment[] }
+  | { type: 'comments'; comments: DocComment[]; docxParagraphs?: string[] }
   | { type: 'text'; name: string; body: string }
   /** `source` is the full Markdown text, for editing a block in place. */
   | { type: 'render'; html: string; toc: TocEntry[]; source: string }

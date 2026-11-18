@@ -250,6 +250,12 @@ const en = {
   mdWords: '{0} words',
   mdReadMin: '~{0} min read',
   mdLines: '{0} lines',
+  slotTransform: 'Transform & convert',
+  freezeFirstCol: 'Freeze first column',
+  copyAsMarkdown: 'Copy selection as Markdown table',
+  pdfRotateCW: 'Rotate pages 90°',
+  viewCanvas: 'Image',
+  docParagraphs: '{0} paragraphs',
 };
 
 const zh: typeof en = {
@@ -500,6 +506,12 @@ const zh: typeof en = {
   mdWords: '{0} 字',
   mdReadMin: '约 {0} 分钟阅读',
   mdLines: '{0} 行',
+  slotTransform: '变换与转换',
+  freezeFirstCol: '冻结首列',
+  copyAsMarkdown: '复制选区为 Markdown 表格',
+  pdfRotateCW: '顺时针旋转页面 90°',
+  viewCanvas: '图像',
+  docParagraphs: '{0} 段',
 };
 
 export type StringKey = keyof typeof en;

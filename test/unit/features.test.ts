@@ -11,6 +11,7 @@ import {
   emptyView,
   isActive,
   numericValue,
+  selectionToMarkdownTable,
   viewRows,
   type SheetView,
 } from '../../src/webview/sheet/view';
@@ -91,6 +92,22 @@ describe('sheet view', () => {
     expect(stats!.avg).toBeCloseTo(350.5 / 3);
     expect(stats!.min).toBeCloseTo(0.5);
     expect(stats!.max).toBe(250);
+
+    // GFM Markdown table export with pipe escaping, multiline <br> & numeric right-alignment
+    const mdRows: Cell[][] = [
+      ['Metric | Name', 'Q1 Value'],
+      ['Users\nActive', '1,250'],
+      ['Conversion', '12.5%'],
+    ];
+    const mdOut = selectionToMarkdownTable((r, c) => mdRows[r]?.[c], 0, 0, 2, 1);
+    expect(mdOut).toBe(
+      [
+        '| Metric \\| Name | Q1 Value |',
+        '| --- | ---: |',
+        '| Users<br>Active | 1,250 |',
+        '| Conversion | 12.5% |',
+      ].join('\n'),
+    );
   });
 });
 
@@ -316,5 +333,31 @@ describe('markdown export', () => {
     expect(resizedSvg).toContain('viewBox="0 0 100 50"');
     expect(resizedSvg).toContain('width="300"');
     expect(resizedSvg).toContain('height="150"');
+
+    // BBox rotation / flip coordinate mapping
+    const { transformBBoxes } = await import('../../src/webview/image/bbox');
+    const origBox = [{ x1: 10, y1: 20, x2: 30, y2: 50 }];
+    expect(transformBBoxes(origBox, 100, 80, 'rotCW')).toEqual([{ x1: 30, y1: 10, x2: 60, y2: 30 }]);
+    expect(transformBBoxes(origBox, 100, 80, 'flipH')).toEqual([{ x1: 70, y1: 20, x2: 90, y2: 50 }]);
+
+    // Memory-bounded ImageSession: nulls out evicted step buffers for GC while preserving dirty & initialBytes
+    const { ImageSession, MAX_IMAGE_HISTORY_STEPS } = await import('../../src/host/imageSession');
+    const initImg = new Uint8Array([1, 2, 3]);
+    const imgSession = new ImageSession(initImg);
+    expect(imgSession.dirty).toBe(false);
+    const handles = [];
+    for (let i = 1; i <= MAX_IMAGE_HISTORY_STEPS + 4; i++) {
+      handles.push(imgSession.replace(new Uint8Array([i])));
+    }
+    expect(imgSession.dirty).toBe(true);
+    // Earliest steps have released their byte references (`undefined`) to allow GC
+    expect(handles[0].step.before).toBeUndefined();
+    expect(handles[0].step.after).toBeUndefined();
+    // Undoing all the way back to step 0 still restores initialBytes and clears dirty!
+    for (let i = handles.length - 1; i >= 0; i--) {
+      handles[i].undo();
+    }
+    expect([...imgSession.bytes]).toEqual([1, 2, 3]);
+    expect(imgSession.dirty).toBe(false);
   });
 });

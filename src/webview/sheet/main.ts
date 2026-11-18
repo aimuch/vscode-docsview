@@ -5,6 +5,7 @@ import '../shared/base.css';
 import { app, button, el, onMessage, post, showStatus, t } from '../shared/api';
 import { getAppearance, highlightToggle, lockToggle, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
+import { createFindBar } from '../shared/find';
 import { icons } from '../shared/icons';
 import { readState, writeState } from '../shared/sidebar';
 import {
@@ -20,7 +21,14 @@ import {
 } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 import './sheet.css';
-import { computeSelectionStats, emptyView, isActive, viewRows, type SheetView } from './view';
+import {
+  computeSelectionStats,
+  emptyView,
+  isActive,
+  selectionToMarkdownTable,
+  viewRows,
+  type SheetView,
+} from './view';
 
 let info: WorkbookInfo | undefined;
 let active = 0;
@@ -135,10 +143,15 @@ const csvView = segmented<'table' | 'split' | 'text'>(
   },
 );
 
-/** Per-sheet user override for freezing the top row (`undefined` = follow workbook's own `frozenRows`). */
+/** Per-sheet user overrides for freezing the top row and first column (`undefined` = follow workbook). */
 const freezeOverrides = new Map<number, boolean>();
+const freezeColOverrides = new Map<number, boolean>();
 const freezeBtn = toggleButton('freeze', t('freezeHeader'), (on) => {
   freezeOverrides.set(active, on);
+  show(active, true);
+});
+const freezeColBtn = toggleButton('freezeCol', t('freezeFirstCol'), (on) => {
+  freezeColOverrides.set(active, on);
   show(active, true);
 });
 let plain = readState().plain === true;
@@ -160,40 +173,25 @@ excelView.node.hidden = true;
 
 // ---------------------------------------------------------------- find
 
-const findInput = el('input');
-findInput.type = 'search';
-findInput.placeholder = t('find');
-findInput.setAttribute('aria-label', t('findInSheet'));
-const findStatus = el('span', { class: 'dv-label' });
-const findIcon = el('span', { class: 'sheet-find-icon' });
-findIcon.innerHTML = icons.search;
-const findBox = el('label', { class: 'dv-search sheet-find' }, [findIcon, findInput]);
-findBox.hidden = true;
-const findToggle = iconButton('search', t('findInSheet'), () => {
-  findBox.hidden = !findBox.hidden;
-  findToggle.setAttribute('aria-pressed', String(!findBox.hidden));
-  if (!findBox.hidden) {
-    findInput.focus();
-    findInput.select();
-  }
-});
-
 /** Monotonic counter incremented whenever cell data or displayed row order changes. */
 let findDataEpoch = 0;
 let findCache: { sheet: number; epoch: number; query: string; hits: number[] } | undefined;
+let findMatchStatus = '';
 
 /** Selects the next (or previous) displayed cell whose text contains the query, wrapping around. */
 function findNext(backwards = false) {
   const model = models.get(active);
-  const query = findInput.value.trim().toLowerCase();
+  const query = sheetFindBar.input.value.trim().toLowerCase();
   if (!model || !grid || !query) {
-    findStatus.textContent = '';
+    findMatchStatus = '';
+    sheetFindBar.refreshCount('');
     return;
   }
   const rowCount = rowMap ? rowMap.length : model.rowCount;
   const { colCount } = model;
   if (!rowCount || !colCount) {
-    findStatus.textContent = t('noMatch');
+    findMatchStatus = t('noMatch');
+    sheetFindBar.refreshCount(findMatchStatus);
     return;
   }
   if (!findCache || findCache.sheet !== active || findCache.epoch !== findDataEpoch || findCache.query !== query) {
@@ -216,7 +214,8 @@ function findNext(backwards = false) {
   }
   const { hits } = findCache;
   if (!hits.length) {
-    findStatus.textContent = t('noMatch');
+    findMatchStatus = t('noMatch');
+    sheetFindBar.refreshCount(findMatchStatus);
     return;
   }
   const sel = grid.selection;
@@ -234,30 +233,29 @@ function findNext(backwards = false) {
   }
   const idx = backwards ? (lo - 1 + hits.length) % hits.length : lo % hits.length;
   const found = hits[idx];
-  findStatus.textContent = `${idx + 1}/${hits.length}`;
+  findMatchStatus = `${idx + 1}/${hits.length}`;
+  sheetFindBar.refreshCount(findMatchStatus);
   grid.goTo(Math.floor(found / colCount), found % colCount);
 }
 
-findInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    findNext(e.shiftKey);
-  } else if (e.key === 'Escape') {
-    findBox.hidden = true;
-    findToggle.setAttribute('aria-pressed', 'false');
-    grid?.focus();
-  }
-});
-findInput.addEventListener('input', () => (findStatus.textContent = ''));
-window.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-    e.preventDefault();
-    findBox.hidden = false;
-    findToggle.setAttribute('aria-pressed', 'true');
-    findInput.focus();
-    findInput.select();
-  }
-});
+const sheetFindBar = createFindBar(
+  {
+    onInput: (q) => {
+      if (!q.trim()) {
+        findMatchStatus = '';
+        return;
+      }
+      findNext(false);
+    },
+    step: (backwards) => findNext(backwards),
+    clear: () => {
+      findMatchStatus = '';
+    },
+    status: () => findMatchStatus,
+  },
+  gridHost,
+  { ariaLabel: t('findInSheet') },
+);
 
 // ---------------------------------------------------------------- sort & filter status
 
@@ -442,7 +440,23 @@ function convertItems(): MenuItem[] {
   }));
 }
 
+function copySelectionMarkdown() {
+  const model = models.get(active);
+  const sel = grid?.selection;
+  if (!model || !sel) {
+    return;
+  }
+  const md = selectionToMarkdownTable((r, c) => {
+    const srcR = toSource(r);
+    return srcR >= 0 ? model.rows[srcR]?.[c] : undefined;
+  }, sel.r0, sel.c0, sel.r1, sel.c1);
+  if (md) {
+    void navigator.clipboard?.writeText(md).then(() => flash(t('copied')));
+  }
+}
+
 const convertDropdown = moreMenu(t('convertMenu'), convertItems(), 'export');
+const copyMdBtn = iconButton('copyMd', t('copyAsMarkdown'), copySelectionMarkdown);
 const historyBtn = iconButton('history', t('slotHistory'), () => post({ type: 'history' }));
 
 const lock = lockToggle();
@@ -461,9 +475,9 @@ const topBar = customToolbar({
     { id: 'view', nodes: [csvView.node, excelView.node] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'cellBar', nodes: [address, formulaBar] },
-    { id: 'find', nodes: [findToggle, findBox, findStatus] },
+    { id: 'find', nodes: sheetFindBar.nodes },
     { id: 'edit', label: t('lockEdits'), nodes: [lock] },
-    { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node] },
+    { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node, freezeColBtn.node, copyMdBtn] },
     { id: 'structure', nodes: [structureGroup] },
     {
       id: 'actions',
@@ -477,6 +491,7 @@ const topBar = customToolbar({
   ],
   documentActions: [
     openExternalMenuItem(),
+    { label: t('copyAsMarkdown'), icon: 'copyMd', onClick: copySelectionMarkdown },
     ...convertItems(),
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
@@ -504,6 +519,15 @@ const topBar = customToolbar({
       onChange: (on) => {
         freezeOverrides.set(active, on);
         freezeBtn.set(on);
+        show(active, true);
+      },
+    },
+    {
+      label: t('freezeFirstCol'),
+      checked: () => effectiveFrozenCols(active, models.get(active)) > 0,
+      onChange: (on) => {
+        freezeColOverrides.set(active, on);
+        freezeColBtn.set(on);
         show(active, true);
       },
     },
@@ -560,6 +584,14 @@ function effectiveFrozenRows(index: number, model: SheetModel | undefined): numb
   return model?.frozenRows ?? 0;
 }
 
+function effectiveFrozenCols(index: number, model: SheetModel | undefined): number {
+  const override = freezeColOverrides.get(index);
+  if (override !== undefined) {
+    return override ? Math.max(1, model?.frozenCols ?? 0) : 0;
+  }
+  return model?.frozenCols ?? 0;
+}
+
 /** Rows that stay on top and out of sorting: frozen rows, else an optional header row. */
 function fixedRows(model: SheetModel, view: SheetView): number {
   return effectiveFrozenRows(active, model) || (view.headerRow ? 1 : 0);
@@ -586,7 +618,9 @@ function sourceFor(index: number, model: SheetModel): GridSource {
     merges = model.merges?.filter((m) => m.r + m.rs <= fixed);
   }
   const frozenR = effectiveFrozenRows(index, model);
+  const frozenC = effectiveFrozenCols(index, model);
   freezeBtn.set(frozenR > 0);
+  freezeColBtn.set(frozenC > 0);
   return {
     rowCount: map ? map.length : model.rowCount,
     colCount: model.colCount,
@@ -596,7 +630,7 @@ function sourceFor(index: number, model: SheetModel): GridSource {
     rowHeights,
     merges,
     frozenRows: frozenR,
-    frozenCols: model.frozenCols,
+    frozenCols: frozenC,
     palette: !plain && model.styles?.some((s) => s.color || s.bg) ? 'light' : 'theme',
     rowLabel: map ? (r) => String(map[r] + 1) : undefined,
     colBadge: (c) => {
@@ -834,40 +868,46 @@ function ctxAction(label: string, onClick: () => void, disabled = false): HTMLBu
 
 function openGridContextMenu(x: number, y: number) {
   const sel = grid?.selection;
-  if (!sel || !info?.editable) {
+  if (!sel) {
     return;
   }
-  const locked = getAppearance().lockEdits;
   const items: (HTMLElement | '-')[] = [
-    ctxAction(
-      t('clearCell'),
-      () => {
-        if (locked) {
-          flash(t('locked'));
-          return;
-        }
-        const changes: CellChange[] = [];
-        for (let r = sel.r0; r <= sel.r1; r++) {
-          for (let c = sel.c0; c <= sel.c1; c++) {
-            changes.push({ r, c, text: '' });
-          }
-        }
-        edit(changes);
-      },
-      locked,
-    ),
+    ctxAction(t('copyAsMarkdown'), copySelectionMarkdown),
   ];
-  if (info.canStructure) {
+  if (info?.editable) {
+    const locked = getAppearance().lockEdits;
     items.push(
       '-',
-      ctxAction(t('insertRowAbove'), () => structure('insertRow', sel.r0), locked),
-      ctxAction(t('insertRowBelow'), () => structure('insertRow', sel.r1 + 1), locked),
-      ctxAction(t('delRow'), () => structure('deleteRows'), locked),
-      '-',
-      ctxAction(t('insertColLeft'), () => structure('insertCol', sel.c0), locked),
-      ctxAction(t('insertColRight'), () => structure('insertCol', sel.c1 + 1), locked),
-      ctxAction(t('delCol'), () => structure('deleteCols'), locked),
+      ctxAction(
+        t('clearCell'),
+        () => {
+          if (locked) {
+            flash(t('locked'));
+            return;
+          }
+          const changes: CellChange[] = [];
+          for (let r = sel.r0; r <= sel.r1; r++) {
+            for (let c = sel.c0; c <= sel.c1; c++) {
+              changes.push({ r, c, text: '' });
+            }
+          }
+          edit(changes);
+        },
+        locked,
+      ),
     );
+    if (info.canStructure) {
+      items.push(
+        '-',
+        ctxAction(t('insertRowAbove'), () => structure('insertRow', sel.r0), locked),
+        ctxAction(t('insertRowBelow'), () => structure('insertRow', sel.r1 + 1), locked),
+        ctxAction(t('delRow'), () => structure('deleteRows'), locked),
+        '-',
+        ctxAction(t('insertColLeft'), () => structure('insertCol', sel.c0), locked),
+        ctxAction(t('insertColRight'), () => structure('insertCol', sel.c1 + 1), locked),
+        ctxAction(t('delCol'), () => structure('deleteCols'), locked),
+      );
+    }
   }
   showCtxPopup(x, y, items);
 }

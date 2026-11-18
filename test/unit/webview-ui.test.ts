@@ -618,6 +618,43 @@ describe("preview find", () => {
     expect(revealed).toEqual(["0", "1"]);
     scroller.remove();
   });
+
+  it("renders a collapsible 28px Find capsule that expands on click, steps matches and closes on Escape", async () => {
+    const { PreviewFind, createFindWidget } = await import("../../src/webview/shared/find");
+    const scroller = document.createElement("div");
+    scroller.tabIndex = -1;
+    const root = document.createElement("div");
+    root.innerHTML = "<p>beta one</p><p>beta two</p>";
+    scroller.append(root);
+    const find = new PreviewFind(root, scroller);
+    const widget = createFindWidget(find, scroller);
+    const host = document.createElement("div");
+    host.append(...widget.nodes);
+    document.body.append(host, scroller);
+
+    const [toggleBtn, barWrap] = widget.nodes as [HTMLButtonElement, HTMLElement];
+    expect(toggleBtn.hidden).toBe(false);
+    expect(barWrap.hidden).toBe(true);
+
+    toggleBtn.click();
+    expect(toggleBtn.hidden).toBe(true);
+    expect(barWrap.hidden).toBe(false);
+
+    widget.input.value = "beta";
+    widget.input.dispatchEvent(new Event("input"));
+    expect(barWrap.querySelector(".dv-find-count")?.textContent).toBe("1/2");
+
+    widget.input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(barWrap.querySelector(".dv-find-count")?.textContent).toBe("2/2");
+
+    widget.input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(barWrap.hidden).toBe(true);
+    expect(toggleBtn.hidden).toBe(false);
+    expect(find.total).toBe(0);
+
+    host.remove();
+    scroller.remove();
+  });
 });
 
 describe("more menu", () => {

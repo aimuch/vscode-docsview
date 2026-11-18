@@ -292,8 +292,14 @@ body {
   font: inherit;
 }
 
+.dv-find-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
 .dv-find-box {
-  width: 165px;
+  width: 158px;
 }
 
 .dv-find-icon {
@@ -302,15 +308,26 @@ body {
 
 .dv-find-count {
   min-width: 30px;
+  text-align: center;
+}
+
+.dv-find-close {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
 }
 
 ::highlight(dv-find) {
-  background-color: rgba(255, 210, 0, 0.45);
+  background-color: rgba(234, 179, 8, 0.42);
+}
+
+.dv-dark ::highlight(dv-find) {
+  background-color: rgba(250, 204, 21, 0.36);
 }
 
 ::highlight(dv-find-current) {
-  background-color: rgba(255, 140, 0, 0.82);
-  color: #000000;
+  background-color: rgba(249, 115, 22, 0.88);
+  color: #ffffff;
 }
 
 .dv-notice {
@@ -1562,6 +1579,8 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
   box-sizing: border-box;
   width: 320px;
   max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 56px);
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1571,6 +1590,16 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
   border: 1px solid var(--vscode-focusBorder, var(--dv-border));
   border-radius: 8px;
   box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.35));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 .dv-float-head {

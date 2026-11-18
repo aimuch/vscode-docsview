@@ -6,8 +6,8 @@ import './markdown.css';
 import { app, el, errorText, isDark, onMessage, onThemeChange, post, t } from '../shared/api';
 import { getAppearance, highlightToggle, onAppearanceChange, updateAppearance } from '../shared/appearance';
 import { getFileState } from '../shared/fileState';
-import { icons } from '../shared/icons';
 import { Outline, readState, Sidebar, writeState } from '../shared/sidebar';
+import { createFindWidget } from '../shared/find';
 import { customToolbar, iconButton, moreMenu, segmented, toggleButton } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 import { PreviewFind } from './find';
@@ -54,50 +54,7 @@ onAppearanceChange((a) => {
 // ---------------------------------------------------------------- find
 
 const find = new PreviewFind(article, scroller);
-const findInput = el('input');
-findInput.type = 'search';
-findInput.placeholder = t('find');
-findInput.setAttribute('aria-label', t('findInPreview'));
-const findIcon = el('span', { class: 'md-find-icon' });
-findIcon.innerHTML = icons.search;
-const findBox = el('label', { class: 'dv-search md-find' }, [findIcon, findInput]);
-const findCount = el('span', { class: 'dv-label md-find-count' });
-
-function showFindCount() {
-  findCount.textContent = findInput.value ? (find.total ? `${find.current}/${find.total}` : t('noMatch')) : '';
-}
-
-findInput.addEventListener('input', () => {
-  find.search(findInput.value);
-  showFindCount();
-});
-findInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    find.next(e.shiftKey);
-    showFindCount();
-  } else if (e.key === 'Escape') {
-    findInput.value = '';
-    find.clear();
-    showFindCount();
-    scroller.focus();
-  }
-});
-window.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-    e.preventDefault();
-    findInput.focus();
-    findInput.select();
-  }
-});
-const findPrev = iconButton('up', t('findPrev'), () => {
-  find.next(true);
-  showFindCount();
-});
-const findNext = iconButton('down', t('findNext'), () => {
-  find.next();
-  showFindCount();
-});
+const findWidget = createFindWidget(find, scroller);
 
 // ---------------------------------------------------------------- edit mode
 
@@ -263,7 +220,7 @@ const topBar = customToolbar({
     { id: 'nav', nodes: [sidebar.toggle] },
     { id: 'view', nodes: [view.node] },
     { id: 'zoom', nodes: zoom.nodes },
-    { id: 'find', nodes: [findBox, findCount, findPrev, findNext] },
+    { id: 'find', nodes: findWidget.nodes },
     { id: 'edit', label: t('editMode'), nodes: [editToggle.node] },
     { id: 'highlight', nodes: [highlightToggle()] },
     { id: 'actions', label: t('exportMenu'), nodes: [exportDropdown] },
@@ -347,7 +304,8 @@ article.addEventListener('change', (e) => {
 });
 
 function updateDocStats() {
-  const text = article.innerText || article.textContent || '';
+  // Use `textContent` (before `.md-copy` buttons are injected) so typing never triggers Forced Reflow (`innerText`).
+  const text = article.textContent ?? '';
   const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
   const latin = (text.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, ' ').match(/[A-Za-z0-9_'-]+/g) ?? []).length;
   const totalWords = cjk + latin;
@@ -391,13 +349,13 @@ function render(html: string, toc: TocEntry[]) {
     },
   });
   renderToc(toc);
+  updateDocStats();
   addCopyButtons();
   article.querySelectorAll<HTMLInputElement>('li.task-list-item input[type="checkbox"]').forEach((box) => {
     box.disabled = false;
   });
-  updateDocStats();
   find.refresh();
-  showFindCount();
+  findWidget.refreshCount();
   invalidateLineIndex();
   void Promise.all([renderMermaid(), imagesSettled()]).then(
     () => {

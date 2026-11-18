@@ -25,5 +25,6 @@
   "config.image.loupePosition": "图片预览中像素放大取色框的位置：跟随鼠标指针或固定在右下角。",
   "config.sidebarPosition": "目录与导航侧栏在预览窗口中的位置（左侧或右侧）。",
   "config.toolbar": "DocsView 顶部工具栏左侧与右侧显示的项目及其排列顺序。",
+  "config.comments.author": "在 Word、PPT 或 PDF 中添加批注时记录的作者名称（留空则默认使用当前系统用户名）。",
   "command.showHistory": "DocsView：查看版本历史"
 }

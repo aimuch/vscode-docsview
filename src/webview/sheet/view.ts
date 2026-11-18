@@ -169,3 +169,62 @@ export function computeSelectionStats(
     max: numCount > 0 ? max : 0,
   };
 }
+
+function escapeMdCell(raw: string): string {
+  return raw.replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>').trim();
+}
+
+/**
+ * Formats a rectangular sheet selection `[r0..r1] x [c0..c1]` as a GitHub-Flavored Markdown table,
+ * automatically right-aligning (`---:`) columns whose body cells are numeric.
+ */
+export function selectionToMarkdownTable(
+  cellAt: (r: number, c: number) => Cell | undefined,
+  r0: number,
+  c0: number,
+  r1: number,
+  c1: number,
+  maxRows = 5_000,
+): string {
+  const endR = Math.min(r1, r0 + maxRows - 1);
+  const cols = c1 - c0 + 1;
+  if (cols <= 0 || endR < r0) {
+    return '';
+  }
+  const headCells: string[] = [];
+  for (let c = c0; c <= c1; c++) {
+    headCells.push(escapeMdCell(text(cellAt(r0, c))));
+  }
+
+  const sepCells: string[] = [];
+  for (let c = c0; c <= c1; c++) {
+    let nonEmpty = 0;
+    let allNum = true;
+    for (let r = r0 + 1; r <= endR; r++) {
+      const cell = cellAt(r, c);
+      if (!text(cell).trim()) {
+        continue;
+      }
+      nonEmpty++;
+      if (numericValue(cell) === undefined) {
+        allNum = false;
+        break;
+      }
+    }
+    sepCells.push(nonEmpty > 0 && allNum ? '---:' : '---');
+  }
+
+  const lines: string[] = [
+    `| ${headCells.join(' | ')} |`,
+    `| ${sepCells.join(' | ')} |`,
+  ];
+
+  for (let r = r0 + 1; r <= endR; r++) {
+    const rowCells: string[] = [];
+    for (let c = c0; c <= c1; c++) {
+      rowCells.push(escapeMdCell(text(cellAt(r, c))));
+    }
+    lines.push(`| ${rowCells.join(' | ')} |`);
+  }
+  return lines.join('\n');
+}

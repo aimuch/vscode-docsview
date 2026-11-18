@@ -198,18 +198,42 @@ function indexRenderedParagraphs(): void {
     });
     return;
   }
+  const normedParas = docxParagraphs.map(normText);
+  const freq = new Map<string, number>();
+  for (const s of normedParas) {
+    if (s) {
+      freq.set(s, (freq.get(s) ?? 0) + 1);
+    }
+  }
   let cursor = 0;
   for (const node of nodes) {
-    const rendered = normText(node.textContent ?? '');
+    delete node.dataset.pIndex;
+    const clone = node.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('.docx-cm-pill').forEach((p) => p.remove());
+    const rendered = normText(clone.textContent ?? '');
+
+    if (!rendered) {
+      if (cursor < normedParas.length && normedParas[cursor] === '') {
+        node.dataset.pIndex = String(cursor);
+        if (!paragraphMap.has(cursor)) {
+          paragraphMap.set(cursor, node);
+        }
+        cursor++;
+      }
+      continue;
+    }
+
     let matched = -1;
-    for (let look = cursor; look < Math.min(docxParagraphs.length, cursor + 6); look++) {
-      if (normText(docxParagraphs[look]) === rendered) {
+    // 1. Wide forward window (handles multi-line TOC fields, page-break gaps and table spans).
+    for (let look = cursor; look < Math.min(normedParas.length, cursor + 40); look++) {
+      if (normedParas[look] === rendered) {
         matched = look;
         break;
       }
     }
-    if (matched < 0 && cursor < docxParagraphs.length) {
-      matched = cursor;
+    // 2. Global unique-text anchor re-sync if drift exceeded 40 paragraphs.
+    if (matched < 0 && freq.get(rendered) === 1) {
+      matched = normedParas.indexOf(rendered);
     }
     if (matched >= 0) {
       node.dataset.pIndex = String(matched);
@@ -415,6 +439,9 @@ onMessage((message) => {
     void load(message.bytes);
   } else if (message.type === 'comments') {
     comments = message.comments;
+    if (message.docxParagraphs) {
+      docxParagraphs = message.docxParagraphs;
+    }
     syncCommentsUi();
   } else if (message.type === 'error') {
     showStatus(pages, message.message, true);

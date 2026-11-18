@@ -1,8 +1,25 @@
+import { userInfo } from 'node:os';
 import * as vscode from 'vscode';
-import type { HostMessage, ViewerKind, WebviewMessage } from '../../common/protocol';
+import type { DocMutation, HostMessage, ViewerKind, WebviewMessage } from '../../common/protocol';
 import { snapshot } from '../history';
 import type { OfficeEditResult, OfficeFormat, OfficeSession } from '../office';
 import { configureWebview, debounce, handleCommonMessage, onWebviewMessage, parentUri, t } from '../webviewHtml';
+
+function defaultCommentAuthor(uri: vscode.Uri): string {
+  const configured = vscode.workspace.getConfiguration('docsview', uri).get<string>('comments.author')?.trim();
+  if (configured) {
+    return configured;
+  }
+  try {
+    const sysUser = userInfo().username?.trim();
+    if (sysUser) {
+      return sysUser;
+    }
+  } catch {
+    // Restricted OS environment.
+  }
+  return 'DocsView';
+}
 
 function baseName(uri: vscode.Uri): string {
   return uri.path.slice(uri.path.lastIndexOf('/') + 1);
@@ -124,7 +141,10 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
         }
         if (message.type === 'docMutate' && document.session) {
           const session = document.session;
-          const mutation = message.mutation;
+          const mutation: DocMutation =
+            message.mutation.kind === 'addComment' && !message.mutation.author
+              ? { ...message.mutation, author: defaultCommentAuthor(document.uri) }
+              : message.mutation;
           document.mutationQueue = document.mutationQueue
             .then(async () => {
               const result: OfficeEditResult | undefined = await session.apply(mutation);

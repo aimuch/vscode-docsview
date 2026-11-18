@@ -13,6 +13,44 @@ const COMMENTS_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006
 const COMMENTS_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml';
 const PRECOMPRESSED_MEDIA = /\.(?:png|jpe?g|gif|webp|avif|mp4|m4v|mov|mp3|wav|ogg|zip|gz)$/i;
 
+function createXmlParser(): DOMParser {
+  return new DOMParser({ locator: false, onError: () => undefined });
+}
+
+/**
+ * Resolves a paragraph/shape index safely:
+ * - Exact match at `hintIndex` wins immediately.
+ * - If `expected` appears uniquely once in `texts`, returns that unique index even across large TOC/layout shifts.
+ * - If `expected` appears multiple times, only accepts the strictly closest match within `maxDrift` of `hintIndex`.
+ */
+export function resolveTargetIndex(
+  texts: readonly string[],
+  hintIndex: number,
+  expected: string,
+  maxDrift = 12,
+): number {
+  const needle = expected.trim();
+  if (hintIndex >= 0 && hintIndex < texts.length && texts[hintIndex].trim() === needle) {
+    return hintIndex;
+  }
+  const matches: number[] = [];
+  for (let i = 0; i < texts.length; i++) {
+    if (texts[i].trim() === needle) {
+      matches.push(i);
+    }
+  }
+  if (matches.length === 0) {
+    return -1;
+  }
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  matches.sort((a, b) => Math.abs(a - hintIndex) - Math.abs(b - hintIndex));
+  const bestDist = Math.abs(matches[0] - hintIndex);
+  const secondDist = Math.abs(matches[1] - hintIndex);
+  return bestDist <= maxDrift && bestDist < secondDist ? matches[0] : -1;
+}
+
 function serializeXml(doc: XDocument): string {
   const out = new XMLSerializer().serializeToString(doc);
   return out.startsWith('<?xml') ? out : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n${out}`;
@@ -94,11 +132,11 @@ export function extractParagraphText(p: XElement): string {
   return chunks.join('');
 }
 
-function findCommentsPath(relsBytes: Uint8Array | undefined): string {
+function findCommentsPath(relsBytes: Uint8Array | undefined, parser = createXmlParser()): string {
   if (!relsBytes) {
     return 'word/comments.xml';
   }
-  const doc = new DOMParser().parseFromString(strFromU8(relsBytes), XML);
+  const doc = parser.parseFromString(strFromU8(relsBytes), XML);
   const rels = doc.getElementsByTagName('Relationship');
   for (let i = 0; i < rels.length; i++) {
     const r = rels.item(i)!;
@@ -118,19 +156,25 @@ export interface DocxInspection {
 }
 
 export function inspectDocx(bytes: Uint8Array): DocxInspection {
-  const relsOnly = unzipSync(bytes, {
-    filter: (f) => f.name === 'word/_rels/document.xml.rels',
-  });
-  const commentsPath = findCommentsPath(relsOnly['word/_rels/document.xml.rels']);
+  const parser = createXmlParser();
   const files = unzipSync(bytes, {
-    filter: (f) => f.name === 'word/document.xml' || f.name === commentsPath,
+    filter: (f) =>
+      f.name === 'word/_rels/document.xml.rels' ||
+      f.name === 'word/document.xml' ||
+      (f.name.startsWith('word/') && f.name.endsWith('.xml') && f.name.toLowerCase().includes('comment')),
   });
+  const commentsPath = findCommentsPath(files['word/_rels/document.xml.rels'], parser);
+  if (!(commentsPath in files)) {
+    const extra = unzipSync(bytes, { filter: (f) => f.name === commentsPath });
+    if (extra[commentsPath]) {
+      files[commentsPath] = extra[commentsPath];
+    }
+  }
 
   const docBytes = files['word/document.xml'];
   if (!docBytes) {
     return { paragraphs: [], comments: [] };
   }
-  const parser = new DOMParser();
   const docXml = parser.parseFromString(strFromU8(docBytes), XML);
   const pNodes = collectBodyParagraphs(docXml);
   const paragraphs = pNodes.map(extractParagraphText);
@@ -352,9 +396,9 @@ export function applyDocxMutations(bytes: Uint8Array, mutations: readonly DocMut
   if (!docBytes) {
     throw new Error('Invalid .docx file: word/document.xml is missing.');
   }
-  const parser = new DOMParser();
+  const parser = createXmlParser();
   const docXml = parser.parseFromString(strFromU8(docBytes), XML);
-  const commentsPath = findCommentsPath(files['word/_rels/document.xml.rels']);
+  const commentsPath = findCommentsPath(files['word/_rels/document.xml.rels'], parser);
 
   let commentsDoc: XDocument | undefined;
   let docDirty = false;
@@ -491,10 +535,12 @@ export function applyDocxMutations(bytes: Uint8Array, mutations: readonly DocMut
       }
     } else if (mut.kind === 'editDocxParagraph') {
       const pNodes = collectBodyParagraphs(docXml);
-      let target: XElement | undefined = pNodes[mut.pIndex];
-      if (!target || extractParagraphText(target).trim() !== mut.expected.trim()) {
-        target = pNodes.find((p) => extractParagraphText(p).trim() === mut.expected.trim());
-      }
+      const resolvedIdx = resolveTargetIndex(
+        pNodes.map(extractParagraphText),
+        mut.pIndex,
+        mut.expected,
+      );
+      const target = resolvedIdx >= 0 ? pNodes[resolvedIdx] : undefined;
       if (target) {
         replaceParagraphText(docXml, target, mut.text);
         docDirty = true;

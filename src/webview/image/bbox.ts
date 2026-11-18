@@ -197,6 +197,27 @@ export function transformRgba(
   return { data: out, width: outW, height: outH };
 }
 
+/** Transforms existing BBox coordinates in-place so boxes stay glued to image features on Rotate / Flip. */
+export function transformBBoxes<T extends Pick<BBox, 'x1' | 'y1' | 'x2' | 'y2'>>(
+  boxes: readonly T[],
+  imgW: number,
+  imgH: number,
+  op: ImageTransformOp,
+): T[] {
+  return boxes.map((b) => {
+    if (op === 'rotCW') {
+      return { ...b, x1: imgH - b.y2, y1: b.x1, x2: imgH - b.y1, y2: b.x2 };
+    }
+    if (op === 'rotCCW') {
+      return { ...b, x1: b.y1, y1: imgW - b.x2, x2: b.y2, y2: imgW - b.x1 };
+    }
+    if (op === 'flipH') {
+      return { ...b, x1: imgW - b.x2, x2: imgW - b.x1 };
+    }
+    return { ...b, y1: imgH - b.y2, y2: imgH - b.y1 };
+  });
+}
+
 /** Crops a vector SVG document losslessly by adjusting its `viewBox`, `width` and `height`. */
 export function cropSvgMarkup(svgText: string, imgW: number, imgH: number, rect: PixelRect): Uint8Array {
   const w = Math.max(1, Math.round(rect.x2 - rect.x1));

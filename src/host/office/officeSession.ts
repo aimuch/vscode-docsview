@@ -1,7 +1,7 @@
 // Stateful editing & annotation session for .docx, .pptx and .pdf documents.
 // Pure module (no vscode imports): manages memory-bounded undo/redo, hot-exit backup/restore, and byte export.
 import type { DocComment, DocMutation, HostMessage } from '../../common/protocol';
-import { applyDocxMutations, inspectDocx } from './docxPatcher';
+import { applyDocxMutations, inspectDocx, resolveTargetIndex } from './docxPatcher';
 import { applyPdfMutations, inspectPdf } from './pdfAnnotator';
 import { applyPptxMutations, inspectPptx } from './pptxPatcher';
 
@@ -123,8 +123,12 @@ export class OfficeSession {
   private messageForTransition(mutation: DocMutation): HostMessage {
     const isCommentOnly =
       mutation.kind === 'addComment' || mutation.kind === 'updateComment' || mutation.kind === 'deleteComment';
-    if (isCommentOnly && (this.format === 'pdf' || this.format === 'pptx')) {
-      return { type: 'comments', comments: this.current.comments };
+    if (isCommentOnly) {
+      return {
+        type: 'comments',
+        comments: this.current.comments,
+        docxParagraphs: this.current.docxParagraphs,
+      };
     }
     return this.loadMessage();
   }
@@ -155,9 +159,7 @@ export class OfficeSession {
         return undefined;
       }
       const paras = this.current.docxParagraphs ?? [];
-      const exact = paras[mutation.pIndex]?.trim() === mutation.expected.trim();
-      const anywhere = paras.some((p) => p.trim() === mutation.expected.trim());
-      if (!exact && !anywhere) {
+      if (resolveTargetIndex(paras, mutation.pIndex, mutation.expected) < 0) {
         return undefined;
       }
       if (mutation.text === mutation.expected) {
@@ -168,9 +170,7 @@ export class OfficeSession {
         return undefined;
       }
       const slideShapes = this.current.pptxShapes?.[mutation.slideIndex] ?? [];
-      const exact = slideShapes[mutation.shapeIndex]?.trim() === mutation.expected.trim();
-      const anywhere = slideShapes.some((s) => s.trim() === mutation.expected.trim());
-      if (!exact && !anywhere) {
+      if (resolveTargetIndex(slideShapes, mutation.shapeIndex, mutation.expected, 6) < 0) {
         return undefined;
       }
       if (mutation.text === mutation.expected) {

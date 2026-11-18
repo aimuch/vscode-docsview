@@ -320,6 +320,7 @@ const SLOT_LABELS: Record<ToolbarItemId, StringKey> = {
   pager: 'slotPager',
   zoom: 'slotZoom',
   width: 'slotWidth',
+  transform: 'slotTransform',
   bbox: 'slotBbox',
   cellBar: 'slotCellBar',
   find: 'slotFind',
@@ -430,6 +431,7 @@ export interface CustomToolbar {
   refresh(): void;
   openDrawer(): void;
   closeDrawer(): void;
+  dispose(): void;
 }
 
 const PAGED_KINDS = new Set(['docx', 'pdf', 'pptx', 'text']);
@@ -484,19 +486,28 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
       overflowBtn.setAttribute('aria-expanded', 'false');
       overflowBtn.classList.remove('dv-active');
       document.removeEventListener('mousedown', onOverflowOutside);
+      window.removeEventListener('keydown', onOverflowKeyDown, true);
     }
   };
   const onOverflowOutside = (e: MouseEvent) => {
-    if (!overflowPop.contains(e.target as Node) && !overflowBtn.contains(e.target as Node)) {
+    const target = e.target as Element | null;
+    if (target?.closest?.('.dv-more-menu')) {
+      return;
+    }
+    if (!overflowPop.contains(target) && !overflowBtn.contains(target)) {
       closeOverflow();
     }
   };
-
-  const overflowBtn = iconButton('chevronsRight', t('moreTools'), () => {
-    if (!overflowPop.hidden) {
+  const onOverflowKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && !overflowPop.hidden) {
+      e.preventDefault();
+      e.stopPropagation();
       closeOverflow();
-      return;
+      overflowBtn.focus();
     }
+  };
+
+  const openOverflow = () => {
     if (!overflowPop.isConnected) {
       document.body.append(overflowPop);
     }
@@ -504,9 +515,18 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     overflowBtn.setAttribute('aria-expanded', 'true');
     overflowBtn.classList.add('dv-active');
     document.addEventListener('mousedown', onOverflowOutside);
+    window.addEventListener('keydown', onOverflowKeyDown, true);
     const rect = overflowBtn.getBoundingClientRect();
     overflowPop.style.top = `${rect.bottom + 6}px`;
     overflowPop.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+  };
+
+  const overflowBtn = iconButton('chevronsRight', t('moreTools'), () => {
+    if (!overflowPop.hidden) {
+      closeOverflow();
+      return;
+    }
+    openOverflow();
   });
   overflowBtn.classList.add('dv-overflow-btn');
   overflowBtn.hidden = true;
@@ -598,17 +618,37 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
   }
 
   let lastObservedW = 0;
-  if (typeof ResizeObserver !== 'undefined') {
-    new ResizeObserver(() => {
-      const w = bar.clientWidth;
-      if (w > 0 && Math.abs(w - lastObservedW) >= 4) {
-        lastObservedW = w;
-        if (overflowPop.hidden) {
-          reconcileBar();
-        }
-      }
-    }).observe(bar);
-  }
+  const ro =
+    typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+          const w = bar.clientWidth;
+          if (w > 0 && Math.abs(w - lastObservedW) >= 4) {
+            lastObservedW = w;
+            if (overflowPop.hidden) {
+              reconcileBar();
+            }
+          }
+        })
+      : undefined;
+  ro?.observe(bar);
+
+  // Dynamic child widgets (e.g. collapsible Find capsule) notify the bar on size/visibility changes.
+  bar.addEventListener('dv:slot-change', (ev) => {
+    reconcileBar();
+    const wantVisible = (ev as CustomEvent<{ ensureVisible?: boolean }>).detail?.ensureVisible;
+    const target = ev.target as Node | null;
+    if (wantVisible && target && overflowPop.contains(target) && overflowPop.hidden) {
+      openOverflow();
+    }
+  });
+  overflowPop.addEventListener('dv:slot-change', (ev) => {
+    const wantVisible = (ev as CustomEvent<{ ensureVisible?: boolean }>).detail?.ensureVisible;
+    if (wantVisible && overflowPop.hidden) {
+      openOverflow();
+    } else if (!wantVisible) {
+      reconcileBar();
+    }
+  });
 
   // -------------------------------------------------------------- Settings Drawer (Git Map style)
 
@@ -617,6 +657,7 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
 
   const drawer = el('aside', { class: 'dv-st-drawer' });
   drawer.setAttribute('role', 'dialog');
+  drawer.setAttribute('aria-modal', 'true');
   drawer.setAttribute('aria-label', t('settings'));
   drawer.hidden = true;
 
@@ -647,11 +688,32 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
   let draggingId: ToolbarItemId | undefined;
 
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && drawerOpen) {
+    if (!drawerOpen) {
+      return;
+    }
+    if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
       closeDrawer();
       gearBtn.focus();
+      return;
+    }
+    if (e.key === 'Tab') {
+      const focusables = [
+        ...drawer.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+      ].filter((n) => !n.hidden && !n.closest('[hidden]'));
+      if (!focusables.length) {
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
   };
 
@@ -1001,6 +1063,16 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     }
   });
 
+  function dispose(): void {
+    closeOverflow();
+    closeDrawer();
+    ro?.disconnect();
+    toolbarListeners.delete(refresh);
+    overflowPop.remove();
+    backdrop.remove();
+    drawer.remove();
+  }
+
   reconcileBar();
 
   return {
@@ -1008,6 +1080,7 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     refresh,
     openDrawer,
     closeDrawer,
+    dispose,
   };
 }
 

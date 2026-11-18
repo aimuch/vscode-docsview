@@ -60,6 +60,8 @@ export const icons = {
   flipV: svg('<path d="M2 8h12" stroke-dasharray="1.5 1.8"/><path d="M4.5 5.6L8 2.2l3.5 3.4zM4.5 10.4L8 13.8l3.5-3.4z"/>'),
   resize: svg('<rect x="2" y="5.5" width="6.5" height="6.5" rx="1"/><path d="M7.5 3h5.5v5.5M13 3L8.5 7.5"/>'),
   freeze: svg('<rect x="2" y="2.5" width="12" height="11" rx="1.4"/><path d="M2 6.3h12M6 2.5v3.8M10 2.5v3.8"/>'),
+  freezeCol: svg('<rect x="2" y="2.5" width="12" height="11" rx="1.4"/><path d="M5.8 2.5v11M2 6.5h3.8M2 10h3.8"/>'),
+  copyMd: svg('<rect x="1.8" y="3" width="12.4" height="10" rx="1.5"/><path d="M4.2 10V6l2 2.3L8.2 6v4M11.3 6v4M9.9 8.6l1.4 1.4 1.4-1.4"/>'),
   chevronsRight: svg('<path d="M4.5 4.5L8 8l-3.5 3.5M8.8 4.5L12.3 8l-3.5 3.5"/>'),
 };
 

@@ -266,10 +266,11 @@ function mountFloatingDialog(opts: {
   pop.append(head, area, el('div', { class: 'dv-cm-edit-btns' }, [cancelBtn, saveBtn]));
   document.body.append(pop);
 
-  const pw = 320;
-  const ph = 180;
-  const left = Math.max(12, Math.min(window.innerWidth - pw - 12, opts.anchor.x));
-  const top = Math.max(44, Math.min(window.innerHeight - ph - 12, opts.anchor.y));
+  const measured = pop.getBoundingClientRect();
+  const pw = measured.width || 320;
+  const ph = measured.height || 200;
+  const left = Math.max(12, Math.min(Math.max(12, window.innerWidth - pw - 12), opts.anchor.x));
+  const top = Math.max(44, Math.min(Math.max(44, window.innerHeight - ph - 12), opts.anchor.y));
   pop.style.left = `${left}px`;
   pop.style.top = `${top}px`;
 

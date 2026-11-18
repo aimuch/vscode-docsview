@@ -19,7 +19,7 @@ import {
   renderSurfaceAnnotations,
 } from '../shared/comments';
 import { getFileState } from '../shared/fileState';
-import { icons } from '../shared/icons';
+import { createFindBar } from '../shared/find';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
 import {
   customToolbar,
@@ -235,30 +235,14 @@ eventBus.on('scalechanging', (e: { scale: number }) => {
 
 // ---------------------------------------------------------------- find
 
-const findInput = el('input');
-findInput.type = 'search';
-findInput.placeholder = t('find');
-findInput.setAttribute('aria-label', t('find'));
-const findIcon = el('span', { class: 'pdf-find-icon' });
-findIcon.innerHTML = icons.search;
-const findBox = el('label', { class: 'dv-search pdf-find' }, [findIcon, findInput]);
-const findStatus = el('span', { class: 'dv-label' });
+container.tabIndex = -1;
+let pdfMatchText = '';
 
-function showMatches(e: { matchesCount: { current: number; total: number } }) {
-  findStatus.textContent = e.matchesCount.total
-    ? `${e.matchesCount.current}/${e.matchesCount.total}`
-    : findInput.value
-      ? t('noMatch')
-      : '';
-}
-eventBus.on('updatefindmatchescount', showMatches);
-eventBus.on('updatefindcontrolstate', showMatches);
-
-function find(type: '' | 'again', findPrevious = false) {
+function dispatchPdfFind(query: string, type: '' | 'again', findPrevious = false) {
   eventBus.dispatch('find', {
     source: window,
     type,
-    query: findInput.value,
+    query,
     caseSensitive: false,
     entireWord: false,
     highlightAll: true,
@@ -267,23 +251,45 @@ function find(type: '' | 'again', findPrevious = false) {
   });
 }
 
-findInput.addEventListener('input', () => find(''));
-findInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    find('again', e.shiftKey);
-  }
-});
+const findWidget = createFindBar(
+  {
+    onInput: (q) => {
+      if (!q) {
+        pdfMatchText = '';
+      }
+      dispatchPdfFind(q, '');
+    },
+    step: (backwards) => {
+      if (findWidget.input.value) {
+        dispatchPdfFind(findWidget.input.value, 'again', backwards);
+      }
+    },
+    clear: () => {
+      pdfMatchText = '';
+      dispatchPdfFind('', '');
+      eventBus.dispatch('findbarclose', { source: window });
+    },
+    status: () => pdfMatchText,
+  },
+  container,
+);
+
+function showMatches(e: { matchesCount: { current: number; total: number } }) {
+  pdfMatchText = e.matchesCount.total
+    ? `${e.matchesCount.current}/${e.matchesCount.total}`
+    : findWidget.input.value
+      ? t('noMatch')
+      : '';
+  findWidget.refreshCount(pdfMatchText);
+}
+eventBus.on('updatefindmatchescount', showMatches);
+eventBus.on('updatefindcontrolstate', showMatches);
 
 window.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) {
     return;
   }
-  if (e.key.toLowerCase() === 'f') {
-    e.preventDefault();
-    findInput.focus();
-    findInput.select();
-  } else if (e.key === '=' || e.key === '+') {
+  if (e.key === '=' || e.key === '+') {
     e.preventDefault();
     viewer.increaseScale();
   } else if (e.key === '-' || e.key === '_') {
@@ -479,9 +485,15 @@ function ensureWorker(): Promise<void> {
   return workerReady;
 }
 
+let loadGeneration = 0;
+
 async function load(bytes: Uint8Array) {
+  const myGen = ++loadGeneration;
   try {
     await ensureWorker();
+    if (myGen !== loadGeneration) {
+      return;
+    }
     if (currentDoc) {
       restore = { page: viewer.currentPageNumber, scale: viewer.currentScaleValue || 'page-width' };
     }
@@ -494,6 +506,10 @@ async function load(bytes: Uint8Array) {
       iccUrl: `${assets}/iccs/`,
       useWorkerFetch: false,
     }).promise;
+    if (myGen !== loadGeneration) {
+      void doc.loadingTask.destroy();
+      return;
+    }
     if (pendingWorkerBlobUrl) {
       URL.revokeObjectURL(pendingWorkerBlobUrl);
       pendingWorkerBlobUrl = undefined;
@@ -503,12 +519,18 @@ async function load(bytes: Uint8Array) {
     reported = false;
     status.hidden = true;
     await buildOutline(doc);
+    if (myGen !== loadGeneration) {
+      return;
+    }
     viewer.setDocument(doc);
     linkService.setDocument(doc, null);
     buildThumbnails(doc);
     syncCommentsUi();
     void previous?.loadingTask.destroy();
   } catch (err) {
+    if (myGen !== loadGeneration) {
+      return;
+    }
     status.hidden = false;
     status.classList.add('dv-error');
     status.textContent = t('loadFailed', errorText(err));
@@ -518,6 +540,12 @@ async function load(bytes: Uint8Array) {
 
 // ---------------------------------------------------------------- toolbar
 
+function rotatePdfPages() {
+  if (viewer.pagesCount) {
+    viewer.pagesRotation = (viewer.pagesRotation + 90) % 360;
+  }
+}
+
 const zoomGroup = el('div', { class: 'dv-zoom' }, [
   iconButton('minus', t('zoomOut'), () => viewer.decreaseScale()),
   zoomLabel,
@@ -525,6 +553,7 @@ const zoomGroup = el('div', { class: 'dv-zoom' }, [
   iconButton('fitWidth', t('fitWidth'), () => {
     viewer.currentScaleValue = 'page-width';
   }),
+  iconButton('rotateCW', t('pdfRotateCW'), rotatePdfPages),
 ]);
 
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
@@ -536,13 +565,14 @@ const topBar = customToolbar({
     { id: 'view', nodes: [view.node] },
     { id: 'pager', nodes: [pager.node] },
     { id: 'zoom', nodes: [zoomGroup] },
-    { id: 'find', nodes: [findBox, findStatus] },
+    { id: 'find', nodes: findWidget.nodes },
     { id: 'comments', nodes: [annotateToggle.node], visible: () => editable },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
     openExternalMenuItem(),
+    { label: t('pdfRotateCW'), icon: 'rotateCW', onClick: rotatePdfPages },
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
 });

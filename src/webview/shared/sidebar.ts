@@ -17,6 +17,8 @@ export function writeState(patch: Partial<PersistedState>): void {
   setState({ ...readState(), ...patch });
 }
 
+let sidebarSeq = 0;
+
 export class Sidebar {
   readonly node: HTMLElement;
   readonly toggle: HTMLButtonElement;
@@ -42,17 +44,31 @@ export class Sidebar {
     collapseBtn.classList.add('dv-side-collapse');
     collapseBtn.setAttribute('aria-label', t('collapseSidebar'));
 
+    const uid = `dv-side-${++sidebarSeq}`;
     if (tabs.length > 1) {
       const tablist = el('div', { class: 'dv-side-tabs' });
       tablist.setAttribute('role', 'tablist');
       for (const tab of tabs) {
         const b = el('button', { class: 'dv-side-tab', text: tab.label });
         b.type = 'button';
+        b.id = `${uid}-tab-${tab.id}`;
         b.setAttribute('role', 'tab');
+        b.setAttribute('aria-controls', `${uid}-panel-${tab.id}`);
         b.addEventListener('click', () => this.setTab(tab.id));
         this.tabButtons.set(tab.id, b);
         tablist.append(b);
       }
+      tablist.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') {
+          return;
+        }
+        e.preventDefault();
+        const ids = tabs.map((x) => x.id);
+        const cur = ids.indexOf(this.tab);
+        const next = ids[(cur + (e.key === 'ArrowRight' ? 1 : -1) + ids.length) % ids.length];
+        this.setTab(next);
+        this.tabButtons.get(next)?.focus();
+      });
       tablist.append(collapseBtn);
       this.node.append(tablist);
     } else {
@@ -64,7 +80,11 @@ export class Sidebar {
     }
     for (const tab of tabs) {
       const panel = el('div', { class: 'dv-side-panel' });
+      panel.id = `${uid}-panel-${tab.id}`;
       panel.setAttribute('role', tabs.length > 1 ? 'tabpanel' : 'region');
+      if (tabs.length > 1) {
+        panel.setAttribute('aria-labelledby', `${uid}-tab-${tab.id}`);
+      }
       this.panels.set(tab.id, panel);
       this.node.append(panel);
     }
@@ -154,7 +174,9 @@ export class Sidebar {
       panel.hidden = tabId !== id;
     }
     for (const [tabId, b] of this.tabButtons) {
-      b.setAttribute('aria-selected', String(tabId === id));
+      const selected = tabId === id;
+      b.setAttribute('aria-selected', String(selected));
+      b.tabIndex = selected ? 0 : -1;
     }
     if (persist) {
       writeState({ sidebar: { open: this.open, tab: id } });

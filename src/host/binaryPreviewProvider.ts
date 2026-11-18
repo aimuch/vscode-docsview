@@ -2,35 +2,20 @@ import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../common/protocol';
 import { saveConvertedImage } from './fileActions';
 import { snapshot } from './history';
+import { ImageSession, plainU8 } from './imageSession';
 import { configureWebview, debounce, handleCommonMessage, onWebviewMessage, parentUri, t } from './webviewHtml';
 
 function baseName(uri: vscode.Uri): string {
   return uri.path.slice(uri.path.lastIndexOf('/') + 1);
 }
 
-function plainU8(bytes: Uint8Array): Uint8Array {
-  if (bytes.constructor === Uint8Array) {
-    return bytes;
-  }
-  const out = new Uint8Array(bytes.byteLength);
-  out.set(bytes);
-  return out;
-}
-
-const MAX_IMAGE_HISTORY_STEPS = 10;
-const MAX_IMAGE_HISTORY_BYTES = 128 * 1024 * 1024;
-
-interface ImageStep {
-  before: Uint8Array;
-  after: Uint8Array;
+function isSvgUri(uri: vscode.Uri): boolean {
+  return uri.path.toLowerCase().endsWith('.svg');
 }
 
 class ImageDocument implements vscode.CustomDocument {
   loadError: string | undefined;
-  currentBytes: Uint8Array | undefined;
-  history: ImageStep[] = [];
-  cursor = 0;
-  savedCursor = 0;
+  session: ImageSession | undefined;
   ignoreWatcherUntil = 0;
   diskChangedWhileDirty = false;
   post: (message: HostMessage) => void = () => undefined;
@@ -38,19 +23,19 @@ class ImageDocument implements vscode.CustomDocument {
   constructor(readonly uri: vscode.Uri) {}
 
   get dirty(): boolean {
-    return this.cursor !== this.savedCursor;
+    return this.session?.dirty === true;
   }
 
   dispose(): void {
-    this.currentBytes = undefined;
-    this.history = [];
+    this.session?.dispose();
+    this.session = undefined;
   }
 }
 
 /**
  * Image custom editor (`docsview.image`): supports pixel coordinate & RGB/HEX loupe inspection,
- * BBox measurement, in-place cropping (with full VS Code Undo/Redo, Save & Version History),
- * and one-click format conversion (PNG / JPG / WebP / BMP / ICO).
+ * BBox measurement, in-place cropping/rotation/flip/resize (with memory-bounded Undo/Redo, Save &
+ * Version History), real-time `.svg` XML split-editor sync, and PNG/JPG/WebP/BMP/ICO conversion.
  */
 export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageDocument> {
   static readonly viewTypes = ['docsview.image'];
@@ -62,27 +47,33 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
 
   private async load(document: ImageDocument): Promise<void> {
     try {
-      const bytes = await vscode.workspace.fs.readFile(document.uri);
-      document.currentBytes = plainU8(bytes);
-      document.history = [];
-      document.cursor = 0;
-      document.savedCursor = 0;
+      const openText = isSvgUri(document.uri)
+        ? vscode.workspace.textDocuments.find((d) => d.uri.toString() === document.uri.toString())
+        : undefined;
+      const bytes = openText
+        ? new TextEncoder().encode(openText.getText())
+        : await vscode.workspace.fs.readFile(document.uri);
+      if (document.session) {
+        document.session.reset(bytes);
+      } else {
+        document.session = new ImageSession(bytes);
+      }
       document.loadError = undefined;
       document.diskChangedWhileDirty = false;
     } catch (err) {
-      document.currentBytes = undefined;
+      document.session = undefined;
       document.loadError = t('loadFailed', err instanceof Error ? err.message : String(err));
     }
   }
 
   private sendCurrent(document: ImageDocument, post: (m: HostMessage) => void): void {
-    if (document.loadError || !document.currentBytes) {
+    if (document.loadError || !document.session) {
       post({ type: 'error', message: document.loadError ?? t('loadFailed', '') });
     } else {
       post({
         type: 'load',
         name: baseName(document.uri),
-        bytes: plainU8(document.currentBytes),
+        bytes: plainU8(document.session.bytes),
         editable: true,
       });
     }
@@ -91,14 +82,11 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
   async openCustomDocument(uri: vscode.Uri, openContext: vscode.CustomDocumentOpenContext): Promise<ImageDocument> {
     const document = new ImageDocument(uri);
     await this.load(document);
-    if (openContext.backupId && document.currentBytes) {
+    if (openContext.backupId && document.session) {
       try {
         const backup = await vscode.workspace.fs.readFile(vscode.Uri.parse(openContext.backupId));
         if (backup.byteLength > 0) {
-          const after = plainU8(backup);
-          document.history = [{ before: document.currentBytes, after }];
-          document.cursor = 1;
-          document.currentBytes = after;
+          document.session.replace(backup);
         }
       } catch {
         // Missing or unreadable backup.
@@ -110,6 +98,8 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
   resolveCustomEditor(document: ImageDocument, panel: vscode.WebviewPanel): void {
     const post = (message: HostMessage) => void panel.webview.postMessage(message);
     document.post = post;
+    const key = document.uri.toString();
+    const isSvg = isSvgUri(document.uri);
 
     const disposables: vscode.Disposable[] = [
       onWebviewMessage(panel.webview, (message: WebviewMessage) => {
@@ -119,50 +109,34 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
             this.sendCurrent(document, post);
             break;
           case 'imageReplace': {
-            if (!document.currentBytes || !message.bytes.byteLength) {
+            if (!document.session || !message.bytes.byteLength) {
               break;
             }
-            const before = document.currentBytes;
-            const after = plainU8(message.bytes);
-            if (document.cursor < document.history.length) {
-              if (document.savedCursor > document.cursor) {
-                document.savedCursor = -1;
-              }
-              document.history.length = document.cursor;
-            }
-            const step: ImageStep = { before, after };
-            document.history.push(step);
-            document.cursor = document.history.length;
-            document.currentBytes = after;
-            // Bound retained history byte size so repeated 4K image edits never bloat extension host RAM.
-            let totalBytes = document.history.reduce((s, x) => s + x.before.byteLength + x.after.byteLength, 0);
-            while (
-              document.history.length > 1 &&
-              (document.history.length > MAX_IMAGE_HISTORY_STEPS || totalBytes > MAX_IMAGE_HISTORY_BYTES)
-            ) {
-              const dropped = document.history.shift()!;
-              totalBytes -= dropped.before.byteLength + dropped.after.byteLength;
-              document.cursor = Math.max(0, document.cursor - 1);
-              if (document.savedCursor >= 0) {
-                document.savedCursor--;
+            // If an SVG is also open in a side-by-side TextDocument, apply via WorkspaceEdit
+            // so both panes stay unified without conflicting dirty states.
+            if (isSvg) {
+              const openText = vscode.workspace.textDocuments.find((d) => d.uri.toString() === key);
+              if (openText) {
+                const nextText = new TextDecoder().decode(message.bytes);
+                const lastLine = Math.max(0, openText.lineCount - 1);
+                const fullRange = new vscode.Range(0, 0, lastLine, openText.lineAt(lastLine).text.length);
+                const edit = new vscode.WorkspaceEdit();
+                edit.replace(openText.uri, fullRange, nextText);
+                void vscode.workspace.applyEdit(edit);
+                break;
               }
             }
+            const handle = document.session.replace(message.bytes);
             this.sendCurrent(document, post);
             this.changeEmitter.fire({
               document,
-              label: message.label ?? 'Crop image',
+              label: message.label ?? 'Edit image',
               undo: () => {
-                if (document.cursor > 0 && document.history[document.cursor - 1] === step) {
-                  document.cursor--;
-                }
-                document.currentBytes = step.before;
+                handle.undo();
                 this.sendCurrent(document, document.post);
               },
               redo: () => {
-                if (document.history[document.cursor] === step) {
-                  document.cursor++;
-                }
-                document.currentBytes = step.after;
+                handle.redo();
                 this.sendCurrent(document, document.post);
               },
             });
@@ -177,6 +151,25 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
         }
       }),
     ];
+
+    if (isSvg) {
+      const syncSvgFromText = debounce(() => {
+        const openText = vscode.workspace.textDocuments.find((d) => d.uri.toString() === key);
+        if (!openText || !document.session) {
+          return;
+        }
+        const encoded = new TextEncoder().encode(openText.getText());
+        document.session.syncFromTextEditor(encoded);
+        this.sendCurrent(document, post);
+      }, 80);
+      disposables.push(
+        vscode.workspace.onDidChangeTextDocument((e) => {
+          if (e.document.uri.toString() === key && e.contentChanges.length) {
+            syncSvgFromText();
+          }
+        }),
+      );
+    }
 
     const watcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(parentUri(document.uri), baseName(document.uri)),
@@ -203,12 +196,12 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
     });
     configureWebview(panel, this.context.extensionUri, 'image', {
       documentUri: document.uri,
-      tracksSource: document.uri.path.toLowerCase().endsWith('.svg'),
+      tracksSource: isSvg,
     });
   }
 
   async saveCustomDocument(document: ImageDocument, cancellation: vscode.CancellationToken): Promise<void> {
-    if (!document.currentBytes) {
+    if (!document.session) {
       return;
     }
     if (document.diskChangedWhileDirty) {
@@ -220,14 +213,14 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
     }
     await snapshot(document.uri);
     document.ignoreWatcherUntil = Date.now() + 2000;
-    await vscode.workspace.fs.writeFile(document.uri, document.currentBytes);
-    document.savedCursor = document.cursor;
+    await vscode.workspace.fs.writeFile(document.uri, document.session.bytes);
+    document.session.markSaved();
     document.diskChangedWhileDirty = false;
   }
 
   async saveCustomDocumentAs(document: ImageDocument, destination: vscode.Uri): Promise<void> {
-    if (document.currentBytes) {
-      await vscode.workspace.fs.writeFile(destination, document.currentBytes);
+    if (document.session) {
+      await vscode.workspace.fs.writeFile(destination, document.session.bytes);
     }
   }
 
@@ -240,7 +233,7 @@ export class BinaryPreviewProvider implements vscode.CustomEditorProvider<ImageD
     document: ImageDocument,
     context: vscode.CustomDocumentBackupContext,
   ): Promise<vscode.CustomDocumentBackup> {
-    await vscode.workspace.fs.writeFile(context.destination, document.currentBytes ?? new Uint8Array(0));
+    await vscode.workspace.fs.writeFile(context.destination, document.session?.bytes ?? new Uint8Array(0));
     return {
       id: context.destination.toString(),
       delete: async () => {

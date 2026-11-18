@@ -5,7 +5,10 @@ import { DOMParser, XMLSerializer, type Document as XDocument, type Element as X
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import type { DocComment, DocMutation } from '../../common/protocol';
 
+import { resolveTargetIndex } from './docxPatcher';
+
 const XML = 'text/xml';
+const createXmlParser = () => new DOMParser({ locator: false, onError: () => undefined });
 const P_NS = 'http://schemas.openxmlformats.org/presentationml/2006/main';
 const A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -310,7 +313,7 @@ export function inspectPptx(bytes: Uint8Array): PptxInspection {
       f.name.startsWith('ppt/comments/') ||
       f.name.endsWith('commentAuthors.xml'),
   });
-  const parser = new DOMParser();
+  const parser = createXmlParser();
   const { slidePaths, cx, cy, authorsPath } = readPresentationInfo(files, parser);
   const posMaxX = cx / EMU_PER_COMMENT_POS;
   const posMaxY = cy / EMU_PER_COMMENT_POS;
@@ -416,7 +419,7 @@ export function applyPptxMutations(bytes: Uint8Array, mutations: readonly DocMut
     return bytes;
   }
   const files = unzipSync(bytes);
-  const parser = new DOMParser();
+  const parser = createXmlParser();
   const { slidePaths, cx, cy, authorsPath } = readPresentationInfo(files, parser);
   const posMaxX = cx / EMU_PER_COMMENT_POS;
   const posMaxY = cy / EMU_PER_COMMENT_POS;
@@ -599,10 +602,13 @@ export function applyPptxMutations(bytes: Uint8Array, mutations: readonly DocMut
       }
       const sDoc = parser.parseFromString(strFromU8(files[slidePath]), XML);
       const txBodies = collectSlideTxBodies(sDoc);
-      let target: XElement | undefined = txBodies[mut.shapeIndex];
-      if (!target || extractTxBodyText(target).trim() !== mut.expected.trim()) {
-        target = txBodies.find((tb) => extractTxBodyText(tb).trim() === mut.expected.trim());
-      }
+      const resolvedIdx = resolveTargetIndex(
+        txBodies.map(extractTxBodyText),
+        mut.shapeIndex,
+        mut.expected,
+        6,
+      );
+      const target = resolvedIdx >= 0 ? txBodies[resolvedIdx] : undefined;
       if (target) {
         replaceTxBodyText(sDoc, target, mut.text);
         files[slidePath] = strToU8(serializeXml(sDoc));

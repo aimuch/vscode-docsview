@@ -9,14 +9,14 @@ Preview common document formats inside VS Code and edit spreadsheets in place. *
 | 格式 | 扩展名 | 打开方式 | 能力 |
 | --- | --- | --- | --- |
 | Markdown | `.md` `.markdown` | 标题栏预览按钮 | GitHub 风格渲染、GitHub Alerts（`[!NOTE]` 等）、可勾选任务列表写回源码、字数/阅读时长统计栏、固定/自适应宽度、自定义分栏左右位置、代码高亮、Mermaid、KaTeX 公式、目录导航、滚动同步 |
-| CSV / TSV | `.csv` `.tsv` | 标题栏预览按钮 | 表格 / 分栏 / 文本三态视图、一键冻结首行、双击列边缘自动列宽、底部选区实时统计（计数/求和/均值/最值）、改单元格、增删行列；撤销/保存/编码由 VS Code 原生处理 |
-| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、冻结窗格/一键冻结首行、双击自动列宽、底部选区实时统计、公式栏编辑与实时公式计算、增删行列、新建/重命名/删除工作表 |
-| Excel（旧版等） | `.xls` `.ods` | 单击即预览 | 只读 |
-| Word | `.docx` | 单击即预览 | 页面版式、`Ctrl/Cmd+F` 全文搜索、中英文字体映射、双击段落就地修改文字、标准 OOXML 批注（与 Word/WPS 双向互通）、一键用外部程序打开 |
-| Word（旧版） | `.doc` | 单击即预览 | **仅文字**，无版式（支持一键调用本地 Office/WPS 打开） |
-| PDF | `.pdf` | 单击即预览 | 翻页、键盘与滚轮缩放、适应宽度、全文搜索、文字选择、ISO 32000 标准框选/图钉批注（与 Acrobat/WPS/预览双向互通） |
+| CSV / TSV | `.csv` `.tsv` | 标题栏预览按钮 | 表格 / 分栏 / 文本三态视图、一键冻结首行/首列、双击列边缘自动列宽、选区一键复制为 Markdown 表格、底部选区实时统计（计数/求和/均值/最值）、改单元格、增删行列；撤销/保存/编码由 VS Code 原生处理 |
+| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、冻结窗格/一键冻结首行与首列、双击自动列宽、选区复制为 Markdown 表格、底部选区实时统计、公式栏编辑与实时公式计算、增删行列、新建/重命名/删除工作表 |
+| Excel（旧版等） | `.xls` `.ods` | 单击即预览 | 只读（支持排序筛选、选区统计与复制为 Markdown 表格） |
+| Word | `.docx` | 单击即预览 | 页面版式、`Ctrl/Cmd+F` 全文搜索、中英文字体映射、双击段落就地修改文字、标准 OOXML 批注（支持自定义作者名，与 Word/WPS 双向互通）、一键用外部程序打开 |
+| Word（旧版） | `.doc` | 单击即预览 | **仅文字**，支持缩放、`Ctrl/Cmd+F` 全文搜索、字数段落统计与一键调用本地 Office/WPS 打开 |
+| PDF | `.pdf` | 单击即预览 | 翻页、顺时针 `90°` 旋转页面、键盘与滚轮缩放、适应宽度、全文搜索、文字选择、ISO 32000 标准框选/图钉批注（与 Acrobat/WPS/预览双向互通） |
 | PowerPoint | `.pptx` | 单击即预览 | 原生画幅比例（`4:3` / `16:10` / `16:9`）、`Ctrl/Cmd+F` 跨页全文搜索、双击文本框就地改字、标准幻灯片批注（与 PowerPoint/WPS 互通） |
-| 图片编辑与像素标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览（`.svg` 亦支持源码分栏） | 15×11 十字准星放大镜取色（跟随指针 / 固定可拖拽、`C` 复制、`Shift` 切换 RGB/HEX）、纯像素坐标与 BBox 画框测距、90° 旋转/水平垂直镜像翻转/修改尺寸、交互式图像裁剪（均接入撤销/保存/历史）、PNG/JPG/WebP/BMP/ICO 格式互转 |
+| 图片编辑与像素标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览（`.svg` 支持 `图像/分栏/源码` 实时热更新） | 15×11 十字准星放大镜取色（跟随指针 / 固定可拖拽、`C` 复制、`Shift` 切换 RGB/HEX）、纯像素坐标与 BBox 画框测距、90° 旋转/水平垂直镜像翻转/修改尺寸、交互式图像裁剪（均接入撤销/保存/历史）、PNG/JPG/WebP/BMP/ICO 格式互转 |
 
 Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一致：点编辑器右上角的预览图标，或在命令面板运行 **DocsView：在侧边打开预览**。想让 CSV 默认用表格打开，可在设置里加：
 
@@ -102,6 +102,7 @@ Markdown / CSV 的文本编辑器右上角有两个 DocsView 图标：**打开�
 | `docsview.showNotices` | `true` | 在预览顶部显示格式说明提示条 |
 | `docsview.image.loupePosition` | `follow` | 图片像素取色放大镜位置：`follow`（跟随指针）/ `fixed`（固定在右上角） |
 | `docsview.sidebarPosition` | `left` | 导航/目录/批注侧边栏位置：`left`（左侧）/ `right`（右侧） |
+| `docsview.comments.author` | `""` | Word / PPT / PDF 添加批注时记录的作者名称（留空默认使用当前系统用户名） |
 | `docsview.toolbar` | 默认左区 | 顶部工具栏左侧与右侧显示的项目及其排列顺序 |
 
 ## 已知限制
@@ -146,14 +147,14 @@ npm run package     # 生成 .vsix
 | Format | Extensions | Opens | Features |
 | --- | --- | --- | --- |
 | Markdown | `.md` `.markdown` | preview button in the editor title | GitHub-style rendering, GitHub Alerts (`[!NOTE]` etc.), interactive task-list checkboxes, word/reading-time status bar, syntax highlighting, Mermaid, KaTeX, outline, live refresh, scroll sync |
-| CSV / TSV | `.csv` `.tsv` | preview button in the editor title | table / split / text views, one-click freeze header row, double-click column auto-fit, live selection stats (Count/Sum/Avg/Min/Max), edit cells, insert/delete rows & columns |
-| Excel | `.xlsx` `.xlsm` | on click | styles, merged cells, frozen panes / freeze top row, double-click auto-fit, live selection stats, `fx` formula bar & live recalculation, multi-sheet editing |
-| Excel (legacy) | `.xls` `.ods` | on click | read-only |
-| Word | `.docx` | on click | paged layout, `Ctrl/Cmd+F` search, Office/WPS CJK font aliases, double-click paragraph editing, interoperable OOXML comments, open in external app |
-| Word (legacy) | `.doc` | on click | **text only** (plus one-click open in system app) |
-| PDF | `.pdf` | on click | paging, keyboard & wheel zoom, fit width, search, text selection, ISO 32000 box & pin annotations |
+| CSV / TSV | `.csv` `.tsv` | preview button in the editor title | table / split / text views, one-click freeze top row & first column, double-click column auto-fit, copy selection as Markdown table, live selection stats, edit cells, insert/delete rows & columns |
+| Excel | `.xlsx` `.xlsm` | on click | styles, merged cells, frozen panes / freeze top row & first column, double-click auto-fit, copy as Markdown table, live selection stats, `fx` formula bar & live recalculation, multi-sheet editing |
+| Excel (legacy) | `.xls` `.ods` | on click | read-only (with sort/filter, selection stats & copy as Markdown table) |
+| Word | `.docx` | on click | paged layout, `Ctrl/Cmd+F` search, Office/WPS CJK font aliases, double-click paragraph editing, interoperable OOXML comments (configurable author), open in external app |
+| Word (legacy) | `.doc` | on click | **text only**, with zoom, `Ctrl/Cmd+F` search, word/paragraph stats & open in system app |
+| PDF | `.pdf` | on click | paging, `90°` page rotation, keyboard & wheel zoom, fit width, search, text selection, ISO 32000 box & pin annotations |
 | PowerPoint | `.pptx` | on click | native slide aspect ratio (`4:3` / `16:9`), `Ctrl/Cmd+F` cross-slide search, double-click shape text editing, interoperable OOXML slide comments |
-| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click (`.svg` also supports split source) | 15×11 crosshair magnifier loupe (follow cursor or fixed & draggable), RGB/HEX picker, pixel BBox measurement, 90° rotate / H·V flip / resize, interactive cropping (with undo/save), PNG/JPG/WebP/BMP/ICO conversion |
+| Images | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | on click (`.svg` live-syncs split source) | 15×11 crosshair magnifier loupe (follow cursor or fixed & draggable), RGB/HEX picker, pixel BBox measurement, 90° rotate / H·V flip / resize, interactive cropping (with undo/save), PNG/JPG/WebP/BMP/ICO conversion |
 
 Markdown and CSV keep opening as text; use the preview icon in the editor title or **DocsView: Open Preview to the Side**. Use **Reopen Editor With…** to switch any file between DocsView and the text editor.
 

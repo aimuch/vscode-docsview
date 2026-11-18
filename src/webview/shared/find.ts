@@ -1,5 +1,5 @@
-// Reusable in-document text search using the CSS Custom Highlight API, so DOM nodes in
-// Markdown, Word (.docx) and PowerPoint (.pptx) are never mutated during highlighting.
+// Reusable in-document text search (CSS Custom Highlight API) + unified collapsible Find capsule
+// shared across Markdown, Word (.docx), PowerPoint (.pptx), PDF (.pdf), Spreadsheets, and .doc.
 import { el, t } from './api';
 import { icons } from './icons';
 import { iconButton } from './ui';
@@ -149,58 +149,131 @@ export class PreviewFind {
   }
 }
 
-/** Creates a standard toolbar Find widget (`Ctrl/Cmd+F`, input, match count, prev/next arrows). */
-export function createFindWidget(find: PreviewFind, focusReturnTarget: HTMLElement): {
+export interface FindBackend {
+  onInput(query: string): void;
+  step(backwards: boolean): void;
+  clear(): void;
+  status(query: string): string;
+}
+
+export interface FindBar {
   nodes: HTMLElement[];
-  refreshCount(): void;
-} {
+  input: HTMLInputElement;
+  open(): void;
+  close(): void;
+  refreshCount(overrideStatus?: string): void;
+}
+
+/**
+ * Collapsible toolbar Find capsule:
+ * - Collapsed: compact 28px search icon button (`Ctrl/Cmd+F`), freeing ~240px of toolbar width!
+ * - Expanded: `[search input | match count | prev ↑ | next ↓ | close ×]`, overflow-aware (`dv:slot-change`)
+ *   so pressing `Ctrl/Cmd+F` even in a narrow split pane reveals and focuses the input reliably.
+ */
+export function createFindBar(
+  backend: FindBackend,
+  focusReturnTarget: HTMLElement,
+  opts: { ariaLabel?: string } = {},
+): FindBar {
+  const toggleBtn = iconButton('search', `${t('find')} (Ctrl/Cmd+F)`, () => open());
+  toggleBtn.setAttribute('aria-expanded', 'false');
+
   const input = el('input');
   input.type = 'search';
   input.placeholder = t('find');
-  input.setAttribute('aria-label', t('findInPreview'));
-  const icon = el('span', { class: 'dv-find-icon' });
-  icon.innerHTML = icons.search;
-  const box = el('label', { class: 'dv-search dv-find-box' }, [icon, input]);
+  input.setAttribute('aria-label', opts.ariaLabel ?? t('findInPreview'));
+
+  const searchIcon = el('span', { class: 'dv-find-icon' });
+  searchIcon.innerHTML = icons.search;
   const count = el('span', { class: 'dv-label dv-find-count' });
+  const box = el('label', { class: 'dv-search dv-find-box' }, [searchIcon, input]);
 
-  const refreshCount = () => {
-    count.textContent = input.value ? (find.total ? `${find.current}/${find.total}` : t('noMatch')) : '';
-  };
-
-  input.addEventListener('input', () => {
-    find.search(input.value);
-    refreshCount();
-  });
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      find.next(e.shiftKey);
-      refreshCount();
-    } else if (e.key === 'Escape') {
-      input.value = '';
-      find.clear();
-      refreshCount();
-      focusReturnTarget.focus();
-    }
-  });
-  window.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-      e.preventDefault();
-      input.focus();
-      input.select();
-    }
-  });
   const prevBtn = iconButton('up', t('findPrev'), () => {
-    find.next(true);
+    backend.step(true);
     refreshCount();
   });
   const nextBtn = iconButton('down', t('findNext'), () => {
-    find.next();
+    backend.step(false);
+    refreshCount();
+  });
+  const closeBtn = iconButton('close', t('close'), () => close());
+  closeBtn.classList.add('dv-find-close');
+
+  const barWrap = el('div', { class: 'dv-find-bar' }, [box, count, prevBtn, nextBtn, closeBtn]);
+  barWrap.hidden = true;
+
+  const refreshCount = (overrideStatus?: string) => {
+    count.textContent = overrideStatus !== undefined ? overrideStatus : backend.status(input.value);
+  };
+
+  const notifyToolbar = (ensureVisible: boolean) => {
+    (barWrap.hidden ? toggleBtn : barWrap).dispatchEvent(
+      new CustomEvent('dv:slot-change', { bubbles: true, detail: { ensureVisible } }),
+    );
+  };
+
+  const open = () => {
+    toggleBtn.hidden = true;
+    toggleBtn.setAttribute('aria-expanded', 'true');
+    barWrap.hidden = false;
+    notifyToolbar(true);
+    input.focus();
+    input.select();
+  };
+
+  const close = () => {
+    input.value = '';
+    backend.clear();
+    refreshCount('');
+    barWrap.hidden = true;
+    toggleBtn.hidden = false;
+    toggleBtn.setAttribute('aria-expanded', 'false');
+    notifyToolbar(false);
+    focusReturnTarget.focus();
+  };
+
+  input.addEventListener('input', () => {
+    backend.onInput(input.value);
     refreshCount();
   });
 
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      backend.step(e.shiftKey);
+      refreshCount();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    }
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      open();
+    }
+  });
+
   return {
-    nodes: [box, count, prevBtn, nextBtn],
+    nodes: [toggleBtn, barWrap],
+    input,
+    open,
+    close,
     refreshCount,
   };
+}
+
+/** Creates a standard toolbar Find widget backed by `PreviewFind`. */
+export function createFindWidget(find: PreviewFind, focusReturnTarget: HTMLElement): FindBar {
+  return createFindBar(
+    {
+      onInput: (q) => find.search(q),
+      step: (backwards) => find.next(backwards),
+      clear: () => find.clear(),
+      status: (q) => (q ? (find.total ? `${find.current}/${find.total}` : t('noMatch')) : ''),
+    },
+    focusReturnTarget,
+  );
 }

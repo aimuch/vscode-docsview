@@ -27,17 +27,25 @@ import {
   bboxDimensions,
   clamp,
   cropSvgMarkup,
-  encodeBmp,
-  encodeIcoFromPng,
   formatBBoxTuple,
   formatRgb,
   parseBBoxInput,
   resizeSvgMarkup,
   rgbToHex,
+  transformBBoxes,
   type BBox,
   type ImageTransformOp,
   type PixelRect,
 } from './bbox';
+import {
+  encodeCanvas,
+  encodeRegionFromCanvas,
+  extOfFileName,
+  MIME_BY_EXT,
+  nativeFormatForExt,
+  renderTransformedCanvas,
+} from './encoder';
+import { LOUPE_H, LOUPE_W, paintPixelLoupe, sampleCanvasPixel } from './loupe';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const svgEl = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string> = {}) => {
@@ -48,26 +56,7 @@ const svgEl = <K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<strin
   return node;
 };
 
-const MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
-  bmp: 'image/bmp',
-  svg: 'image/svg+xml',
-  ico: 'image/x-icon',
-  avif: 'image/avif',
-};
-
 const ZOOM_STEPS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32];
-const LOUPE_COLS = 15; // 15x11 landscape pixel grid matching WeChat/Snipaste screenshot loupe
-const LOUPE_ROWS = 11;
-const LOUPE_HALF_X = 7;
-const LOUPE_HALF_Y = 5;
-const LOUPE_PX = 10; // 150x110 canvas
-const LOUPE_W = LOUPE_COLS * LOUPE_PX;
-const LOUPE_H = LOUPE_ROWS * LOUPE_PX;
 
 type ToolMode = 'inspect' | 'bbox' | 'crop';
 type AspectPreset = 'free' | '1:1' | '16:9' | '4:3';
@@ -390,88 +379,18 @@ function syncCropUi() {
 // ---------------------------------------------------------------- encoding & conversion
 
 function currentExt(): string {
-  const dot = fileName.lastIndexOf('.');
-  return dot >= 0 ? fileName.slice(dot + 1).toLowerCase() : 'png';
+  return extOfFileName(fileName);
 }
 
 function currentNativeFormat(): ImageExportFormat {
-  const ext = currentExt();
-  if (ext === 'jpg' || ext === 'jpeg') return 'jpg';
-  if (ext === 'webp') return 'webp';
-  if (ext === 'bmp') return 'bmp';
-  if (ext === 'ico') return 'ico';
-  return 'png';
-}
-
-function canvasToBytes(canvas: HTMLCanvasElement, mime: string, quality?: number): Promise<Uint8Array> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      async (blob) => {
-        if (!blob) {
-          reject(new Error(`Failed to encode ${mime}`));
-          return;
-        }
-        resolve(new Uint8Array(await blob.arrayBuffer()));
-      },
-      mime,
-      quality,
-    );
-  });
-}
-
-async function encodeCanvas(canvas: HTMLCanvasElement, format: ImageExportFormat): Promise<Uint8Array> {
-  const w = canvas.width;
-  const h = canvas.height;
-  if (format === 'bmp') {
-    const ctx = canvas.getContext('2d')!;
-    const imgData = ctx.getImageData(0, 0, w, h);
-    return encodeBmp(imgData.data, imgData.width, imgData.height);
-  }
-  if (format === 'ico') {
-    const maxSide = 256;
-    const scale = Math.min(1, maxSide / Math.max(w, h));
-    const iw = Math.max(1, Math.round(w * scale));
-    const ih = Math.max(1, Math.round(h * scale));
-    const iconCanvas = document.createElement('canvas');
-    iconCanvas.width = iw;
-    iconCanvas.height = ih;
-    iconCanvas.getContext('2d')!.drawImage(canvas, 0, 0, w, h, 0, 0, iw, ih);
-    const pngBytes = await canvasToBytes(iconCanvas, 'image/png');
-    return encodeIcoFromPng(pngBytes, iw, ih);
-  }
-  if (format === 'jpg') {
-    const jpgCanvas = document.createElement('canvas');
-    jpgCanvas.width = w;
-    jpgCanvas.height = h;
-    const ctx = jpgCanvas.getContext('2d')!;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, w, h);
-    ctx.drawImage(canvas, 0, 0);
-    return canvasToBytes(jpgCanvas, 'image/jpeg', 0.92);
-  }
-  if (format === 'webp') {
-    return canvasToBytes(canvas, 'image/webp', 0.92);
-  }
-  return canvasToBytes(canvas, 'image/png');
+  return nativeFormatForExt(currentExt());
 }
 
 async function encodeRegion(rect: PixelRect, format: ImageExportFormat): Promise<Uint8Array> {
   if (!sourceCanvas || !sampleCtx) {
     throw new Error('Image is not ready');
   }
-  const w = Math.max(1, Math.round(rect.x2 - rect.x1));
-  const h = Math.max(1, Math.round(rect.y2 - rect.y1));
-
-  if (format === 'bmp') {
-    const imgData = sampleCtx.getImageData(rect.x1, rect.y1, w, h);
-    return encodeBmp(imgData.data, imgData.width, imgData.height);
-  }
-
-  const outCanvas = document.createElement('canvas');
-  outCanvas.width = w;
-  outCanvas.height = h;
-  outCanvas.getContext('2d')!.drawImage(sourceCanvas, rect.x1, rect.y1, w, h, 0, 0, w, h);
-  return encodeCanvas(outCanvas, format);
+  return encodeRegionFromCanvas(sourceCanvas, sampleCtx, rect, format);
 }
 
 function fullRect(): PixelRect {
@@ -529,29 +448,7 @@ async function applyTransform(op: ImageTransformOp): Promise<void> {
   if (!sourceCanvas || !naturalW || !naturalH) {
     return;
   }
-  const outW = op === 'rotCW' || op === 'rotCCW' ? naturalH : naturalW;
-  const outH = op === 'rotCW' || op === 'rotCCW' ? naturalW : naturalH;
-  const outCanvas = document.createElement('canvas');
-  outCanvas.width = outW;
-  outCanvas.height = outH;
-  const ctx = outCanvas.getContext('2d')!;
-  ctx.save();
-  if (op === 'rotCW') {
-    ctx.translate(outW, 0);
-    ctx.rotate(Math.PI / 2);
-  } else if (op === 'rotCCW') {
-    ctx.translate(0, outH);
-    ctx.rotate(-Math.PI / 2);
-  } else if (op === 'flipH') {
-    ctx.translate(outW, 0);
-    ctx.scale(-1, 1);
-  } else if (op === 'flipV') {
-    ctx.translate(0, outH);
-    ctx.scale(1, -1);
-  }
-  ctx.drawImage(sourceCanvas, 0, 0);
-  ctx.restore();
-
+  const outCanvas = renderTransformedCanvas(sourceCanvas, op);
   const ext = currentExt();
   if (ext === 'gif' || ext === 'avif' || ext === 'svg') {
     notice.flash(t('imgCropReadonlyFmt'), 4200);
@@ -560,20 +457,8 @@ async function applyTransform(op: ImageTransformOp): Promise<void> {
     return;
   }
 
-  // Keep existing BBoxes aligned with the rotated/flipped image!
   if (boxes.length > 0) {
-    boxes = boxes.map((b) => {
-      if (op === 'rotCW') {
-        return { ...b, x1: naturalH - b.y2, y1: b.x1, x2: naturalH - b.y1, y2: b.x2 };
-      }
-      if (op === 'rotCCW') {
-        return { ...b, x1: b.y1, y1: naturalW - b.x2, x2: b.y2, y2: naturalW - b.x1 };
-      }
-      if (op === 'flipH') {
-        return { ...b, x1: naturalW - b.x2, x2: naturalW - b.x1 };
-      }
-      return { ...b, y1: naturalH - b.y2, y2: naturalH - b.y1 };
-    });
+    boxes = transformBBoxes(boxes, naturalW, naturalH, op);
   }
 
   const labelKey =
@@ -821,6 +706,27 @@ const modeSeg = segmented<ToolMode>(
   (mode) => setToolMode(mode),
 );
 
+const svgViewSeg = segmented<'canvas' | 'split' | 'source'>(
+  t('view'),
+  [
+    ['canvas', t('viewCanvas')],
+    ['split', t('viewSplit')],
+    ['source', t('viewSource')],
+  ],
+  'canvas',
+  (mode) => {
+    if (mode === 'canvas') {
+      post({ type: 'closeSource' });
+    } else {
+      post({ type: 'showSource', beside: mode === 'split' });
+      if (mode === 'source') {
+        svgViewSeg.set('canvas');
+      }
+    }
+  },
+);
+svgViewSeg.node.hidden = true;
+
 const loupePosSeg = segmented<LoupePosition>(
   t('loupePosition'),
   [
@@ -885,11 +791,15 @@ const topBar = customToolbar({
   subtitle: () => (fileName ? fileName : 'IMAGE'),
   slots: [
     { id: 'nav', nodes: [sidebar.toggle] },
-    { id: 'view', nodes: [modeSeg.node] },
+    { id: 'view', nodes: [svgViewSeg.node, modeSeg.node] },
     { id: 'zoom', nodes: [zoomGroup] },
     {
+      id: 'transform',
+      nodes: [rotCCWBtn, rotCWBtn, flipHBtn, flipVBtn, resizeBtn, convertDropdown],
+    },
+    {
       id: 'bbox',
-      nodes: [rotCCWBtn, rotCWBtn, flipHBtn, flipVBtn, resizeBtn, loupePosSeg.node, convertDropdown, copyJsonBtn, clearBtn],
+      nodes: [loupePosSeg.node, copyJsonBtn, clearBtn],
     },
     { id: 'history', nodes: [historyBtn], visible: () => getFileState().history },
     { id: 'openApp', nodes: [openExternalButton()] },
@@ -1058,13 +968,7 @@ stage.addEventListener(
 // ---------------------------------------------------------------- pixel sampling & 15x11 loupe
 
 function samplePixel(x: number, y: number): [number, number, number, number] {
-  const px = clamp(x, 0, naturalW - 1);
-  const py = clamp(y, 0, naturalH - 1);
-  if (sampleCtx) {
-    const d = sampleCtx.getImageData(px, py, 1, 1).data;
-    return [d[0], d[1], d[2], d[3]];
-  }
-  return [0, 0, 0, 255];
+  return sampleCanvasPixel(sampleCtx, naturalW, naturalH, x, y);
 }
 
 function syncLoupeVisibility() {
@@ -1133,76 +1037,7 @@ function positionLoupe() {
 }
 
 function paintLoupe(cx: number, cy: number) {
-  loupeCtx.clearRect(0, 0, LOUPE_W, LOUPE_H);
-
-  // Read only the <= 15x11 visible pixel patch once per frame (<= 660 bytes, zero full-image buffer!).
-  const sx0 = clamp(cx - LOUPE_HALF_X, 0, naturalW);
-  const sy0 = clamp(cy - LOUPE_HALF_Y, 0, naturalH);
-  const sx1 = clamp(cx + LOUPE_HALF_X + 1, 0, naturalW);
-  const sy1 = clamp(cy + LOUPE_HALF_Y + 1, 0, naturalH);
-  const sw = sx1 - sx0;
-  const sh = sy1 - sy0;
-  const patch = sampleCtx && sw > 0 && sh > 0 ? sampleCtx.getImageData(sx0, sy0, sw, sh).data : undefined;
-
-  // 1. Draw magnified 15x11 pixel cells
-  for (let dy = -LOUPE_HALF_Y; dy <= LOUPE_HALF_Y; dy++) {
-    for (let dx = -LOUPE_HALF_X; dx <= LOUPE_HALF_X; dx++) {
-      const x = cx + dx;
-      const y = cy + dy;
-      const px = (dx + LOUPE_HALF_X) * LOUPE_PX;
-      const py = (dy + LOUPE_HALF_Y) * LOUPE_PX;
-      if (!patch || x < sx0 || y < sy0 || x >= sx1 || y >= sy1) {
-        loupeCtx.fillStyle = '#18181b';
-      } else {
-        const pi = ((y - sy0) * sw + (x - sx0)) * 4;
-        const r = patch[pi];
-        const g = patch[pi + 1];
-        const b = patch[pi + 2];
-        const a = patch[pi + 3];
-        if (a >= 255) {
-          loupeCtx.fillStyle = `rgb(${r},${g},${b})`;
-        } else {
-          const bg = (x + y) % 2 === 0 ? 220 : 170;
-          const alpha = a / 255;
-          loupeCtx.fillStyle = `rgb(${Math.round(r * alpha + bg * (1 - alpha))},${Math.round(g * alpha + bg * (1 - alpha))},${Math.round(b * alpha + bg * (1 - alpha))})`;
-        }
-      }
-      loupeCtx.fillRect(px, py, LOUPE_PX, LOUPE_PX);
-    }
-  }
-
-  // 2. Royal-blue translucent crosshair bands (leaving center pixel true-colour)
-  const cxPx = LOUPE_HALF_X * LOUPE_PX;
-  const cyPx = LOUPE_HALF_Y * LOUPE_PX;
-  loupeCtx.fillStyle = 'rgba(37, 99, 235, 0.52)';
-  loupeCtx.fillRect(0, cyPx, cxPx, LOUPE_PX);
-  loupeCtx.fillRect(cxPx + LOUPE_PX, cyPx, LOUPE_W - (cxPx + LOUPE_PX), LOUPE_PX);
-  loupeCtx.fillRect(cxPx, 0, LOUPE_PX, cyPx);
-  loupeCtx.fillRect(cxPx, cyPx + LOUPE_PX, LOUPE_PX, LOUPE_H - (cyPx + LOUPE_PX));
-
-  // 3. Crisp 1px pixel grid lines
-  loupeCtx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-  loupeCtx.lineWidth = 1;
-  loupeCtx.beginPath();
-  for (let i = 1; i < LOUPE_COLS; i++) {
-    const pos = i * LOUPE_PX + 0.5;
-    loupeCtx.moveTo(pos, 0);
-    loupeCtx.lineTo(pos, LOUPE_H);
-  }
-  for (let j = 1; j < LOUPE_ROWS; j++) {
-    const pos = j * LOUPE_PX + 0.5;
-    loupeCtx.moveTo(0, pos);
-    loupeCtx.lineTo(LOUPE_W, pos);
-  }
-  loupeCtx.stroke();
-
-  // 4. Center pixel [·] reticle matching reference screenshot
-  loupeCtx.strokeStyle = 'rgba(0, 0, 0, 0.78)';
-  loupeCtx.lineWidth = 1;
-  loupeCtx.strokeRect(cxPx - 0.5, cyPx - 0.5, LOUPE_PX + 1, LOUPE_PX + 1);
-  loupeCtx.strokeStyle = '#ffffff';
-  loupeCtx.lineWidth = 1.6;
-  loupeCtx.strokeRect(cxPx + 0.5, cyPx + 0.5, LOUPE_PX - 1, LOUPE_PX - 1);
+  paintPixelLoupe(loupeCtx, sampleCtx, naturalW, naturalH, cx, cy);
 }
 
 function refreshLoupeColorLabel() {
@@ -1896,8 +1731,9 @@ async function loadImage(name: string, bytes: Uint8Array) {
       nextBoxId = boxes.reduce((m, b) => Math.max(m, b.id || 0), 0) + 1;
     }
   }
-  topBar.refresh();
   const ext = currentExt();
+  svgViewSeg.node.hidden = ext !== 'svg';
+  topBar.refresh();
   const mime = MIME_BY_EXT[ext] ?? 'image/png';
   if (blobUrl) {
     URL.revokeObjectURL(blobUrl);
@@ -1963,6 +1799,8 @@ async function loadImage(name: string, bytes: Uint8Array) {
 onMessage((message) => {
   if (message.type === 'load') {
     void loadImage(message.name, message.bytes);
+  } else if (message.type === 'viewState') {
+    svgViewSeg.set(message.split ? 'split' : 'canvas');
   } else if (message.type === 'error') {
     canvasWrap.hidden = true;
     statusHost.hidden = false;

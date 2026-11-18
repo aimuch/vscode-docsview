@@ -25,5 +25,6 @@
   "config.image.loupePosition": "Placement of the pixel magnifier loupe in image previews: follow the mouse cursor or stay at a fixed corner.",
   "config.sidebarPosition": "Which side of the preview the navigation / outline sidebar appears on.",
   "config.toolbar": "Items shown on the left and right sides of the DocsView top toolbar, and their display order.",
+  "config.comments.author": "Author name recorded when adding comments to Word, PowerPoint or PDF files (leave blank to use your system username).",
   "command.showHistory": "DocsView: Show Version History"
 }

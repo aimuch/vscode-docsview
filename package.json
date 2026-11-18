@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -183,22 +183,22 @@
       "explorer/context": [
         {
           "command": "docsview.showPreview",
-          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i",
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i",
           "group": "navigation@90"
         }
       ],
       "commandPalette": [
         {
           "command": "docsview.showPreview",
-          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i"
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i"
         },
         {
           "command": "docsview.showPreviewToSide",
-          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv)$/i"
+          "when": "resourceExtname =~ /^\\.(md|markdown|csv|tsv|svg)$/i"
         },
         {
           "command": "docsview.showSource",
-          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv'"
+          "when": "activeCustomEditorId == 'docsview.markdown' || activeCustomEditorId == 'docsview.csv' || (activeCustomEditorId == 'docsview.image' && resourceExtname =~ /^\\.svg$/i)"
         },
         {
           "command": "docsview.showHistory",
@@ -347,6 +347,11 @@
           "default": "left",
           "description": "%config.sidebarPosition%"
         },
+        "docsview.comments.author": {
+          "type": "string",
+          "default": "",
+          "description": "%config.comments.author%"
+        },
         "docsview.toolbar": {
           "type": "object",
           "default": {
@@ -355,6 +360,7 @@
               "view",
               "pager",
               "zoom",
+              "transform",
               "bbox",
               "cellBar",
               "find",

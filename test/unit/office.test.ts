@@ -12,6 +12,7 @@ import {
   inspectPptx,
   OfficeSession,
   readPptxAspect,
+  resolveTargetIndex,
 } from '../../src/host/office';
 
 async function makeSampleDocx(): Promise<Uint8Array> {
@@ -311,5 +312,19 @@ describe('OfficeSession undo, redo, stale rejection & hot-exit backup', () => {
       expect(session.comments).toHaveLength(i + 1);
     }
     expect(session.comments[8].text).toBe('批注 #9');
+    // Comment-only mutations on DOCX emit lightweight incremental `{ type: 'comments' }` messages
+    expect(steps[0].message.type).toBe('comments');
+  });
+
+  it('resolves paragraph indices safely across TOC drift while refusing distant duplicate overwrites', () => {
+    const paras = ['封面', '待定', ...Array.from({ length: 30 }, (_, i) => `章节 ${i + 1}`), '唯一结论段', '待定'];
+    // Exact index hit
+    expect(resolveTargetIndex(paras, 1, '待定')).toBe(1);
+    // Unique paragraph found even when hintIndex drifted by > 25 lines due to TOC/page breaks
+    expect(resolveTargetIndex(paras, 5, '唯一结论段')).toBe(32);
+    // Nearby duplicate within maxDrift (12) resolves to closest
+    expect(resolveTargetIndex(paras, 3, '待定')).toBe(1);
+    // Ambiguous duplicate far from both occurrences is safely rejected (-1) instead of corrupting line 1!
+    expect(resolveTargetIndex(paras, 18, '待定')).toBe(-1);
   });
 });
