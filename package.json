@@ -515,10 +515,30 @@
         },
         "docsview.toolbar": {
           "type": "object",
+          "properties": {
+            "left": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "right": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "docActionOrder": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
           "default": {
             "left": [
               "nav",
               "view",
+              "doc:slideMode",
+              "doc:focusMode",
+              "doc:present",
               "pager",
               "zoom",
               "transform",
@@ -529,7 +549,11 @@
               "comments",
               "highlight",
               "structure",
+              "doc:chart",
+              "doc:pivot",
               "ai",
+              "doc:bookmark",
+              "doc:captureFrame",
               "actions",
               "theme",
               "openApp"

@@ -411,7 +411,7 @@ const topBar = customToolbar({
   subtitle: 'Markdown',
   slots: [
     { id: 'nav', nodes: [sidebar.toggle] },
-    { id: 'view', nodes: [view.node, slideModeBtn, focusToggle.node] },
+    { id: 'view', nodes: [view.node] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'find', nodes: findWidget.nodes },
     { id: 'edit', label: t('editMode'), nodes: [editToggle.node] },
@@ -422,12 +422,12 @@ const topBar = customToolbar({
     { id: 'rtl', nodes: [rtlToggle.node] },
   ],
   documentActions: [
-    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
-    { label: t('mdSlideMode'), icon: 'play', onClick: () => slideDeck.open() },
-    { label: t('mdFocusMode'), icon: 'focus', onClick: () => setFocusMode(!focusMode) },
-    { label: t('exportHtml'), icon: 'export', onClick: () => exportAs('html') },
-    { label: t('exportPdf'), hint: t('exportPdfHint'), icon: 'export', onClick: () => exportAs('pdf') },
-    { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
+    { id: 'ai', slotId: 'ai', label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
+    { id: 'slideMode', label: t('mdSlideMode'), icon: 'play', toolbarNode: slideModeBtn, onClick: () => slideDeck.open() },
+    { id: 'focusMode', label: t('mdFocusMode'), icon: 'focus', toolbarNode: focusToggle.node, onClick: () => setFocusMode(!focusMode) },
+    { id: 'exportHtml', label: t('exportHtml'), icon: 'export', onClick: () => exportAs('html') },
+    { id: 'exportPdf', label: t('exportPdf'), hint: t('exportPdfHint'), icon: 'export', onClick: () => exportAs('pdf') },
+    { id: 'history', slotId: 'history', label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
   documentOptions: [
     {

@@ -1292,10 +1292,14 @@ const topBar = customToolbar({
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
-    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
+    { id: 'ai', slotId: 'ai', label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     openExternalMenuItem(),
-    { label: t('pdfRotateCW'), icon: 'rotateCW', onClick: rotatePdfPages },
+    { id: 'pdfAddText', label: t('pdfAddText'), icon: 'pencil', visible: () => modeMachine.isEditable, onClick: openPdfTextBoxModal },
+    { id: 'pdfAddSignature', label: t('pdfAddSignature'), icon: 'signature', visible: () => modeMachine.isEditable, onClick: openPdfSignatureModal },
+    { id: 'pdfAddWatermark', label: t('pdfAddWatermark'), icon: 'watermark', visible: () => modeMachine.isEditable, onClick: openPdfWatermarkModal },
+    { id: 'pdfRotate', label: t('pdfRotateCW'), icon: 'rotateCW', onClick: rotatePdfPages },
     {
+      id: 'pdfSaveRotate',
       label: t('pdfSaveRotateCW'),
       icon: 'rotateCW',
       visible: () => modeMachine.isEditable,
@@ -1306,6 +1310,7 @@ const topBar = customToolbar({
         }),
     },
     {
+      id: 'pdfExtract',
       label: t('pdfExtractPages'),
       icon: 'export',
       visible: () => modeMachine.isEditable,
@@ -1316,14 +1321,15 @@ const topBar = customToolbar({
           totalPages: viewer.pagesCount || 1,
         }),
     },
-    { label: t('pdfMerge'), icon: 'plus', visible: () => modeMachine.isEditable, onClick: () => post({ type: 'mergePdfs' }) },
+    { id: 'pdfMerge', label: t('pdfMerge'), icon: 'plus', visible: () => modeMachine.isEditable, onClick: () => post({ type: 'mergePdfs' }) },
     {
+      id: 'exportComments',
       label: t('exportCommentsMd'),
       icon: 'export',
       visible: () => comments.length > 0,
       onClick: () => commentsPanel.exportMarkdown(),
     },
-    { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
+    { id: 'history', slotId: 'history', label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
 });
 

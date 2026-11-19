@@ -522,7 +522,7 @@ const topBar = customToolbar({
   subtitle: 'PPTX',
   slots: [
     { id: 'nav', nodes: [sidebar.toggle] },
-    { id: 'view', nodes: [view.node, presentBtn, notesToggle.node] },
+    { id: 'view', nodes: [view.node, notesToggle.node] },
     { id: 'pager', nodes: [pager.node] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'find', nodes: findWidget.nodes },
@@ -534,19 +534,20 @@ const topBar = customToolbar({
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
-    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
+    { id: 'ai', slotId: 'ai', label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     openExternalMenuItem(),
-    { label: t('presentSlides'), icon: 'play', onClick: () => enterPresentation() },
-    { label: t('exportMarkdown'), icon: 'export', onClick: () => post({ type: 'exportDocMarkdown' }) },
+    { id: 'present', label: t('presentSlides'), icon: 'play', toolbarNode: presentBtn, onClick: () => enterPresentation() },
+    { id: 'exportMd', slotId: 'actions', label: t('exportMarkdown'), icon: 'export', onClick: () => post({ type: 'exportDocMarkdown' }) },
     {
+      id: 'exportComments',
       label: t('exportCommentsMd'),
       icon: 'export',
       visible: () => comments.length > 0,
       onClick: () => commentsPanel.exportMarkdown(),
     },
-    { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
-    { label: t('diffCompareHistory'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'compareDocument', fromHistory: true }) },
-    { label: t('diffCompareFile'), icon: 'history', onClick: () => post({ type: 'compareDocument', fromHistory: false }) },
+    { id: 'history', slotId: 'history', label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
+    { id: 'diffHistory', label: t('diffCompareHistory'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'compareDocument', fromHistory: true }) },
+    { id: 'diffFile', label: t('diffCompareFile'), icon: 'history', onClick: () => post({ type: 'compareDocument', fromHistory: false }) },
   ],
 });
 

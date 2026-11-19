@@ -832,6 +832,7 @@ function setSheetRtl(on: boolean) {
 function convertItems(): MenuItem[] {
   const formats: ('csv' | 'tsv' | 'xlsx' | 'jsonl')[] = ['csv', 'tsv', 'xlsx', 'jsonl'];
   return formats.map((format) => ({
+    id: `convert-${format}`,
     label: t('convertTo', format.toUpperCase()),
     icon: 'export' as const,
     visible: () => {
@@ -1377,7 +1378,7 @@ const topBar = customToolbar({
     { id: 'edit', label: t('lockEdits'), nodes: [lock] },
     { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node, freezeColBtn.node, condFormatDropdown, formatDropdown] },
     { id: 'structure', nodes: [structureGroup, cleanDropdown] },
-    { id: 'ai', nodes: [chartBtn, pivotBtn, ai.button] },
+    { id: 'ai', nodes: [ai.button] },
     {
       id: 'actions',
       label: t('convertMenu'),
@@ -1388,16 +1389,16 @@ const topBar = customToolbar({
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
-    { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
-    { label: t('sheetChart'), icon: 'chart', onClick: openQuickChart },
-    { label: t('sheetPivot'), icon: 'pivot', onClick: openQuickPivot },
-    { label: t('diffCompareHistory'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'compareDocument', fromHistory: true }) },
-    { label: t('diffCompareFile'), icon: 'history', onClick: () => post({ type: 'compareDocument', fromHistory: false }) },
+    { id: 'ai', slotId: 'ai', label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
+    { id: 'chart', label: t('sheetChart'), icon: 'chart', toolbarNode: chartBtn, onClick: openQuickChart },
+    { id: 'pivot', label: t('sheetPivot'), icon: 'pivot', toolbarNode: pivotBtn, onClick: openQuickPivot },
+    { id: 'diffHistory', label: t('diffCompareHistory'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'compareDocument', fromHistory: true }) },
+    { id: 'diffFile', label: t('diffCompareFile'), icon: 'history', onClick: () => post({ type: 'compareDocument', fromHistory: false }) },
     openExternalMenuItem(),
-    { label: t('copyAsMarkdown'), icon: 'copyMd', onClick: copySelectionMarkdown },
-    { label: t('copyAsJson'), icon: 'copy', onClick: copySelectionJson },
+    { id: 'copyMd', label: t('copyAsMarkdown'), icon: 'copyMd', onClick: copySelectionMarkdown },
+    { id: 'copyJson', label: t('copyAsJson'), icon: 'copy', onClick: copySelectionJson },
     ...convertItems(),
-    { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
+    { id: 'history', slotId: 'history', label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
   ],
   documentOptions: [
     {

@@ -188,8 +188,8 @@ const topBar = customToolbar({
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
-    { icon: 'sparkle', label: t('aiAssistant'), onClick: () => ai.open() },
-    { icon: 'export', label: t('exportMarkdown'), onClick: exportBookAsMarkdown },
+    { id: 'ai', slotId: 'ai', icon: 'sparkle', label: t('aiAssistant'), onClick: () => ai.open() },
+    { id: 'exportMd', slotId: 'actions', icon: 'export', label: t('exportMarkdown'), onClick: exportBookAsMarkdown },
     openExternalMenuItem(),
   ],
 });

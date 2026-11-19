@@ -4,6 +4,7 @@ import {
   normalizeToolbarConfig,
   type AiProviderId,
   type AiSettingsSnapshot,
+  type CoreToolbarItemId,
   type ToolbarConfig,
   type ToolbarItemId,
 } from '../../common/protocol';
@@ -38,6 +39,8 @@ export function openExternalButton(): HTMLButtonElement {
 
 export function openExternalMenuItem(): MenuItem {
   return {
+    id: 'openApp',
+    slotId: 'openApp',
     icon: 'external',
     label: t('openExternalApp'),
     onClick: () => post({ type: 'openExternalApp' }),
@@ -209,6 +212,12 @@ export function noticeBanner(initialInfo = ''): NoticeBanner {
 // ---------------------------------------------------------------- dropdown action menu
 
 export interface MenuItem {
+  /** Stable identifier for reordering in "This Document" and registering a `doc:<id>` toolbar slot. */
+  id?: string;
+  /** Links this action to an existing core toolbar slot (e.g. `'ai'`, `'history'`, `'openApp'`) instead of creating a duplicate slot. */
+  slotId?: ToolbarItemId;
+  /** Optional custom toolbar widget node used when this action is pinned to the outer top toolbar. */
+  toolbarNode?: HTMLElement;
   label: string | (() => string);
   hint?: string;
   /** Optional icon shown on action buttons in the drawer. */
@@ -345,7 +354,7 @@ export function moreMenu(
 
 // ---------------------------------------------------------------- toolbar layout state
 
-const SLOT_LABELS: Record<ToolbarItemId, StringKey> = {
+const SLOT_LABELS: Record<CoreToolbarItemId, StringKey> = {
   nav: 'slotNav',
   view: 'slotView',
   pager: 'slotPager',
@@ -464,6 +473,8 @@ export interface ToolbarSlot {
 }
 
 export interface DrawerOption {
+  /** Optional linked toolbar slot ID so "Configure" in Unpinned items can jump straight to this option. */
+  slotId?: ToolbarItemId;
   label: string | (() => string);
   checked: () => boolean;
   visible?: () => boolean;
@@ -495,6 +506,7 @@ const PAGED_KINDS = new Set(['docx', 'pdf', 'text']);
 
 export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
   const slotMap = new Map<ToolbarItemId, { spec: ToolbarSlot; wrap: HTMLElement }>();
+  const slotActionHandlers = new Map<ToolbarItemId, () => void>();
   const register = (spec: ToolbarSlot) => {
     if (slotMap.has(spec.id)) {
       return;
@@ -507,6 +519,35 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
   for (const s of opts.slots) {
     register(s);
   }
+
+  // Resolve each "This Document" action to its toolbar slot so every document feature
+  // can be toggled outside on the top toolbar and reordered independently.
+  const resolveMenuLabel = (item: MenuItem): string =>
+    typeof item.label === 'function' ? item.label() : item.label;
+  const actionKeyOf = (item: MenuItem, idx: number): string => item.id ?? item.slotId ?? `idx-${idx}`;
+  const actionSlotOf = (item: MenuItem): ToolbarItemId | undefined =>
+    item.slotId ?? (item.id ? (`doc:${item.id}` as ToolbarItemId) : undefined);
+
+  for (const item of opts.documentActions ?? []) {
+    const slotId = actionSlotOf(item);
+    if (!slotId) {
+      continue;
+    }
+    if (!slotActionHandlers.has(slotId)) {
+      slotActionHandlers.set(slotId, item.onClick);
+    }
+    if (!slotMap.has(slotId)) {
+      const label = resolveMenuLabel(item);
+      const node = item.toolbarNode ?? iconButton(item.icon ?? 'more', label, item.onClick);
+      register({
+        id: slotId,
+        label,
+        nodes: [node],
+        visible: item.visible,
+      });
+    }
+  }
+
   // Automatically register shared appearance/language slots supported by this viewer.
   if (config.kind === 'markdown' || config.kind === 'epub') {
     register({ id: 'width', nodes: [mdWidthToggle()] });
@@ -768,8 +809,20 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
 
   backdrop.addEventListener('mousedown', () => closeDrawer());
 
+  let docCustomizeMode = false;
+  let draggingDocKey: string | undefined;
+
   function slotTitle(id: ToolbarItemId): string {
-    return slotMap.get(id)?.spec.label ?? t(SLOT_LABELS[id]);
+    const custom = slotMap.get(id)?.spec.label;
+    if (custom) {
+      return custom;
+    }
+    const key = SLOT_LABELS[id as CoreToolbarItemId];
+    return key ? t(key) : id;
+  }
+
+  function isSlotPinned(id: ToolbarItemId): boolean {
+    return currentToolbar.left.includes(id) || currentToolbar.right.includes(id);
   }
 
   function localZones(): { left: ToolbarItemId[]; right: ToolbarItemId[]; hidden: ToolbarItemId[] } {
@@ -780,11 +833,19 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     return { left, right, hidden };
   }
 
-  function applyLocalZones(nextLeft: ToolbarItemId[], nextRight: ToolbarItemId[]): void {
-    setToolbarConfig({
+  function applyLocalZones(
+    nextLeft: ToolbarItemId[],
+    nextRight: ToolbarItemId[],
+    nextDocOrder: Record<string, string[]> | undefined = currentToolbar.docActionOrder,
+  ): void {
+    const next: ToolbarConfig = {
       left: mergeZone(currentToolbar.left, supportedIds, nextLeft),
       right: mergeZone(currentToolbar.right, supportedIds, nextRight),
-    });
+    };
+    if (nextDocOrder && Object.keys(nextDocOrder).length) {
+      next.docActionOrder = nextDocOrder;
+    }
+    setToolbarConfig(next);
   }
 
   function moveItem(
@@ -932,6 +993,48 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     return listEl;
   }
 
+  const SETTING_SLOTS = new Set<ToolbarItemId>([
+    'theme',
+    'width',
+    'scheme',
+    'invertPages',
+    'language',
+    'rtl',
+    'highlight',
+    'edit',
+  ]);
+
+  function focusDrawerSetting(slotId: ToolbarItemId): boolean {
+    const target = contentEl.querySelector<HTMLElement>(`[data-setting-slot="${slotId}"]`);
+    if (!target) {
+      return false;
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.remove('dv-st-flash');
+    void target.offsetWidth;
+    target.classList.add('dv-st-flash');
+    setTimeout(() => target.classList.remove('dv-st-flash'), 1500);
+    return true;
+  }
+
+  function invokeSlotDirectly(slotId: ToolbarItemId): void {
+    const handler = slotActionHandlers.get(slotId);
+    if (handler) {
+      closeDrawer();
+      handler();
+      return;
+    }
+    const entry = slotMap.get(slotId);
+    if (!entry) {
+      return;
+    }
+    closeDrawer();
+    const btn = entry.spec.nodes
+      .flatMap((n) => (n instanceof HTMLButtonElement ? [n] : [...n.querySelectorAll<HTMLButtonElement>('button')]))
+      .find((b) => !b.hidden && !b.disabled);
+    btn?.click();
+  }
+
   function buildToolbarSection(): HTMLElement {
     const { left, right, hidden } = localZones();
     const resetBtn = el('button', { class: 'dv-st-action-btn dv-tb-reset', text: t('toolbarReset') });
@@ -973,6 +1076,20 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
           draggingId = undefined;
         });
 
+        const isSettingSlot = SETTING_SLOTS.has(id);
+        const useBtn = el('button', {
+          class: 'dv-tb-use-btn',
+          text: isSettingSlot ? t('toolbarGoSetting') : t('toolbarUseNow'),
+          title: isSettingSlot ? t('toolbarGoSetting') : t('toolbarUseNow'),
+        });
+        useBtn.type = 'button';
+        useBtn.addEventListener('click', () => {
+          if (isSettingSlot && focusDrawerSetting(id)) {
+            return;
+          }
+          invokeSlotDirectly(id);
+        });
+
         const addLeft = el('button', { class: 'dv-tb-pin-btn', text: t('pinLeft'), title: t('toLeft') });
         addLeft.type = 'button';
         addLeft.addEventListener('click', () => moveItem(id, 'left'));
@@ -983,29 +1100,98 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
 
         chip.append(
           el('span', { class: 'dv-tb-name', text: slotTitle(id) }),
-          el('span', { class: 'dv-tb-btns' }, [addLeft, addRight]),
+          el('span', { class: 'dv-tb-btns' }, [useBtn, addLeft, addRight]),
         );
         pool.append(chip);
       }
-      children.push(el('div', { class: 'dv-tb-col-title', text: t('toolbarHidden') }), pool);
+      children.push(
+        el('div', { class: 'dv-tb-col-title', text: t('toolbarHidden') }),
+        el('div', { class: 'dv-st-muted dv-tb-hidden-hint', text: t('toolbarHiddenHint') }),
+        pool,
+      );
     }
 
     return el('section', { class: 'dv-st-section' }, children);
   }
 
+  function orderedDocumentActions(): { key: string; slotId?: ToolbarItemId; item: MenuItem }[] {
+    const raw = (opts.documentActions ?? [])
+      .map((item, idx) => ({ key: actionKeyOf(item, idx), slotId: actionSlotOf(item), item }))
+      .filter((entry) => entry.item.visible?.() !== false);
+    const saved = currentToolbar.docActionOrder?.[config.kind];
+    if (!saved?.length) {
+      return raw;
+    }
+    const rank = new Map(saved.map((k, i) => [k, i]));
+    return [...raw].sort((a, b) => {
+      const ra = rank.has(a.key) ? rank.get(a.key)! : Number.MAX_SAFE_INTEGER;
+      const rb = rank.has(b.key) ? rank.get(b.key)! : Number.MAX_SAFE_INTEGER;
+      return ra - rb;
+    });
+  }
+
+  function saveDocActionOrder(nextKeys: string[], syncPinnedSlots = true): void {
+    const nextMap: Record<string, string[]> = { ...(currentToolbar.docActionOrder ?? {}), [config.kind]: nextKeys };
+    let { left, right } = localZones();
+    if (syncPinnedSlots) {
+      // Keep pinned document-action slots in the same relative order inside their outer toolbar zone.
+      const keyToSlot = new Map<string, ToolbarItemId>();
+      (opts.documentActions ?? []).forEach((item, idx) => {
+        const s = actionSlotOf(item);
+        if (s) {
+          keyToSlot.set(actionKeyOf(item, idx), s);
+        }
+      });
+      const desiredSlots = nextKeys.map((k) => keyToSlot.get(k)).filter((s): s is ToolbarItemId => Boolean(s));
+      const desiredSet = new Set<ToolbarItemId>(desiredSlots);
+      const reorderZone = (zone: ToolbarItemId[]): ToolbarItemId[] => {
+        const inZone = desiredSlots.filter((s) => zone.includes(s));
+        let cursor = 0;
+        return zone.map((id) => (desiredSet.has(id) ? (inZone[cursor++] ?? id) : id));
+      };
+      left = reorderZone(left);
+      right = reorderZone(right);
+    }
+    applyLocalZones(left, right, nextMap);
+  }
+
+  function inferOptionSlotId(opt: DrawerOption, labelText: string): ToolbarItemId | undefined {
+    if (opt.slotId) {
+      return opt.slotId;
+    }
+    if (labelText === t('rtl')) return 'rtl';
+    if (labelText === t('highlightRowCol')) return 'highlight';
+    if (labelText === t('editMode') || labelText === t('lockEdits')) return 'edit';
+    return undefined;
+  }
+
   function buildDocumentSection(): HTMLElement | undefined {
-    const visibleActions = (opts.documentActions ?? []).filter((a) => a.visible?.() !== false);
+    const visibleEntries = orderedDocumentActions();
     const visibleOptions = (opts.documentOptions ?? []).filter((o) => o.visible?.() !== false);
-    if (!visibleActions.length && !visibleOptions.length) {
+    if (!visibleEntries.length && !visibleOptions.length) {
       return undefined;
     }
-    const children: HTMLElement[] = [el('h3', { class: 'dv-st-heading', text: t('thisDocument') })];
 
-    if (visibleActions.length) {
+    const headChildren: HTMLElement[] = [el('h3', { class: 'dv-st-heading', text: t('thisDocument') })];
+    if (visibleEntries.length) {
+      const manageBtn = el('button', {
+        class: docCustomizeMode ? 'dv-st-action-btn dv-tb-reset dv-active' : 'dv-st-action-btn dv-tb-reset',
+        text: docCustomizeMode ? t('docCustomizeDone') : t('docCustomize'),
+      });
+      manageBtn.type = 'button';
+      manageBtn.addEventListener('click', () => {
+        docCustomizeMode = !docCustomizeMode;
+        renderDrawer();
+      });
+      headChildren.push(manageBtn);
+    }
+    const children: HTMLElement[] = [el('div', { class: 'dv-st-head-row' }, headChildren)];
+
+    if (visibleEntries.length && !docCustomizeMode) {
       const actionGrid = el(
         'div',
         { class: 'dv-st-actions' },
-        visibleActions.map((item) => {
+        visibleEntries.map(({ key, slotId, item }) => {
           const btn = el('button', { class: 'dv-st-action-btn' });
           btn.type = 'button';
           if (item.icon) {
@@ -1013,9 +1199,7 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
             ic.innerHTML = icons[item.icon];
             btn.append(ic);
           }
-          btn.append(
-            el('span', { text: typeof item.label === 'function' ? item.label() : item.label }),
-          );
+          btn.append(el('span', { text: resolveMenuLabel(item) }));
           if (item.hint) {
             btn.append(el('span', { class: 'dv-st-muted', text: `(${item.hint})` }));
           }
@@ -1023,10 +1207,119 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
             closeDrawer();
             item.onClick();
           });
-          return btn;
+
+          if (!slotId || !supportedIds.has(slotId)) {
+            return btn;
+          }
+          const pinned = isSlotPinned(slotId);
+          const pinBtn = el('button', {
+            class: pinned ? 'dv-st-action-pin dv-pinned' : 'dv-st-action-pin',
+            title: pinned ? t('docUnpinOutside') : t('docPinOutside'),
+          });
+          pinBtn.type = 'button';
+          pinBtn.setAttribute('aria-pressed', String(pinned));
+          pinBtn.setAttribute('aria-label', pinned ? t('docUnpinOutside') : t('docPinOutside'));
+          pinBtn.innerHTML = icons.pin;
+          pinBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            moveItem(slotId, pinned ? 'hidden' : 'left');
+          });
+          const pill = el('span', { class: 'dv-st-action-pill' }, [btn, pinBtn]);
+          pill.dataset.docAction = key;
+          return pill;
         }),
       );
       children.push(actionGrid);
+    } else if (visibleEntries.length && docCustomizeMode) {
+      children.push(el('div', { class: 'dv-st-muted dv-tb-hidden-hint', text: t('docOrderHint') }));
+      const list = el('div', { class: 'dv-tb-list dv-st-doc-list' });
+      const keys = visibleEntries.map((e) => e.key);
+
+      const moveDocKey = (fromKey: string, toIdx: number) => {
+        const next = keys.filter((k) => k !== fromKey);
+        const clamped = Math.max(0, Math.min(next.length, toIdx));
+        next.splice(clamped, 0, fromKey);
+        saveDocActionOrder(next);
+      };
+
+      visibleEntries.forEach(({ key, slotId, item }, index) => {
+        const row = el('div', { class: 'dv-tb-item dv-st-doc-row' });
+        row.dataset.docAction = key;
+        row.draggable = true;
+
+        const grip = el('span', { class: 'dv-tb-grip' });
+        grip.innerHTML = icons.grip;
+
+        const labelWrap = el('span', { class: 'dv-tb-name' });
+        if (item.icon) {
+          const ic = el('span', { class: 'dv-st-action-icon' });
+          ic.innerHTML = icons[item.icon];
+          labelWrap.append(ic);
+        }
+        labelWrap.append(el('span', { text: resolveMenuLabel(item) }));
+
+        const controls: HTMLElement[] = [];
+        if (slotId && supportedIds.has(slotId)) {
+          const pinned = isSlotPinned(slotId);
+          const pinToggle = el('button', {
+            class: pinned ? 'dv-tb-pin-btn dv-pinned' : 'dv-tb-pin-btn',
+            title: pinned ? t('docUnpinOutside') : t('docPinOutside'),
+          });
+          pinToggle.type = 'button';
+          pinToggle.setAttribute('aria-pressed', String(pinned));
+          pinToggle.innerHTML = icons.pin;
+          pinToggle.addEventListener('click', () => moveItem(slotId, pinned ? 'hidden' : 'left'));
+          controls.push(pinToggle);
+        }
+
+        const upBtn = iconButton('up', t('moveUp'), () => moveDocKey(key, index - 1));
+        upBtn.classList.add('dv-tb-mini');
+        upBtn.disabled = index === 0;
+
+        const downBtn = iconButton('down', t('moveDown'), () => moveDocKey(key, index + 1));
+        downBtn.classList.add('dv-tb-mini');
+        downBtn.disabled = index === visibleEntries.length - 1;
+
+        controls.push(upBtn, downBtn);
+        row.append(grip, labelWrap, el('span', { class: 'dv-tb-btns' }, controls));
+
+        row.addEventListener('dragstart', (e) => {
+          draggingDocKey = key;
+          row.classList.add('dv-tb-dragging');
+          e.dataTransfer?.setData('text/plain', key);
+        });
+        row.addEventListener('dragend', () => {
+          draggingDocKey = undefined;
+          row.classList.remove('dv-tb-dragging');
+        });
+        row.addEventListener('dragover', (e) => {
+          if (!draggingDocKey || draggingDocKey === key) return;
+          e.preventDefault();
+          const rect = row.getBoundingClientRect();
+          const before = e.clientY < rect.top + rect.height / 2;
+          row.classList.toggle('dv-drop-before', before);
+          row.classList.toggle('dv-drop-after', !before);
+        });
+        row.addEventListener('dragleave', () => {
+          row.classList.remove('dv-drop-before', 'dv-drop-after');
+        });
+        row.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const rect = row.getBoundingClientRect();
+          const before = e.clientY < rect.top + rect.height / 2;
+          row.classList.remove('dv-drop-before', 'dv-drop-after');
+          if (!draggingDocKey || draggingDocKey === key) return;
+          const dragged = draggingDocKey;
+          draggingDocKey = undefined;
+          const curIdx = keys.indexOf(dragged);
+          let targetIdx = before ? index : index + 1;
+          if (curIdx >= 0 && curIdx < targetIdx) targetIdx--;
+          moveDocKey(dragged, targetIdx);
+        });
+
+        list.append(row);
+      });
+      children.push(list);
     }
 
     if (visibleOptions.length) {
@@ -1042,7 +1335,12 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
             reconcileBar();
           });
           const labelText = typeof opt.label === 'function' ? opt.label() : opt.label;
-          return el('label', { class: 'dv-check' }, [box, el('span', { text: labelText })]);
+          const row = el('label', { class: 'dv-check' }, [box, el('span', { text: labelText })]);
+          const inferredSlot = inferOptionSlotId(opt, labelText);
+          if (inferredSlot) {
+            row.dataset.settingSlot = inferredSlot;
+          }
+          return row;
         }),
       );
       children.push(optList);

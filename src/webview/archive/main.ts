@@ -97,8 +97,8 @@ const topBar = customToolbar({
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
-    { icon: 'sparkle', label: t('aiAssistant'), onClick: () => ai.open() },
-    { icon: 'export', label: t('archiveExtractAll'), onClick: () => post({ type: 'extractAllArchive' }) },
+    { id: 'ai', slotId: 'ai', icon: 'sparkle', label: t('aiAssistant'), onClick: () => ai.open() },
+    { id: 'extractAll', slotId: 'actions', icon: 'export', label: t('archiveExtractAll'), onClick: () => post({ type: 'extractAllArchive' }) },
     openExternalMenuItem(),
   ],
 });

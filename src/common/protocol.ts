@@ -333,7 +333,7 @@ export interface AiPromptContext {
 
 // ---------------------------------------------------------------- toolbar layout
 
-export type ToolbarItemId =
+export type CoreToolbarItemId =
   | 'nav'
   | 'view'
   | 'pager'
@@ -357,7 +357,10 @@ export type ToolbarItemId =
   | 'invertPages'
   | 'language';
 
-export const ALL_TOOLBAR_ITEMS: readonly ToolbarItemId[] = [
+/** Core toolbar slots plus per-document action slots (`doc:<actionId>`). */
+export type ToolbarItemId = CoreToolbarItemId | `doc:${string}`;
+
+export const ALL_TOOLBAR_ITEMS: readonly CoreToolbarItemId[] = [
   'nav',
   'view',
   'pager',
@@ -385,12 +388,17 @@ export const ALL_TOOLBAR_ITEMS: readonly ToolbarItemId[] = [
 export interface ToolbarConfig {
   left: ToolbarItemId[];
   right: ToolbarItemId[];
+  /** Optional per-viewer custom order of action buttons inside "This Document" in Settings. */
+  docActionOrder?: Record<string, string[]>;
 }
 
 export const DEFAULT_TOOLBAR: ToolbarConfig = {
   left: [
     'nav',
     'view',
+    'doc:slideMode',
+    'doc:focusMode',
+    'doc:present',
     'pager',
     'zoom',
     'transform',
@@ -401,7 +409,11 @@ export const DEFAULT_TOOLBAR: ToolbarConfig = {
     'comments',
     'highlight',
     'structure',
+    'doc:chart',
+    'doc:pivot',
     'ai',
+    'doc:bookmark',
+    'doc:captureFrame',
     'actions',
     'theme',
     'openApp',
@@ -410,29 +422,53 @@ export const DEFAULT_TOOLBAR: ToolbarConfig = {
 };
 
 const VALID_TOOLBAR_SET = new Set<string>(ALL_TOOLBAR_ITEMS);
+const DOC_SLOT_RE = /^doc:[a-zA-Z0-9_-]{1,48}$/;
+
+export function isValidToolbarItemId(id: string): id is ToolbarItemId {
+  return VALID_TOOLBAR_SET.has(id) || DOC_SLOT_RE.test(id);
+}
 
 /** Sanitises user/persisted toolbar layouts: drops unknown or duplicate IDs. */
 export function normalizeToolbarConfig(raw: unknown): ToolbarConfig {
   if (!raw || typeof raw !== 'object') {
     return { left: [...DEFAULT_TOOLBAR.left], right: [...DEFAULT_TOOLBAR.right] };
   }
-  const obj = raw as { left?: unknown; right?: unknown };
+  const obj = raw as { left?: unknown; right?: unknown; docActionOrder?: unknown };
   const seen = new Set<ToolbarItemId>();
   const clean = (arr: unknown, fallback: readonly ToolbarItemId[]): ToolbarItemId[] => {
     const source = Array.isArray(arr) ? arr : fallback;
     const out: ToolbarItemId[] = [];
     for (const item of source) {
-      if (typeof item === 'string' && VALID_TOOLBAR_SET.has(item) && !seen.has(item as ToolbarItemId)) {
-        seen.add(item as ToolbarItemId);
-        out.push(item as ToolbarItemId);
+      if (typeof item === 'string' && isValidToolbarItemId(item) && !seen.has(item)) {
+        seen.add(item);
+        out.push(item);
       }
     }
     return out;
   };
-  return {
+  let docActionOrder: Record<string, string[]> | undefined;
+  if (obj.docActionOrder && typeof obj.docActionOrder === 'object' && !Array.isArray(obj.docActionOrder)) {
+    const cleanedMap: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(obj.docActionOrder as Record<string, unknown>)) {
+      if (/^[a-zA-Z0-9_-]{1,24}$/.test(k) && Array.isArray(v)) {
+        const list = [...new Set(v.filter((x): x is string => typeof x === 'string' && /^[a-zA-Z0-9_:-]{1,48}$/.test(x)))];
+        if (list.length) {
+          cleanedMap[k] = list;
+        }
+      }
+    }
+    if (Object.keys(cleanedMap).length) {
+      docActionOrder = cleanedMap;
+    }
+  }
+  const res: ToolbarConfig = {
     left: clean(obj.left, DEFAULT_TOOLBAR.left),
     right: clean(obj.right, DEFAULT_TOOLBAR.right),
   };
+  if (docActionOrder) {
+    res.docActionOrder = docActionOrder;
+  }
+  return res;
 }
 
 // ---------------------------------------------------------------- messages

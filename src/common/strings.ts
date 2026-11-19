@@ -461,6 +461,14 @@ const en = {
   mediaExportBookmarks: 'Export markers (.md)',
   mediaBookmarkPlaceholder: 'Note at {0}…',
   mediaNoBookmarks: 'Press M or click + to bookmark timestamps.',
+  docCustomize: 'Pin & reorder',
+  docCustomizeDone: 'Done',
+  docPinOutside: 'Show on top toolbar',
+  docUnpinOutside: 'Hide from top toolbar',
+  docOrderHint: 'Drag or use arrows to reorder actions; click the pin icon to toggle showing on the outer toolbar.',
+  toolbarHiddenHint: 'Unpinned items stay off the top bar. Click "Use / Configure" to access them right here, or pin to Left / Right.',
+  toolbarUseNow: 'Use',
+  toolbarGoSetting: 'Configure',
 };
 
 const zh: typeof en = {
@@ -922,6 +930,14 @@ const zh: typeof en = {
   mediaExportBookmarks: '导出打点笔记 (.md)',
   mediaBookmarkPlaceholder: '在 {0} 处记录笔记…',
   mediaNoBookmarks: '按 M 键或点击 + 在当前时间点添加笔记打点。',
+  docCustomize: '管理显示与排序',
+  docCustomizeDone: '完成',
+  docPinOutside: '显示在外面顶栏',
+  docUnpinOutside: '从外面顶栏隐藏',
+  docOrderHint: '拖拽或点上下箭头可自定义顺序；点图钉图标可一键切换是否显示在外面顶栏。',
+  toolbarHiddenHint: '未固定项不会显示在外面顶栏；点「使用 / 去设置」可直接在设置内操作或定位配置，点「+ 左侧 / + 右侧」可固定到顶栏。',
+  toolbarUseNow: '使用',
+  toolbarGoSetting: '去设置',
 };
 
 export type StringKey = keyof typeof en;

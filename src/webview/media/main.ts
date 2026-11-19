@@ -144,18 +144,20 @@ const topBar = customToolbar({
   subtitle: () => (getFileState().ext ? getFileState().ext.toUpperCase() : 'MEDIA'),
   slots: [
     { id: 'view', nodes: [speedSelect, loopToggle.node] },
-    { id: 'actions', nodes: [bookmarkBtn, captureBtn, exportBmBtn] },
+    { id: 'actions', nodes: [exportBmBtn] },
     { id: 'openApp', nodes: [openExternalButton()] },
   ],
   documentActions: [
-    { label: t('mediaAddBookmark'), icon: 'bookmark', onClick: addBookmark },
+    { id: 'bookmark', label: t('mediaAddBookmark'), icon: 'bookmark', toolbarNode: bookmarkBtn, onClick: addBookmark },
     {
+      id: 'captureFrame',
       label: t('mediaCaptureFrame'),
       icon: 'camera',
+      toolbarNode: captureBtn,
       visible: () => mediaKind === 'video',
       onClick: captureVideoFrame,
     },
-    { label: t('exportMarkdown'), icon: 'export', onClick: exportBookmarksMarkdown },
+    { id: 'exportMd', slotId: 'actions', label: t('exportMarkdown'), icon: 'export', onClick: exportBookmarksMarkdown },
     openExternalMenuItem(),
   ],
 });

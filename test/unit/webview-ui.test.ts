@@ -451,6 +451,65 @@ describe('appearance', () => {
     tb.closeDrawer();
     tb.node.remove();
   });
+
+  it('pins and reorders This Document actions independently and lets unpinned items run or jump to settings', () => {
+    hostSends({
+      type: 'toolbar',
+      toolbar: { left: ['nav', 'doc:slideMode'], right: [] },
+    });
+    posted.length = 0;
+
+    const ran: string[] = [];
+    const tb = ui.customToolbar({
+      subtitle: 'Markdown',
+      slots: [
+        { id: 'nav', nodes: [ui.iconButton('sidebar', '目录', () => ran.push('nav'))] },
+        { id: 'ai', nodes: [ui.iconButton('sparkle', 'AI', () => ran.push('ai'))] },
+      ],
+      documentActions: [
+        { id: 'ai', slotId: 'ai', icon: 'sparkle', label: 'AI 助手', onClick: () => ran.push('ai') },
+        { id: 'slideMode', icon: 'play', label: '幻灯片演示', onClick: () => ran.push('slide') },
+        { id: 'focusMode', icon: 'focus', label: '专注阅读模式', onClick: () => ran.push('focus') },
+      ],
+    });
+    document.body.append(tb.node);
+
+    const slotOrder = () =>
+      [...tb.node.querySelectorAll<HTMLElement>('.dv-zone-left .dv-slot')].map((n) => n.dataset.slot);
+    expect(slotOrder()).toEqual(['nav', 'doc:slideMode']);
+
+    tb.openDrawer();
+    const drawer = [...document.querySelectorAll<HTMLElement>('.dv-st-drawer')].pop()!;
+
+    // 1. Toggle pinning 'focusMode' onto outer toolbar directly from "This Document" pin icon.
+    const focusPin = drawer.querySelector<HTMLButtonElement>('.dv-st-action-pill[data-doc-action="focusMode"] .dv-st-action-pin')!;
+    expect(focusPin.getAttribute('aria-pressed')).toBe('false');
+    focusPin.click();
+    expect(slotOrder()).toEqual(['nav', 'doc:slideMode', 'doc:focusMode']);
+
+    // 2. Enter "This Document" customize mode and move 'focusMode' above 'slideMode'.
+    drawer.querySelector<HTMLButtonElement>('.dv-st-head-row .dv-tb-reset')!.click();
+    const focusRow = drawer.querySelector<HTMLElement>('.dv-st-doc-row[data-doc-action="focusMode"]')!;
+    // Up arrow button (first .dv-tb-mini in the row)
+    focusRow.querySelectorAll<HTMLButtonElement>('.dv-tb-mini')[0].click();
+    expect(ui.getToolbarConfig().docActionOrder?.markdown).toEqual(['ai', 'focusMode', 'slideMode']);
+    // Synced outer toolbar order puts doc:focusMode before doc:slideMode!
+    expect(slotOrder()).toEqual(['nav', 'doc:focusMode', 'doc:slideMode']);
+
+    // 3. Unpinned setting slot ('width') has a "去设置" button; unpinned action slot ('ai') has a "使用" button that invokes it.
+    const widthUseBtn = drawer.querySelector<HTMLButtonElement>('.dv-tb-pool-item[data-slot-id="width"] .dv-tb-use-btn')!;
+    expect(widthUseBtn.textContent).toBe('去设置');
+    widthUseBtn.click();
+    expect(drawer.querySelector('[data-setting-slot="width"]')?.classList.contains('dv-st-flash')).toBe(true);
+
+    const aiUseBtn = drawer.querySelector<HTMLButtonElement>('.dv-tb-pool-item[data-slot-id="ai"] .dv-tb-use-btn')!;
+    expect(aiUseBtn.textContent).toBe('使用');
+    aiUseBtn.click();
+    expect(ran).toEqual(['ai']);
+    expect(drawer.hidden).toBe(true);
+
+    tb.node.remove();
+  });
 });
 
 // ---------------------------------------------------------------- grid helpers

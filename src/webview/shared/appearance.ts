@@ -357,6 +357,7 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
       ),
     ]),
   ]);
+  mdWidthRow.dataset.settingSlot = 'width';
 
   const splitRow = el('div', { class: 'dv-st-row' }, [
     el('span', { class: 'dv-st-label', text: t('splitPosition') }),
@@ -387,6 +388,7 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
       ),
     ),
   ]);
+  schemeRow.dataset.settingSlot = 'scheme';
 
   const invert = el('input');
   invert.type = 'checkbox';
@@ -454,6 +456,7 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
   const themeGrid = el('div', { class: 'dv-theme-grid' }, themeCards);
   themeGrid.setAttribute('role', 'radiogroup');
   themeGrid.setAttribute('aria-label', t('theme'));
+  themeGrid.dataset.settingSlot = 'theme';
 
   const mdTypographyRows =
     config.kind === 'markdown' || config.kind === 'epub'
@@ -497,7 +500,11 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
     ...(sidebarPosRow ? [sidebarPosRow] : []),
     ...(loupeRow ? [loupeRow] : []),
     schemeRow,
-    el('label', { class: 'dv-check' }, [invert, el('span', { text: t('invertPages') })]),
+    (() => {
+      const r = el('label', { class: 'dv-check' }, [invert, el('span', { text: t('invertPages') })]);
+      r.dataset.settingSlot = 'invertPages';
+      return r;
+    })(),
     el('label', { class: 'dv-check' }, [notices, el('span', { text: t('showNotices') })]),
   ]);
 
@@ -529,6 +536,7 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
     el('h3', { class: 'dv-st-heading', text: t('languageAll') }),
     langChoices,
   ]);
+  languageSection.dataset.settingSlot = 'language';
 
   return [appearanceSection, languageSection];
 }
