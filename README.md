@@ -8,17 +8,19 @@ Preview common document formats inside VS Code and edit spreadsheets in place. *
 
 | 格式 | 扩展名 | 打开方式 | 能力 |
 | --- | --- | --- | --- |
-| Markdown | `.md` `.markdown` | 标题栏预览按钮 | GitHub 风格渲染、YAML Frontmatter 属性卡片、GitHub Alerts、可勾选任务列表、Mermaid 全屏交互灯箱、`.pdf#page=N` / `.pptx#slide=N` 深链接跳转、`F5` 幻灯片演示模式、`Ctrl/Cmd+V` 粘贴图片自动落盘 `assets/`、悬停本地图片一键打开像素/BBox 检查器 |
-| CSV / TSV / JSONL | `.csv` `.tsv` `.jsonl` `.ndjson` | 标题栏预览按钮 | 表格 / 分栏 / 文本三态视图、**JSONL 单条记录详情抽屉（完整嵌套 JSON 检视与写回）**、CSV/Excel ↔ JSONL 互转、多选唯一值筛选与数值比较筛选、`Ctrl/Cmd+H` 查找替换、数据条/色阶、日期与公式拖拽自动填充、复制为 Markdown / JSON、冻结与增删行列 |
-| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、多选值筛选与数值筛选、`Ctrl/Cmd+H` 查找替换（自动保护公式）、数据条/色阶条件格式、拖拽序列/日期/公式自动填充、复制为 Markdown / JSON、转为 CSV/TSV/JSONL、`fx` 公式栏与实时计算、多工作表编辑 |
-| Excel（旧版等） | `.xls` `.ods` | 单击即预览 | 只读（支持多选筛选、条件格式、选区统计、复制为 Markdown / JSON 及另存为 `.xlsx` / `.jsonl`） |
-| Word | `.docx` | 单击即预览 | 页面版式、**一键导出整篇 Markdown（`.md`）**、`Ctrl/Cmd+F` 全文搜索、中英文字体映射、双击段落就地修改文字、标准 OOXML 批注及导出批注清单 |
-| Word（旧版） | `.doc` | 单击即预览 | **仅文字**，支持缩放、`Ctrl/Cmd+F` 全文搜索、**导出 `.md`**、字数段落统计与调用本地 Office/WPS 打开 |
-| PDF | `.pdf` | 单击即预览 | 翻页、页面重组（`90°` 旋转写回保存、删除页、缩略图重排、提取页码范围、合并 PDF）、跨行多段精准划词高亮（`QuadPoints` `/Highlight`）与摘录批注、旋转页自适应 ISO 32000 框选/图钉批注、导出批注 Markdown |
-| PowerPoint | `.pptx` | 单击即预览 | 原生画幅比例、**一键导出整份幻灯片 + 备注为 Markdown（`.md`）**、演讲者备注栏与 `F5` 全屏放映提词器浮窗 + 激光笔、全文搜索、双击文本框改字、标准幻灯片批注 |
-| 图片编辑与视觉标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览（`.svg` 支持分栏源码实时同步） | 15×11 放大镜取色（RGB/HEX/HSL、最近色板）、**EXIF / PNG DPI / AI Prompt 元数据检视**、**`[` / `]` 同目录数据集上下张翻图与自动加载同名 YOLO/COCO 标注**、视觉对比 Diff、涂鸦与马赛克画笔、旋转/翻转/缩放/裁剪及格式互转 |
-| EPUB 电子书 | `.epub` | 单击即预览 | 纯离线解析 EPUB 2/3 目录、跨章超链接与内嵌图片，共享编辑器/GitHub/纸张/学术主题、自适应页宽、**导出整书 Markdown（`.md`）**、缩放与全文搜索 |
-| 压缩包检视 | `.zip` `.vsix` `.whl` `.jar` `.apk` `.nupkg` `.tar` `.tar.gz` `.tgz` | 单击即预览 | 免解压秒读目录树（含 GNU LongLink / PAX 长路径与防炸弹保护）、分栏直接预览内部代码/文本/SVG/图片、**双击免弹窗直开**、一键整包安全解压 |
+| Markdown | `.md` `.markdown` | 标题栏预览按钮 | GitHub 风格渲染、YAML Frontmatter 属性卡片、GitHub Alerts、可勾选任务列表、Mermaid 全屏交互灯箱、`.pdf#page=N` / `.pptx#slide=N` 深链接跳转、`F5` 幻灯片演示模式、**专注阅读模式（`Ctrl/Cmd+Shift+F`）+ 顶部阅读进度条 + 大纲拖拽重排章节 + 字号/行高自定义**、`Ctrl/Cmd+V` 粘贴图片自动落盘 `assets/` |
+| CSV / TSV / JSONL | `.csv` `.tsv` `.jsonl` `.ndjson` | 标题栏预览按钮 | 表格 / 分栏 / 文本三态视图、JSONL 单条记录详情抽屉、**一键可视化图表（柱状/折线/饼图/散点，支持 SVG/PNG 导出与 AI 解读）**、**分组透视汇总（Count/Sum/Avg/Min/Max）**、**数据清洗（去重/按分隔符拆列/去空白/大小写）**、**版本差异对比 Diff**、多选唯一值与数值筛选、`Ctrl/Cmd+H` 查找替换、数据条/色阶、自动填充 |
+| Excel | `.xlsx` `.xlsm` | 单击即预览 | 样式、合并单元格、**单元格格式化写回（加粗/斜体/填充色/数字格式，完整 Undo/Redo）**、**一键可视化图表 + 分组透视汇总 + 数据清洗 + 版本差异对比 Diff**、跨表 AI 公式生成、多选值与数值筛选、查找替换（自动保护公式）、数据条/色阶、自动填充、`fx` 公式栏与实时计算、多工作表编辑 |
+| Excel（旧版等） | `.xls` `.ods` | 单击即预览 | 只读（支持图表、透视汇总、多选筛选、条件格式、选区统计、复制为 Markdown / JSON 及另存为 `.xlsx` / `.jsonl`） |
+| Word | `.docx` | 单击即预览 | 页面版式、一键导出整篇 Markdown（`.md`）、**版本差异对比 Diff**、`Ctrl/Cmd+F` 全文搜索、中英文字体映射、双击段落就地修改文字、标准 OOXML 批注及 **AI 一键批注汇总** |
+| Word（旧版） | `.doc` | 单击即预览 | **仅文字**，支持缩放、`Ctrl/Cmd+F` 全文搜索、导出 `.md`、字数段落统计与调用本地 Office/WPS 打开 |
+| PDF | `.pdf` | 单击即预览 | 翻页、页面重组（`90°` 旋转写回保存、删除页、缩略图重排、提取页码范围、合并 PDF）、**添加自由文字框、手写/PNG 印章签名、全页斜向水印与自动页码**、跨行多段精准划词高亮与摘录批注、**AI 批注汇总与 Agent 全文文本提取** |
+| PowerPoint | `.pptx` | 单击即预览 | 原生画幅比例、一键导出整份幻灯片 + 备注为 Markdown（`.md`）、**版本差异对比 Diff**、演讲者备注栏与 `F5` 全屏放映提词器浮窗 + 激光笔、全文搜索、双击文本框改字、标准幻灯片批注与 AI 批注汇总 |
+| 图片编辑与视觉标注 | `.png` `.jpg` `.jpeg` `.webp` `.gif` `.bmp` `.svg` `.ico` `.avif` | 单击即预览（`.svg` 支持分栏源码实时同步） | 15×11 放大镜取色、EXIF / PNG DPI / AI Prompt 元数据检视、**AI 多模态视觉理解（OCR 提取、图表转表格、BBox 描述）**、`[` / `]` 同目录数据集翻图与 YOLO/COCO 标注、视觉对比 Diff、涂鸦与马赛克画笔、旋转/翻转/缩放/裁剪及格式互转 |
+| SQLite / Parquet | `.sqlite` `.sqlite3` `.db` `.parquet` | 单击即预览 | **零原生依赖纯离线直读** SQLite 多表与 Parquet 列式数据集，直接复用虚拟化网格（支持排序、筛选、图表、透视汇总、AI 洞察与导出 CSV/XLSX/JSONL） |
+| 音视频播放 | `.mp3` `.wav` `.ogg` `.m4a` `.flac` `.mp4` `.webm` `.mov` | 单击即预览 | 内置倍速（`0.5×–2×`）、循环、音频实时频谱可视化、快捷键（`Space`/`←`/`→`/`M`/`B`）、**时间戳笔记打点与导出 Markdown**、**视频截帧直达图片检查器** |
+| EPUB 电子书 | `.epub` | 单击即预览 | 纯离线解析 EPUB 2/3 目录、跨章超链接与内嵌图片，共享编辑器/GitHub/纸张/学术主题、自适应页宽与字号/行高自定义、导出整书 Markdown（`.md`）、缩放与全文搜索 |
+| 压缩包检视 | `.zip` `.vsix` `.whl` `.jar` `.apk` `.nupkg` `.tar` `.tar.gz` `.tgz` | 单击即预览 | 免解压秒读目录树（含 GNU LongLink / PAX 长路径与防炸弹保护）、分栏直接预览内部代码/文本/SVG/图片、双击免弹窗直开、一键整包安全解压 |
 
 Markdown 与 CSV 默认仍以文本打开，和 VS Code 自带预览的习惯一致：点编辑器右上角的预览图标，或在命令面板运行 **DocsView：在侧边打开预览**。想让 CSV 默认用表格打开，可在设置里加：
 

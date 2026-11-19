@@ -48,6 +48,12 @@ function apply(): void {
   body.dataset.theme = current.theme;
   body.dataset.mdWidth = current.mdWidth;
   body.dataset.sidebarPos = current.sidebarPosition;
+  if (current.mdFontSize) {
+    body.style.setProperty('--md-font-size', `${current.mdFontSize}px`);
+  }
+  if (current.mdLineHeight) {
+    body.style.setProperty('--md-line-height', String(current.mdLineHeight));
+  }
   const dark = effectiveDark();
   setClass('dv-dark', dark);
   setClass('dv-invert-pages', dark && current.invertPages);
@@ -449,11 +455,44 @@ export function buildAppearanceDrawerSections(): HTMLElement[] {
   themeGrid.setAttribute('role', 'radiogroup');
   themeGrid.setAttribute('aria-label', t('theme'));
 
+  const mdTypographyRows =
+    config.kind === 'markdown' || config.kind === 'epub'
+      ? [
+          el('div', { class: 'dv-st-row' }, [
+            el('span', { class: 'dv-st-label', text: t('mdFontSize') }),
+            group(
+              t('mdFontSize'),
+              [13, 15, 17, 19].map((sz) =>
+                segButton(
+                  `${sz}`,
+                  () => (current.mdFontSize ?? 15) === sz,
+                  () => updateAppearance({ mdFontSize: sz }),
+                ),
+              ),
+            ),
+          ]),
+          el('div', { class: 'dv-st-row' }, [
+            el('span', { class: 'dv-st-label', text: t('mdLineHeight') }),
+            group(
+              t('mdLineHeight'),
+              [1.5, 1.7, 1.9].map((lh) =>
+                segButton(
+                  String(lh),
+                  () => Math.abs((current.mdLineHeight ?? 1.7) - lh) < 0.05,
+                  () => updateAppearance({ mdLineHeight: lh }),
+                ),
+              ),
+            ),
+          ]),
+        ]
+      : [];
+
   const appearanceSection = el('section', { class: 'dv-st-section' }, [
     el('h3', { class: 'dv-st-heading', text: t('appearanceAll') }),
     themeHeader,
     themeGrid,
     mdWidthRow,
+    ...mdTypographyRows,
     splitRow,
     ...(sidebarPosRow ? [sidebarPosRow] : []),
     ...(loupeRow ? [loupeRow] : []),

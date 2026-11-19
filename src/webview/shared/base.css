@@ -2143,3 +2143,203 @@ body[data-sidebar-pos='right'] .dv-side-resizer {
   border-color: color-mix(in srgb, #22c55e 45%, var(--dv-border));
   color: #22c55e;
 }
+
+.dv-ai-turns-badge {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px solid var(--dv-border);
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  white-space: nowrap;
+}
+
+.dv-ai-mini-btn {
+  height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.dv-ai-view-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  align-self: flex-start;
+  padding: 2px;
+  border-radius: 6px;
+  border: 1px solid var(--dv-border);
+  background: var(--vscode-input-background, transparent);
+}
+
+.dv-ai-view-bar[hidden] {
+  display: none;
+}
+
+.dv-ai-view-tab {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  cursor: pointer;
+}
+
+.dv-ai-view-tab.dv-active {
+  background: color-mix(in srgb, var(--dv-accent) 18%, transparent);
+  color: var(--dv-accent);
+  font-weight: 600;
+}
+
+.dv-ai-md-h {
+  font-weight: 600;
+  margin: 6px 0 3px;
+}
+
+.dv-ai-md-p {
+  margin: 3px 0;
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+}
+
+.dv-ai-md-list {
+  margin: 4px 0;
+  padding-left: 18px;
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+}
+
+.dv-ai-code-block {
+  margin: 6px 0;
+  padding: 7px 9px;
+  border-radius: 5px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.14));
+  overflow-x: auto;
+  font-size: 11.5px;
+}
+
+.dv-ai-inline-code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.16));
+  font-size: 11.5px;
+}
+
+.dv-ai-diff-body {
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.dv-diff-del {
+  background: rgba(239, 68, 68, 0.22);
+  color: var(--vscode-errorForeground, #ef4444);
+  text-decoration: line-through;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.dv-diff-ins {
+  background: rgba(34, 197, 94, 0.22);
+  color: #16a34a;
+  text-decoration: none;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.dv-dark .dv-diff-ins {
+  color: #4ade80;
+}
+
+.dv-ai-model-menu {
+  z-index: 280;
+  width: 220px;
+}
+
+/* Shared Modal Dialog (Charts, Pivot, Version Diff, PDF Signature/Watermark) */
+.dv-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 290;
+  background: rgba(0, 0, 0, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.dv-modal-backdrop[hidden] {
+  display: none;
+}
+
+.dv-modal {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border, var(--dv-border));
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  color: var(--vscode-foreground);
+  overflow: hidden;
+}
+
+.dv-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dv-modal-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.dv-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dv-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--dv-border);
+}
+
+.dv-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dv-diff-table th,
+.dv-diff-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--dv-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.dv-diff-line {
+  padding: 3px 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  border-radius: 3px;
+}
+
+.dv-diff-line-add {
+  background: rgba(34, 197, 94, 0.16);
+}
+
+.dv-diff-line-del {
+  background: rgba(239, 68, 68, 0.16);
+}

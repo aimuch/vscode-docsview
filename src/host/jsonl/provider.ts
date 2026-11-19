@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
 import type { TextEdit } from '../csv/csvParser';
+import { compareDelimitedDocument } from '../diff';
 import { saveConverted } from '../fileActions';
 import { configureWebview, debounce, handleCommonMessage, onWebviewMessage, parentUri, t } from '../webviewHtml';
 import { JsonlSession } from './jsonlSession';
@@ -155,6 +156,17 @@ export class JsonlEditorProvider implements vscode.CustomTextEditorProvider {
             void run().catch((err: unknown) =>
               vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
             );
+            break;
+          }
+          case 'compareDocument': {
+            sync();
+            void compareDelimitedDocument(document.uri, 'jsonl', document.getText(), ',', message.fromHistory)
+              .then((report) => {
+                if (report) post({ type: 'diffReport', report });
+              })
+              .catch((err: unknown) =>
+                vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+              );
             break;
           }
         }

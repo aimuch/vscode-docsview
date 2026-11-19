@@ -1,9 +1,10 @@
 // Message contract between the extension host and the webviews. Everything here must be
 // structured-cloneable (and JSON-serialisable apart from Uint8Array, which the dev
 // harness encodes as base64).
+import type { DocumentDiffReport } from './docDiff';
 import type { StringKey } from './strings';
 
-export type ViewerKind = 'markdown' | 'sheet' | 'docx' | 'pdf' | 'pptx' | 'text' | 'image' | 'epub' | 'archive';
+export type ViewerKind = 'markdown' | 'sheet' | 'docx' | 'pdf' | 'pptx' | 'text' | 'image' | 'epub' | 'archive' | 'media';
 export type ImageExportFormat = 'png' | 'jpg' | 'webp' | 'bmp' | 'ico';
 export type AnnotationExportFormat = 'yolo' | 'coco' | 'labelme';
 
@@ -90,6 +91,18 @@ export interface CellChange {
   text: string;
 }
 
+export interface CellFormatPatch {
+  bold?: boolean;
+  italic?: boolean;
+  align?: 'left' | 'center' | 'right';
+  /** Hex colour like `#fef08a`, or `""` to clear. */
+  bg?: string;
+  /** Hex colour like `#dc2626`, or `""` to clear. */
+  color?: string;
+  /** Excel number format string, e.g. `#,##0.00`, `0.0%`, `¥#,##0.00`, `General`. */
+  numFmt?: string;
+}
+
 export type StructureOp = 'insertRow' | 'deleteRows' | 'insertCol' | 'deleteCols';
 
 // ---------------------------------------------------------------- office & pdf annotations / editing
@@ -134,7 +147,20 @@ export type DocMutation =
   | { kind: 'rotatePdfPages'; pages?: number[]; delta: 90 | -90 }
   | { kind: 'deletePdfPage'; page: number }
   | { kind: 'movePdfPage'; fromPage: number; toPage: number }
-  | { kind: 'appendPdfBytes'; otherBytes: Uint8Array; label?: string };
+  | { kind: 'appendPdfBytes'; otherBytes: Uint8Array; label?: string }
+  | {
+      kind: 'addPdfImageStamp';
+      page: number;
+      rect: { x: number; y: number; w: number; h: number };
+      pngBytes: Uint8Array;
+      label?: string;
+    }
+  | {
+      kind: 'addPdfWatermark';
+      watermarkPngBytes?: Uint8Array;
+      pageNumbers?: boolean;
+      label?: string;
+    };
 
 // ---------------------------------------------------------------- epub & archive models
 
@@ -206,6 +232,10 @@ export interface Appearance {
   loupePosition: LoupePosition;
   /** Navigation / outline sidebar placement: left or right side of the preview. */
   sidebarPosition: SidebarPosition;
+  /** Markdown & EPUB body font size in pixels (13–22). */
+  mdFontSize?: number;
+  /** Markdown & EPUB body line height (1.4–2.0). */
+  mdLineHeight?: number;
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -220,6 +250,8 @@ export const DEFAULT_APPEARANCE: Appearance = {
   showNotices: true,
   loupePosition: 'follow',
   sidebarPosition: 'left',
+  mdFontSize: 15,
+  mdLineHeight: 1.65,
 };
 
 // ---------------------------------------------------------------- AI assistant models
@@ -262,12 +294,23 @@ export type AiActionKind =
   | 'summarize'
   | 'fix'
   | 'formula'
-  | 'tableFill';
+  | 'tableFill'
+  | 'visionOcr'
+  | 'visionTable'
+  | 'visionChart'
+  | 'visionBbox';
+
+export interface AiChatTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
 
 export interface AiSheetSchemaContext {
   sheetName: string;
   allSheets: string[];
   headers: string[];
+  /** Optional header rows of sibling sheets in the same workbook for accurate cross-sheet formulas. */
+  otherSheetsHeaders?: Record<string, string[]>;
   sampleRows: string[][];
   activeCell: string;
   selectionRange: string;
@@ -282,6 +325,10 @@ export interface AiPromptContext {
   selection?: string;
   surrounding?: string;
   sheetSchema?: AiSheetSchemaContext;
+  /** Optional multimodal PNG/JPEG data URL (e.g. from Image Inspector or Chart snapshot). */
+  imageDataUrl?: string;
+  /** Optional prior conversation turns for multi-turn follow-up prompts. */
+  history?: AiChatTurn[];
 }
 
 // ---------------------------------------------------------------- toolbar layout
@@ -443,6 +490,8 @@ export type HostMessage =
   | { type: 'aiSettings'; settings: AiSettingsSnapshot; models?: string[] }
   | { type: 'aiOpen' }
   | { type: 'aiStream'; requestId: number; text: string; model?: string; done: boolean; error?: string }
+  | { type: 'diffReport'; report: DocumentDiffReport }
+  | { type: 'media'; name: string; src: string; mediaKind: 'audio' | 'video'; ext: string; byteLength: number }
   | { type: 'error'; message: string };
 
 export type WebviewMessage =
@@ -470,6 +519,14 @@ export type WebviewMessage =
   | { type: 'export'; format: 'html' | 'pdf'; html: string; theme: ThemeId; dark: boolean; rtl: boolean }
   /** Markdown: replace source lines [start, end) with `text`. */
   | { type: 'editBlock'; start: number; end: number; text: string; expected: string }
+  /** Markdown: atomically move source lines `[fromStart, fromEnd)` to target line `toLine` (outline drag reorder). */
+  | { type: 'moveMarkdownLines'; fromStart: number; fromEnd: number; toLine: number }
+  /** Excel: apply cell styling / number formatting to a rectangular range. */
+  | { type: 'formatCells'; index: number; r0: number; c0: number; r1: number; c1: number; patch: CellFormatPatch }
+  /** Compare current document/spreadsheet against latest version history or a user-chosen file. */
+  | { type: 'compareDocument'; fromHistory?: boolean }
+  /** Media: save a captured video frame PNG and open it directly in DocsView Image Inspector. */
+  | { type: 'openCapturedImage'; bytes: Uint8Array; suffix?: string }
   /** Sheets: save a copy of sheet `index` in another format. */
   | { type: 'convert'; index: number; format: 'csv' | 'tsv' | 'xlsx' | 'jsonl' }
   /** JSONL: replace an entire record object (from the Record JSON Inspector) at 0-based `recordIndex`. */

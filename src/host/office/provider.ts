@@ -2,6 +2,7 @@ import { userInfo } from 'node:os';
 import * as vscode from 'vscode';
 import type { DocMutation, HostMessage, ViewerKind, WebviewMessage } from '../../common/protocol';
 import { BinarySaveGate } from '../../common/stateMachine';
+import { compareOfficeDocument } from '../diff';
 import { snapshot } from '../history';
 import type { OfficeEditResult, OfficeFormat, OfficeSession } from '../office';
 import { configureWebview, debounce, handleCommonMessage, onWebviewMessage, parentUri, t } from '../webviewHtml';
@@ -276,6 +277,24 @@ export class OfficeEditorProvider implements vscode.CustomEditorProvider<OfficeD
           })().catch((err: unknown) =>
             vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
           );
+        }
+        if (
+          message.type === 'compareDocument' &&
+          document.session &&
+          (document.officeFormat === 'docx' || document.officeFormat === 'pptx')
+        ) {
+          void compareOfficeDocument(
+            document.uri,
+            document.officeFormat,
+            document.session.export(),
+            message.fromHistory,
+          )
+            .then((report) => {
+              if (report) post({ type: 'diffReport', report });
+            })
+            .catch((err: unknown) =>
+              vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+            );
         }
       }),
     ];

@@ -122,6 +122,13 @@ const commentsPanel = new CommentsPanel({
   onToggleAddMode: () => {
     modeMachine.toggle('annotate');
   },
+  onAiDigest: (md) => {
+    ai.open({
+      presetAction: 'summarize',
+      initialPrompt: `Summarize all PDF review comments below into key themes and a prioritised action-item checklist:\n\n${md}`,
+      autoRun: true,
+    });
+  },
 });
 sidebar.panel('comments').append(commentsPanel.node);
 
@@ -825,9 +832,327 @@ const zoomGroup = el('div', { class: 'dv-zoom' }, [
   iconButton('rotateCW', t('pdfRotateCW'), rotatePdfPages),
 ]);
 
+async function canvasToPngBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
+  });
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+function mkOption(val: string, label: string): HTMLOptionElement {
+  const o = el('option', { text: label }) as HTMLOptionElement;
+  o.value = val;
+  return o;
+}
+
+function openPdfTextBoxModal() {
+  const backdrop = el('div', { class: 'dv-modal-backdrop' });
+  const textArea = el('textarea', { class: 'dv-input' }) as HTMLTextAreaElement;
+  textArea.placeholder = t('pdfAddText');
+  textArea.rows = 3;
+  const colorSelect = el('select', { class: 'dv-input' }, [
+    mkOption('#111827', 'Black'),
+    mkOption('#1d4ed8', 'Blue'),
+    mkOption('#dc2626', 'Red'),
+  ]) as HTMLSelectElement;
+  colorSelect.style.width = 'auto';
+  const posSelect = el('select', { class: 'dv-input' }, [
+    mkOption('top', 'Top'),
+    mkOption('center', 'Center'),
+    mkOption('bottom', 'Bottom'),
+  ]) as HTMLSelectElement;
+  posSelect.style.width = 'auto';
+
+  const close = () => {
+    overlayStack.remove('pdfTextBoxModal');
+    backdrop.remove();
+  };
+
+  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('pdfSignaturePlace') });
+  applyBtn.type = 'button';
+  applyBtn.addEventListener('click', () => {
+    const raw = textArea.value.trim();
+    if (!raw) return;
+    const lines = raw.split(/\r?\n/);
+    const canvas = document.createElement('canvas');
+    const pad = 18;
+    const fontSize = 32;
+    const lineH = 42;
+    const ctx = canvas.getContext('2d')!;
+    ctx.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif`;
+    const maxW = Math.max(160, ...lines.map((l) => ctx.measureText(l).width));
+    canvas.width = Math.min(1200, Math.ceil(maxW + pad * 2));
+    canvas.height = Math.ceil(lines.length * lineH + pad * 2);
+    ctx.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif`;
+    ctx.fillStyle = colorSelect.value;
+    ctx.textBaseline = 'top';
+    lines.forEach((line, idx) => ctx.fillText(line, pad, pad + idx * lineH));
+
+    void canvasToPngBytes(canvas).then((pngBytes) => {
+      const y = posSelect.value === 'top' ? 0.08 : posSelect.value === 'bottom' ? 0.8 : 0.44;
+      const w = Math.min(0.75, Math.max(0.22, canvas.width / 1100));
+      const h = Math.min(0.25, Math.max(0.04, canvas.height / 1500));
+      post({
+        type: 'docMutate',
+        mutation: {
+          kind: 'addPdfImageStamp',
+          page: viewer.currentPageNumber || 1,
+          rect: { x: 0.12, y, w, h },
+          pngBytes,
+        },
+      });
+      close();
+    });
+  });
+
+  const controlsRow = el('div', {}, [colorSelect, posSelect]);
+  controlsRow.style.cssText = 'display:flex;gap:8px;align-items:center';
+  const body = el('div', { class: 'dv-modal-body' }, [textArea, controlsRow]);
+  body.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+  const modal = el('div', { class: 'dv-modal' }, [
+    el('div', { class: 'dv-modal-header' }, [
+      el('span', { class: 'dv-modal-title', text: t('pdfAddText') }),
+      iconButton('close', t('cancel'), close),
+    ]),
+    body,
+    el('div', { class: 'dv-modal-footer' }, [applyBtn]),
+  ]);
+  modal.style.width = 'min(440px,92vw)';
+  backdrop.append(modal);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+  document.body.append(backdrop);
+  overlayStack.push({ id: 'pdfTextBoxModal', isOpen: () => backdrop.isConnected, close });
+  textArea.focus();
+}
+
+function openPdfSignatureModal() {
+  const backdrop = el('div', { class: 'dv-modal-backdrop' });
+  const canvas = document.createElement('canvas');
+  canvas.width = 560;
+  canvas.height = 200;
+  canvas.style.cssText =
+    'width:100%;height:170px;background:#fff;border:1px solid var(--dv-border);border-radius:6px;cursor:crosshair;touch-action:none;';
+  const ctx = canvas.getContext('2d')!;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 3.5;
+  ctx.strokeStyle = '#111827';
+  let drawing = false;
+  let hasInk = false;
+  let uploadedPng: Uint8Array | undefined;
+
+  const pt = (e: PointerEvent) => {
+    const r = canvas.getBoundingClientRect();
+    return {
+      x: ((e.clientX - r.left) * canvas.width) / Math.max(1, r.width),
+      y: ((e.clientY - r.top) * canvas.height) / Math.max(1, r.height),
+    };
+  };
+  canvas.addEventListener('pointerdown', (e) => {
+    uploadedPng = undefined;
+    drawing = true;
+    hasInk = true;
+    canvas.setPointerCapture(e.pointerId);
+    const p = pt(e);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drawing) return;
+    const p = pt(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+  });
+  const stop = () => {
+    drawing = false;
+  };
+  canvas.addEventListener('pointerup', stop);
+  canvas.addEventListener('pointercancel', stop);
+
+  const fileInput = el('input') as HTMLInputElement;
+  fileInput.type = 'file';
+  fileInput.accept = 'image/png';
+  fileInput.hidden = true;
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files?.[0];
+    if (!f) return;
+    void f.arrayBuffer().then((ab) => {
+      uploadedPng = new Uint8Array(ab);
+      hasInk = true;
+      const url = URL.createObjectURL(f);
+      const img = new Image();
+      img.onload = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
+        const dw = img.width * scale;
+        const dh = img.height * scale;
+        ctx.drawImage(img, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
+    });
+  });
+
+  const close = () => {
+    overlayStack.remove('pdfSignatureModal');
+    backdrop.remove();
+  };
+
+  const clearBtn = el('button', { class: 'dv-btn', text: t('pdfSignatureClear') });
+  clearBtn.type = 'button';
+  clearBtn.addEventListener('click', () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    hasInk = false;
+    uploadedPng = undefined;
+  });
+
+  const loadBtn = el('button', { class: 'dv-btn', text: t('pdfSignatureLoadPng') });
+  loadBtn.type = 'button';
+  loadBtn.addEventListener('click', () => fileInput.click());
+
+  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('pdfSignaturePlace') });
+  applyBtn.type = 'button';
+  applyBtn.addEventListener('click', () => {
+    if (!hasInk) return;
+    const finish = (pngBytes: Uint8Array) => {
+      post({
+        type: 'docMutate',
+        mutation: {
+          kind: 'addPdfImageStamp',
+          page: viewer.currentPageNumber || 1,
+          rect: { x: 0.62, y: 0.78, w: 0.28, h: 0.1 },
+          pngBytes,
+        },
+      });
+      close();
+    };
+    if (uploadedPng) {
+      finish(uploadedPng);
+    } else {
+      void canvasToPngBytes(canvas).then(finish);
+    }
+  });
+
+  const sigBody = el('div', { class: 'dv-modal-body' }, [
+    el('div', { class: 'dv-label', text: t('pdfSignatureHint') }),
+    canvas,
+    fileInput,
+  ]);
+  sigBody.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+  const modal = el('div', { class: 'dv-modal' }, [
+    el('div', { class: 'dv-modal-header' }, [
+      el('span', { class: 'dv-modal-title', text: t('pdfAddSignature') }),
+      iconButton('close', t('cancel'), close),
+    ]),
+    sigBody,
+    el('div', { class: 'dv-modal-footer' }, [clearBtn, loadBtn, applyBtn]),
+  ]);
+  modal.style.width = 'min(520px,92vw)';
+  backdrop.append(modal);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+  document.body.append(backdrop);
+  overlayStack.push({ id: 'pdfSignatureModal', isOpen: () => backdrop.isConnected, close });
+}
+
+function openPdfWatermarkModal() {
+  const backdrop = el('div', { class: 'dv-modal-backdrop' });
+  const textInput = el('input', { class: 'dv-input' }) as HTMLInputElement;
+  textInput.placeholder = t('pdfWatermarkText');
+  textInput.value = 'CONFIDENTIAL';
+  const pageNumCb = el('input') as HTMLInputElement;
+  pageNumCb.type = 'checkbox';
+  pageNumCb.checked = true;
+
+  const close = () => {
+    overlayStack.remove('pdfWatermarkModal');
+    backdrop.remove();
+  };
+
+  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('pdfWatermarkApply') });
+  applyBtn.type = 'button';
+  applyBtn.addEventListener('click', () => {
+    const label = textInput.value.trim();
+    const pageNumbers = pageNumCb.checked;
+    if (!label && !pageNumbers) return;
+    const send = (watermarkPngBytes?: Uint8Array) => {
+      post({
+        type: 'docMutate',
+        mutation: {
+          kind: 'addPdfWatermark',
+          watermarkPngBytes,
+          pageNumbers,
+        },
+      });
+      close();
+    };
+    if (!label) {
+      send(undefined);
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 800;
+    const ctx = canvas.getContext('2d')!;
+    ctx.translate(400, 400);
+    ctx.rotate(-Math.PI / 5);
+    ctx.font = '700 84px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif';
+    ctx.fillStyle = '#334155';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, 0, 0);
+    void canvasToPngBytes(canvas).then(send);
+  });
+
+  const wmBody = el('div', { class: 'dv-modal-body' }, [
+    textInput,
+    el('label', { class: 'dv-check' }, [pageNumCb, el('span', { text: t('pdfWatermarkPageNums') })]),
+  ]);
+  wmBody.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+  const modal = el('div', { class: 'dv-modal' }, [
+    el('div', { class: 'dv-modal-header' }, [
+      el('span', { class: 'dv-modal-title', text: t('pdfAddWatermark') }),
+      iconButton('close', t('cancel'), close),
+    ]),
+    wmBody,
+    el('div', { class: 'dv-modal-footer' }, [applyBtn]),
+  ]);
+  modal.style.width = 'min(420px,92vw)';
+  backdrop.append(modal);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+  document.body.append(backdrop);
+  overlayStack.push({ id: 'pdfWatermarkModal', isOpen: () => backdrop.isConnected, close });
+  textInput.focus();
+  textInput.select();
+}
+
 const pdfToolsDropdown = moreMenu(
   t('moreTools'),
   [
+    {
+      icon: 'pencil',
+      label: t('pdfAddText'),
+      visible: () => modeMachine.isEditable,
+      onClick: openPdfTextBoxModal,
+    },
+    {
+      icon: 'signature',
+      label: t('pdfAddSignature'),
+      visible: () => modeMachine.isEditable,
+      onClick: openPdfSignatureModal,
+    },
+    {
+      icon: 'watermark',
+      label: t('pdfAddWatermark'),
+      visible: () => modeMachine.isEditable,
+      onClick: openPdfWatermarkModal,
+    },
+    '-',
     {
       icon: 'rotateCW',
       label: t('pdfSaveRotateCW'),

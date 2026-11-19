@@ -44,6 +44,8 @@ const SETTING_KEYS: Record<keyof Appearance, string> = {
   showNotices: 'showNotices',
   loupePosition: 'image.loupePosition',
   sidebarPosition: 'sidebarPosition',
+  mdFontSize: 'markdown.fontSize',
+  mdLineHeight: 'markdown.lineHeight',
 };
 
 export function readAppearance(): Appearance {
@@ -51,6 +53,10 @@ export function readAppearance(): Appearance {
   const pick = <T extends string>(key: string, allowed: readonly T[]): T => {
     const value = config.get<string>(key);
     return (allowed as readonly string[]).includes(value ?? '') ? (value as T) : allowed[0];
+  };
+  const clampNum = (key: string, def: number, min: number, max: number) => {
+    const v = config.get<number>(key, def);
+    return Number.isFinite(v) ? Math.max(min, Math.min(max, v)) : def;
   };
   return {
     theme: pick(SETTING_KEYS.theme, THEMES),
@@ -64,6 +70,8 @@ export function readAppearance(): Appearance {
     showNotices: config.get<boolean>(SETTING_KEYS.showNotices, true),
     loupePosition: pick(SETTING_KEYS.loupePosition, LOUPE_POSITIONS),
     sidebarPosition: pick(SETTING_KEYS.sidebarPosition, SIDEBAR_POSITIONS),
+    mdFontSize: clampNum(SETTING_KEYS.mdFontSize, 15, 12, 24),
+    mdLineHeight: clampNum(SETTING_KEYS.mdLineHeight, 1.7, 1.3, 2.2),
   };
 }
 

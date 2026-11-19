@@ -103,6 +103,29 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
           case 'editBlock':
             enqueueEdit(() => this.editBlock(document, message.start, message.end, message.text, message.expected));
             break;
+          case 'moveMarkdownLines':
+            enqueueEdit(async () => {
+              const total = document.lineCount;
+              const fromStart = Math.max(0, Math.min(total, Math.floor(message.fromStart)));
+              const fromEnd = Math.max(fromStart, Math.min(total, Math.floor(message.fromEnd)));
+              const toLine = Math.max(0, Math.min(total, Math.floor(message.toLine)));
+              if (fromEnd <= fromStart || (toLine >= fromStart && toLine <= fromEnd)) {
+                return;
+              }
+              const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
+              const lines = document.getText().split(/\r?\n/);
+              const slice = lines.splice(fromStart, fromEnd - fromStart);
+              const insertAt = toLine > fromStart ? toLine - slice.length : toLine;
+              lines.splice(Math.max(0, Math.min(lines.length, insertAt)), 0, ...slice);
+              const fullRange = new vscode.Range(
+                new vscode.Position(0, 0),
+                document.positionAt(document.getText().length),
+              );
+              const wsEdit = new vscode.WorkspaceEdit();
+              wsEdit.replace(document.uri, fullRange, lines.join(eol));
+              await vscode.workspace.applyEdit(wsEdit);
+            });
+            break;
           case 'pasteImage': {
             enqueueEdit(async () => {
               const safeExt = /^(png|jpg|webp|gif)$/i.test(message.ext) ? message.ext.toLowerCase() : 'png';

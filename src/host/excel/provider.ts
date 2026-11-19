@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
 import { BinarySaveGate } from '../../common/stateMachine';
+import { compareExcelDocument } from '../diff';
 import { saveConverted } from '../fileActions';
 import { snapshot } from '../history';
 import { configureWebview, debounce, handleCommonMessage, parentUri, t, onWebviewMessage } from '../webviewHtml';
@@ -167,6 +168,38 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
               undo: () => result.undo().forEach((m) => document.post(m)),
               redo: () => result.redo().forEach((m) => document.post(m)),
             });
+            break;
+          }
+          case 'formatCells': {
+            const result = session?.formatCells(
+              message.index,
+              message.r0,
+              message.c0,
+              message.r1,
+              message.c1,
+              message.patch,
+            );
+            if (!result) {
+              break;
+            }
+            result.messages.forEach(post);
+            this.changeEmitter.fire({
+              document,
+              label: 'Format cells',
+              undo: () => result.undo().forEach((m) => document.post(m)),
+              redo: () => result.redo().forEach((m) => document.post(m)),
+            });
+            break;
+          }
+          case 'compareDocument': {
+            if (!session) break;
+            void compareExcelDocument(document.uri, session.export(), message.fromHistory)
+              .then((report) => {
+                if (report) post({ type: 'diffReport', report });
+              })
+              .catch((err: unknown) =>
+                vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+              );
             break;
           }
         }

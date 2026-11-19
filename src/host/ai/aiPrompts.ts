@@ -68,6 +68,19 @@ function formatSheetSchema(schema: AiSheetSchemaContext): string {
       .join(' | ');
     lines.push(`Columns (Row 1 headers): ${cols}`);
   }
+  if (schema.otherSheetsHeaders) {
+    const entries = Object.entries(schema.otherSheetsHeaders).filter(([, cols]) => cols.length > 0);
+    if (entries.length > 0) {
+      lines.push('Sibling sheets column headers (for cross-sheet formulas like VLOOKUP/XLOOKUP/SUMIFS):');
+      for (const [sName, cols] of entries.slice(0, 8)) {
+        const mapped = cols
+          .slice(0, 25)
+          .map((h, idx) => `${colIndexToLetter(idx)}: ${h || '(empty)'}`)
+          .join(' | ');
+        lines.push(`  "${sName}": ${mapped}`);
+      }
+    }
+  }
   if (schema.sampleRows.length > 0) {
     lines.push('Sample data rows:');
     schema.sampleRows.slice(0, 6).forEach((row, rIdx) => {
@@ -208,6 +221,44 @@ export function buildAiPrompt(ctx: AiPromptContext, uiLang: 'en' | 'zh'): string
       if (sur) {
         parts.push(wrapUntrustedBlock('DOCUMENT_CONTEXT', sur));
       }
+      break;
+    }
+
+    case 'visionOcr': {
+      parts.push(
+        'Task: Perform accurate OCR on the attached image. Transcribe all visible text faithfully, preserving line breaks, paragraphs, headings, and lists.',
+        'Output format rule: Output ONLY the extracted text without commentary.',
+      );
+      if (userInstruction) parts.push(`Additional guidance: ${userInstruction}`);
+      if (sur) parts.push(wrapUntrustedBlock('IMAGE_METADATA', sur));
+      break;
+    }
+
+    case 'visionTable': {
+      parts.push(
+        'Task: Extract the tabular data shown in the attached image into a clean GitHub Flavored Markdown table (or CSV/TSV if requested). Preserve numbers, headers, and alignment accurately.',
+        'Output format rule: Output ONLY the Markdown table without commentary.',
+      );
+      if (userInstruction) parts.push(`Additional guidance: ${userInstruction}`);
+      if (sur) parts.push(wrapUntrustedBlock('IMAGE_METADATA', sur));
+      break;
+    }
+
+    case 'visionChart': {
+      parts.push(
+        `Task: Analyze the chart, diagram, or UI screenshot in the attached image in ${langName}. Summarize key trends, outliers, axes/metrics, and actionable takeaways.`,
+      );
+      if (userInstruction) parts.push(`Focus on: ${userInstruction}`);
+      if (sur) parts.push(wrapUntrustedBlock('IMAGE_METADATA', sur));
+      break;
+    }
+
+    case 'visionBbox': {
+      parts.push(
+        `Task: Inspect the attached image (and any existing BBox coordinates in metadata) and suggest concise object class labels (e.g. person, car, button, text_block) and brief descriptions in ${langName}.`,
+      );
+      if (userInstruction) parts.push(`Focus on: ${userInstruction}`);
+      if (sur) parts.push(wrapUntrustedBlock('IMAGE_METADATA', sur));
       break;
     }
 

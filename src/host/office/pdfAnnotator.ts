@@ -10,6 +10,8 @@ import {
   PDFName,
   PDFNumber,
   PDFString,
+  rgb,
+  StandardFonts,
 } from 'pdf-lib';
 import type { DocComment, DocMutation } from '../../common/protocol';
 
@@ -416,6 +418,57 @@ export async function applyPdfMutations(bytes: Uint8Array, mutations: readonly D
         const copied = await doc.copyPages(otherDoc, otherDoc.getPageIndices());
         for (const p of copied) {
           doc.addPage(p);
+        }
+      }
+    } else if (mut.kind === 'addPdfImageStamp') {
+      const pages = doc.getPages();
+      if (!pages.length) continue;
+      const pageIdx = Math.max(0, Math.min(pages.length - 1, mut.page - 1));
+      const page = pages[pageIdx];
+      const pngBytes = toUint8Array(mut.pngBytes);
+      if (!pngBytes.byteLength) continue;
+      const img = await doc.embedPng(pngBytes);
+      const box = page.getCropBox() ?? page.getMediaBox();
+      const rot = page.getRotation().angle || 0;
+      const [x1, y1, x2, y2] = visualRectToPdfRect(mut.rect, box, rot, 0.01);
+      page.drawImage(img, {
+        x: x1,
+        y: y1,
+        width: Math.max(4, x2 - x1),
+        height: Math.max(4, y2 - y1),
+      });
+    } else if (mut.kind === 'addPdfWatermark') {
+      const pages = doc.getPages();
+      if (!pages.length) continue;
+      const wmBytes = mut.watermarkPngBytes ? toUint8Array(mut.watermarkPngBytes) : undefined;
+      const wmImg = wmBytes && wmBytes.byteLength > 0 ? await doc.embedPng(wmBytes) : undefined;
+      const font = mut.pageNumbers ? await doc.embedFont(StandardFonts.Helvetica) : undefined;
+      const total = pages.length;
+      for (let i = 0; i < total; i++) {
+        const page = pages[i];
+        const box = page.getCropBox() ?? page.getMediaBox();
+        if (wmImg) {
+          const targetW = box.width * 0.68;
+          const targetH = (targetW * wmImg.height) / Math.max(1, wmImg.width);
+          page.drawImage(wmImg, {
+            x: box.x + (box.width - targetW) / 2,
+            y: box.y + (box.height - targetH) / 2,
+            width: targetW,
+            height: targetH,
+            opacity: 0.22,
+          });
+        }
+        if (font && mut.pageNumbers) {
+          const label = `${i + 1} / ${total}`;
+          const size = 10;
+          const tw = font.widthOfTextAtSize(label, size);
+          page.drawText(label, {
+            x: box.x + (box.width - tw) / 2,
+            y: box.y + 18,
+            size,
+            font,
+            color: rgb(0.35, 0.35, 0.35),
+          });
         }
       }
     }

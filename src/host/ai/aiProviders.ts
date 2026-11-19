@@ -7,7 +7,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { AiProviderId, AiProviderPresetInfo, AiSettingsSnapshot } from '../../common/protocol';
+import type { AiChatTurn, AiProviderId, AiProviderPresetInfo, AiSettingsSnapshot } from '../../common/protocol';
 import { t } from '../webviewHtml';
 
 interface AiProviderPreset {
@@ -363,10 +363,17 @@ async function readErrorMessage(response: Response): Promise<string> {
   return text.trim() ? text.trim().slice(0, 400) : response.statusText;
 }
 
-function getVsCodeLmApi(): { lm: VsCodeLmApi; userMessage: (text: string) => unknown } | null {
+function getVsCodeLmApi(): {
+  lm: VsCodeLmApi;
+  userMessage: (text: string) => unknown;
+  assistantMessage: (text: string) => unknown;
+} | null {
   const api = vscode as unknown as {
     lm?: VsCodeLmApi;
-    LanguageModelChatMessage?: ((...args: never[]) => unknown) & { User?: (text: string) => unknown };
+    LanguageModelChatMessage?: ((...args: never[]) => unknown) & {
+      User?: (text: string) => unknown;
+      Assistant?: (text: string) => unknown;
+    };
   };
   const msgCtor = api.LanguageModelChatMessage;
   if (
@@ -378,9 +385,11 @@ function getVsCodeLmApi(): { lm: VsCodeLmApi; userMessage: (text: string) => unk
     return null;
   }
   const userFn = msgCtor.User;
+  const assistantFn = typeof msgCtor.Assistant === 'function' ? msgCtor.Assistant : userFn;
   return {
     lm: api.lm,
     userMessage: (text: string) => userFn.call(msgCtor, text),
+    assistantMessage: (text: string) => assistantFn.call(msgCtor, text),
   };
 }
 
@@ -554,6 +563,11 @@ export async function resolveAvailableModels(): Promise<{
   }
 }
 
+export interface AiRunPayloadOptions {
+  history?: readonly AiChatTurn[];
+  imageDataUrl?: string;
+}
+
 export async function streamChatCompletion(
   baseUrl: string,
   model: string,
@@ -561,6 +575,7 @@ export async function streamChatCompletion(
   prompt: string,
   onText: (delta: string) => void,
   token: vscode.CancellationToken,
+  opts?: AiRunPayloadOptions,
 ): Promise<string | null> {
   if (typeof fetch !== 'function') {
     return 'Fetch API is unavailable in this VS Code runtime.';
@@ -587,13 +602,28 @@ export async function streamChatCompletion(
     if (apiKey) {
       headers.Authorization = `Bearer ${apiKey}`;
     }
+    const messages: { role: 'user' | 'assistant'; content: unknown }[] = [];
+    if (opts?.history?.length) {
+      for (const turn of opts.history.slice(-12)) {
+        messages.push({ role: turn.role, content: turn.content });
+      }
+    }
+    const userContent =
+      opts?.imageDataUrl && opts.imageDataUrl.startsWith('data:image/')
+        ? [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: opts.imageDataUrl } },
+          ]
+        : prompt;
+    messages.push({ role: 'user', content: userContent });
+
     const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         model,
         stream: true,
-        messages: [{ role: 'user', content: prompt }],
+        messages,
       }),
       signal: controller.signal,
     });
@@ -707,6 +737,7 @@ export async function runAiTarget(
   prompt: string,
   onText: (delta: string) => void,
   token: vscode.CancellationToken,
+  opts?: AiRunPayloadOptions,
 ): Promise<string | null> {
   const direct = getDirectAiConfig();
   if (direct) {
@@ -714,7 +745,7 @@ export async function runAiTarget(
       return `API key not configured for ${direct.name}.`;
     }
     const apiKey = await getEffectiveApiKey(direct.provider);
-    return streamChatCompletion(direct.baseUrl, target.id, apiKey, prompt, onText, token);
+    return streamChatCompletion(direct.baseUrl, target.id, apiKey, prompt, onText, token, opts);
   }
 
   const vsLm = getVsCodeLmApi();
@@ -727,8 +758,15 @@ export async function runAiTarget(
     if (!model) {
       return t('aiUnavailable');
     }
+    const lmMessages: unknown[] = [];
+    if (opts?.history?.length) {
+      for (const turn of opts.history.slice(-12)) {
+        lmMessages.push(turn.role === 'assistant' ? vsLm.assistantMessage(turn.content) : vsLm.userMessage(turn.content));
+      }
+    }
+    lmMessages.push(vsLm.userMessage(prompt));
     const response = await model.sendRequest(
-      [vsLm.userMessage(prompt)],
+      lmMessages,
       { justification: 'DocsView AI Assistant processes user-selected document excerpts and spreadsheet formulas.' },
       token,
     );

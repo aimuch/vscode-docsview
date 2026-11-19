@@ -157,9 +157,14 @@ export async function readDocumentMarkdown(
     }
 
     case 'pdf': {
-      const { inspectPdf } = await import('./office');
-      const comments = await inspectPdf(bytes);
-      const lines = [`# ${fileName}`, `- Annotations / comments: ${comments.length}`];
+      const { extractPdfText, inspectPdf } = await import('./office');
+      const [comments, pages] = await Promise.all([inspectPdf(bytes), extractPdfText(bytes)]);
+      const lines = [`# ${fileName}`, `- Pages: ${pages.length}`, `- Annotations / comments: ${comments.length}`];
+      pages.forEach((txt, idx) => {
+        if (txt) {
+          lines.push(`\n## Page ${idx + 1}\n\n${txt}`);
+        }
+      });
       if (comments.length > 0) {
         lines.push('\n## Annotations');
         for (const c of comments) {
@@ -169,6 +174,26 @@ export async function readDocumentMarkdown(
         }
       }
       out = lines.join('\n');
+      break;
+    }
+
+    case 'sqlite':
+    case 'sqlite3':
+    case 'db': {
+      const { readSqliteDatabase } = await import('./database');
+      const db = readSqliteDatabase(bytes, 200);
+      const sections = [`# ${fileName}`];
+      for (const tbl of db.tables) {
+        sections.push(`## ${tbl.name}\n\n${rowsToMarkdownTable([tbl.columns, ...tbl.rows], 200)}`);
+      }
+      out = sections.join('\n\n');
+      break;
+    }
+
+    case 'parquet': {
+      const { readParquetFile } = await import('./database');
+      const pq = readParquetFile(bytes, 200);
+      out = `# ${fileName}\n\n${rowsToMarkdownTable([pq.columns, ...pq.rows], 200)}`;
       break;
     }
 

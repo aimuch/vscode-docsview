@@ -1,0 +1,138 @@
+.media-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--dv-bg);
+}
+
+.media-player-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow: auto;
+}
+
+.media-video {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  background: #000;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
+.media-audio-card {
+  width: min(600px, 95%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 22px;
+  border-radius: 10px;
+  border: 1px solid var(--dv-border);
+  background: var(--dv-surface);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.16);
+}
+
+.media-audio-title {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-visualizer {
+  width: 100%;
+  height: 140px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--dv-bg) 85%, transparent);
+  border: 1px solid var(--dv-border);
+}
+
+.media-audio {
+  width: 100%;
+}
+
+.media-speed {
+  width: auto !important;
+  min-width: 56px;
+  padding: 2px 6px;
+}
+
+.media-bookmarks {
+  width: 240px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--dv-border);
+  background: var(--dv-surface);
+  display: flex;
+  flex-direction: column;
+}
+
+.media-bm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--dv-border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.media-bm-list {
+  flex: 1;
+  overflow: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.media-bm-empty {
+  font-size: 11px;
+  color: var(--dv-muted);
+  padding: 12px 6px;
+  text-align: center;
+}
+
+.media-bm-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 5px;
+  padding: 2px 4px;
+}
+
+.media-bm-item:hover {
+  background: var(--dv-hover);
+}
+
+.media-bm-jump {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dv-fg);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px;
+}
+
+@media (max-width: 720px) {
+  .media-stage {
+    flex-direction: column;
+  }
+  .media-bookmarks {
+    width: 100%;
+    height: 160px;
+    border-left: 0;
+    border-top: 1px solid var(--dv-border);
+  }
+}

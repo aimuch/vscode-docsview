@@ -1324,6 +1324,46 @@ copyJsonBtn.addEventListener('click', copyBoxesJson);
 
 const historyBtn = iconButton('history', t('history'), () => post({ type: 'history' }));
 
+function captureVisionDataUrl(): string | undefined {
+  if (!sourceCanvas || !naturalW || !naturalH) {
+    return undefined;
+  }
+  const activeBox =
+    workspaceMachine.mode === 'crop'
+      ? cropRect
+      : boxes.find((b) => b.id === selectedBoxId);
+  const sx = activeBox ? clamp(Math.round(activeBox.x1), 0, naturalW - 1) : 0;
+  const sy = activeBox ? clamp(Math.round(activeBox.y1), 0, naturalH - 1) : 0;
+  const sw = activeBox ? Math.max(1, clamp(Math.round(activeBox.x2), 1, naturalW) - sx) : naturalW;
+  const sh = activeBox ? Math.max(1, clamp(Math.round(activeBox.y2), 1, naturalH) - sy) : naturalH;
+
+  const maxDim = 1280;
+  const scale = Math.min(1, maxDim / Math.max(sw, sh));
+  const outW = Math.max(1, Math.round(sw * scale));
+  const outH = Math.max(1, Math.round(sh * scale));
+  const tmp = document.createElement('canvas');
+  tmp.width = outW;
+  tmp.height = outH;
+  const ctx = tmp.getContext('2d');
+  if (!ctx) return undefined;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, outW, outH);
+  ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, outW, outH);
+  try {
+    return tmp.toDataURL('image/jpeg', 0.85);
+  } catch {
+    return undefined;
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && committedMarkupCanvas) {
+    committedMarkupCanvas.width = 0;
+    committedMarkupCanvas.height = 0;
+    committedMarkupCanvas = undefined;
+  }
+});
+
 let openImgDrawerFn: (() => void) | undefined;
 
 const ai = createAiAssistant({
@@ -1346,10 +1386,18 @@ const ai = createAiAssistant({
     }
     const svgSource =
       ext === 'svg' && rawFileBytes ? new TextDecoder().decode(rawFileBytes).slice(0, 16_000) : undefined;
+    const activeBox =
+      workspaceMachine.mode === 'crop'
+        ? cropRect
+        : boxes.find((b) => b.id === selectedBoxId);
+    const regionLabel = activeBox
+      ? `${Math.round(activeBox.x2 - activeBox.x1)}×${Math.round(activeBox.y2 - activeBox.y1)} region`
+      : `${naturalW}×${naturalH} ${ext.toUpperCase()}`;
     return {
       selection: svgSource,
       surrounding: metaSummary.join('\n'),
-      badge: `${naturalW}×${naturalH} ${ext.toUpperCase()}`,
+      imageDataUrl: captureVisionDataUrl(),
+      badge: regionLabel,
     };
   },
   applyActions: [

@@ -24,7 +24,30 @@ const article = el('article', { class: 'markdown-body' });
 scroller.append(article);
 
 const sidebar = new Sidebar(t('toc'), undefined, { defaultOpen: true });
-const outline = new Outline((id) => scrollToAnchor(`#${id}`));
+let latestToc: TocEntry[] = [];
+const outline = new Outline((id) => scrollToAnchor(`#${id}`), {
+  onReorder: (fromKey, toKey) => {
+    const fromIdx = latestToc.findIndex((h) => h.id === fromKey);
+    const toIdx = latestToc.findIndex((h) => h.id === toKey);
+    if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+    const fromItem = latestToc[fromIdx];
+    const toItem = latestToc[toIdx];
+    const lines = getSourceLines();
+    let fromEnd = lines.length;
+    for (let i = fromIdx + 1; i < latestToc.length; i++) {
+      if (latestToc[i].level <= fromItem.level) {
+        fromEnd = latestToc[i].line;
+        break;
+      }
+    }
+    post({
+      type: 'moveMarkdownLines',
+      fromStart: fromItem.line,
+      fromEnd,
+      toLine: toItem.line,
+    });
+  },
+});
 sidebar.panel().append(outline.node);
 
 // Preview: this tab only. Split: the text editor beside it. Source: the text editor instead.
@@ -230,6 +253,7 @@ const historyBtn = iconButton('history', t('slotHistory'), () => post({ type: 'h
 interface MdSelectionMeta {
   startLine?: number;
   endLine?: number;
+  selectedPhrase?: string;
 }
 
 function captureMdAiContext() {
@@ -263,18 +287,31 @@ function captureMdAiContext() {
       const b1 = blockAt(endEl);
       const startLine = b0 ? Number(b0.dataset.line) : undefined;
       const endLine = b1 ? Math.min(Number(b1.dataset.lineEnd), lines.length) : undefined;
+      const selStr = sel.toString().trim();
       const rawBlock =
         startLine !== undefined && endLine !== undefined && endLine > startLine
           ? lines.slice(startLine, endLine).join('\n').replace(/\n+$/, '')
-          : sel.toString().trim();
+          : selStr;
+      // If the user selected a unique phrase strictly shorter than the block, target that exact phrase!
+      const isUniquePhrase =
+        selStr.length >= 2 &&
+        rawBlock.length > selStr.length + 4 &&
+        rawBlock.indexOf(selStr) >= 0 &&
+        rawBlock.indexOf(selStr) === rawBlock.lastIndexOf(selStr);
       return {
-        selection: rawBlock || sel.toString().trim(),
+        selection: isUniquePhrase ? selStr : rawBlock || selStr,
         surrounding: rawSource.slice(0, 8000),
         badge:
           startLine !== undefined && endLine !== undefined
-            ? `L${startLine + 1}–${endLine}`
-            : t('aiContextSelection', sel.toString().trim().length),
-        meta: { startLine, endLine } satisfies MdSelectionMeta,
+            ? isUniquePhrase
+              ? `L${startLine + 1} (${selStr.length})`
+              : `L${startLine + 1}–${endLine}`
+            : t('aiContextSelection', selStr.length),
+        meta: {
+          startLine,
+          endLine,
+          selectedPhrase: isUniquePhrase ? selStr : undefined,
+        } satisfies MdSelectionMeta,
       };
     }
   }
@@ -311,8 +348,14 @@ const ai = createAiAssistant({
         const expected = lines.slice(start, end).join('\n');
         const stripped = expected.replace(/\n+$/, '');
         const trailing = expected.slice(stripped.length) || '\n';
+        let nextBlock: string;
+        if (m.selectedPhrase && stripped.includes(m.selectedPhrase)) {
+          nextBlock = stripped.replace(m.selectedPhrase, text.trim()) + trailing;
+        } else {
+          nextBlock = text.trimEnd() + trailing;
+        }
         closeEditor();
-        post({ type: 'editBlock', start, end, text: text.trimEnd() + trailing, expected });
+        post({ type: 'editBlock', start, end, text: nextBlock, expected });
       },
     },
     {
@@ -338,11 +381,37 @@ const ai = createAiAssistant({
   ],
 });
 
+let focusMode = false;
+const focusExitPill = el('button', { class: 'md-focus-exit', text: t('mdExitFocus') });
+focusExitPill.type = 'button';
+focusExitPill.hidden = true;
+const focusToggle = toggleButton('focus', t('mdFocusMode'), (on) => setFocusMode(on));
+function setFocusMode(on: boolean) {
+  focusMode = on;
+  document.body.classList.toggle('md-focus-mode', on);
+  focusToggle.set(on);
+  focusExitPill.hidden = !on;
+  if (on) {
+    overlayStack.push({
+      id: 'mdFocusMode',
+      isOpen: () => focusMode,
+      close: () => setFocusMode(false),
+    });
+  } else {
+    overlayStack.remove('mdFocusMode');
+  }
+}
+focusExitPill.addEventListener('click', () => setFocusMode(false));
+
+const progressBar = el('div', { class: 'md-reading-progress' });
+const progressFill = el('div', { class: 'md-reading-progress-fill' });
+progressBar.append(progressFill);
+
 const topBar = customToolbar({
   subtitle: 'Markdown',
   slots: [
     { id: 'nav', nodes: [sidebar.toggle] },
-    { id: 'view', nodes: [view.node, slideModeBtn] },
+    { id: 'view', nodes: [view.node, slideModeBtn, focusToggle.node] },
     { id: 'zoom', nodes: zoom.nodes },
     { id: 'find', nodes: findWidget.nodes },
     { id: 'edit', label: t('editMode'), nodes: [editToggle.node] },
@@ -355,6 +424,7 @@ const topBar = customToolbar({
   documentActions: [
     { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     { label: t('mdSlideMode'), icon: 'play', onClick: () => slideDeck.open() },
+    { label: t('mdFocusMode'), icon: 'focus', onClick: () => setFocusMode(!focusMode) },
     { label: t('exportHtml'), icon: 'export', onClick: () => exportAs('html') },
     { label: t('exportPdf'), hint: t('exportPdfHint'), icon: 'export', onClick: () => exportAs('pdf') },
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
@@ -397,11 +467,30 @@ const mdStatusBar = el('div', { class: 'dv-statusbar' }, [el('div', { class: 'dv
 scroller.tabIndex = -1;
 app.append(
   topBar.node,
+  progressBar,
   el('div', { class: 'dv-body' }, [sidebar.node, el('div', { class: 'dv-main' }, [sidebar.expandBtn, scroller])]),
   mdStatusBar,
+  focusExitPill,
 );
 setEditMode(readState().mdEdit === true);
 setRtl(rtl);
+
+scroller.addEventListener(
+  'scroll',
+  () => {
+    const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+    const pct = maxScroll > 0 ? Math.min(100, Math.max(0, (scroller.scrollTop / maxScroll) * 100)) : 0;
+    progressFill.style.width = `${pct.toFixed(1)}%`;
+  },
+  { passive: true },
+);
+
+window.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    setFocusMode(!focusMode);
+  }
+});
 
 // Clipboard Image Paste in Edit Mode -> saves to `assets/paste-*.png` and inserts `![](assets/...)`.
 window.addEventListener('paste', (e) => {
@@ -552,6 +641,7 @@ function render(html: string, toc: TocEntry[]) {
       return !from.isEqualNode(to);
     },
   });
+  latestToc = toc;
   renderToc(toc);
   updateDocStats();
   addCopyButtons();

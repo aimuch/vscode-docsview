@@ -245,6 +245,7 @@ export function handleAiWebviewMessage(webview: vscode.Webview, uri: vscode.Uri,
             }
           },
           cts.token,
+          { history: context.history, imageDataUrl: context.imageDataUrl },
         );
 
         if (activeStreams.get(webview) === entry) {

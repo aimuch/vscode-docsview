@@ -221,7 +221,12 @@ export class Outline {
 
   constructor(
     private readonly onSelect: (key: string) => void,
-    private readonly opts: { emptyText?: string; countText?: (n: number) => string; showFilter?: boolean } = {},
+    private readonly opts: {
+      emptyText?: string;
+      countText?: (n: number) => string;
+      showFilter?: boolean;
+      onReorder?: (fromKey: string, toKey: string) => void;
+    } = {},
   ) {
     this.count = el('span', { class: 'dv-ol-count' });
     this.filter = el('input', { class: 'dv-input dv-ol-filter' });
@@ -285,6 +290,31 @@ export class Outline {
       }
       link.addEventListener('click', () => this.onSelect(node.item.key));
       row.append(link);
+      if (this.opts.onReorder) {
+        row.draggable = true;
+        row.dataset.olKey = node.item.key;
+        row.addEventListener('dragstart', (e) => {
+          e.dataTransfer?.setData('text/plain', node.item.key);
+          row.style.opacity = '0.5';
+        });
+        row.addEventListener('dragend', () => {
+          row.style.opacity = '';
+          this.list.querySelectorAll('.dv-ol-drop').forEach((n) => n.classList.remove('dv-ol-drop'));
+        });
+        row.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          row.classList.add('dv-ol-drop');
+        });
+        row.addEventListener('dragleave', () => row.classList.remove('dv-ol-drop'));
+        row.addEventListener('drop', (e) => {
+          e.preventDefault();
+          row.classList.remove('dv-ol-drop');
+          const fromKey = e.dataTransfer?.getData('text/plain');
+          if (fromKey && fromKey !== node.item.key) {
+            this.opts.onReorder?.(fromKey, node.item.key);
+          }
+        });
+      }
       node.row = row;
       node.collapsed = collapsedBefore.has(node.item.key);
     }

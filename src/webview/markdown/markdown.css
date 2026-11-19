@@ -130,9 +130,57 @@ body[data-theme='academic'].dv-dark {
   padding: 28px 40px 80px;
   color: var(--md-fg);
   font-family: var(--md-font);
-  font-size: var(--md-size);
-  line-height: var(--md-leading);
+  font-size: var(--md-font-size, var(--md-size));
+  line-height: var(--md-line-height, var(--md-leading));
   overflow-wrap: break-word;
+}
+
+.md-reading-progress {
+  height: 2px;
+  width: 100%;
+  background: transparent;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.md-reading-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--dv-accent);
+  transition: width 80ms linear;
+}
+
+.dv-ol-drop {
+  outline: 1px dashed var(--dv-accent);
+  background: color-mix(in srgb, var(--dv-accent) 12%, transparent);
+}
+
+body.md-focus-mode .dv-toolbar,
+body.md-focus-mode .dv-sidebar,
+body.md-focus-mode .dv-sidebar-expand,
+body.md-focus-mode .dv-statusbar {
+  display: none !important;
+}
+
+.md-focus-exit {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 60;
+  border: 1px solid var(--dv-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dv-surface) 90%, transparent);
+  color: var(--dv-fg);
+  font: inherit;
+  font-size: 11px;
+  padding: 5px 12px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.md-focus-exit:hover {
+  opacity: 1;
 }
 
 body[data-md-width='fluid'] .markdown-body {

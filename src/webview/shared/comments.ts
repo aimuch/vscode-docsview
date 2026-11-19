@@ -34,11 +34,13 @@ export interface CommentsPanelOptions {
   onUpdate: (id: string, text: string) => void;
   onDelete: (id: string) => void;
   onToggleAddMode?: () => void;
+  onAiDigest?: (markdown: string) => void;
 }
 
 export class CommentsPanel {
   readonly node: HTMLElement;
   private readonly countEl: HTMLElement;
+  private readonly aiDigestBtn: HTMLButtonElement | undefined;
   private readonly exportBtn: HTMLButtonElement;
   private readonly addBtn: HTMLButtonElement | undefined;
   private readonly listEl: HTMLElement;
@@ -50,7 +52,17 @@ export class CommentsPanel {
     this.countEl = el('span', { class: 'dv-ol-count' });
     this.exportBtn = iconButton('export', t('exportCommentsMd'), () => this.exportMarkdown());
     this.exportBtn.classList.add('dv-cm-mini');
-    const rightGroup = el('span', { class: 'dv-cm-head-actions' }, [this.exportBtn]);
+    const rightGroup = el('span', { class: 'dv-cm-head-actions' });
+    if (opts.onAiDigest) {
+      this.aiDigestBtn = iconButton('sparkle', t('aiActSummarize'), () => {
+        if (!this.items.length) return;
+        const md = formatCommentsAsMarkdown(this.opts.docName?.() ?? 'Document', this.items, this.opts.targetLabel);
+        opts.onAiDigest?.(md);
+      });
+      this.aiDigestBtn.classList.add('dv-cm-mini');
+      rightGroup.append(this.aiDigestBtn);
+    }
+    rightGroup.append(this.exportBtn);
     if (opts.onToggleAddMode) {
       const addBtn = el('button', { class: 'dv-cm-head-add', title: t('addComment') });
       addBtn.type = 'button';
@@ -110,6 +122,9 @@ export class CommentsPanel {
     }
     this.countEl.textContent = t('commentsCount', this.items.length);
     this.exportBtn.disabled = this.items.length === 0;
+    if (this.aiDigestBtn) {
+      this.aiDigestBtn.disabled = this.items.length === 0;
+    }
     if (!this.items.length) {
       this.listEl.replaceChildren(el('div', { class: 'dv-ol-empty', text: t('noComments') }));
       return;

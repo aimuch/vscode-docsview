@@ -14,6 +14,7 @@ import {
   openInlineTextEditor,
   renderSurfaceAnnotations,
 } from '../shared/comments';
+import { openDiffModal } from '../shared/diffModal';
 import { getFileState } from '../shared/fileState';
 import { createFindWidget, PreviewFind } from '../shared/find';
 import { bindLiveViewerStatus, overlayStack } from '../shared/overlayStack';
@@ -89,6 +90,13 @@ const commentsPanel = new CommentsPanel({
   onDelete: (id) => post({ type: 'docMutate', mutation: { kind: 'deleteComment', id } }),
   onToggleAddMode: () => {
     modeMachine.toggle('annotate');
+  },
+  onAiDigest: (md) => {
+    ai.open({
+      presetAction: 'summarize',
+      initialPrompt: `Summarize all slide review comments below into key themes and a prioritised action-item checklist:\n\n${md}`,
+      autoRun: true,
+    });
   },
 });
 sidebar.panel('comments').append(commentsPanel.node);
@@ -537,6 +545,8 @@ const topBar = customToolbar({
       onClick: () => commentsPanel.exportMarkdown(),
     },
     { label: t('history'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'history' }) },
+    { label: t('diffCompareHistory'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'compareDocument', fromHistory: true }) },
+    { label: t('diffCompareFile'), icon: 'history', onClick: () => post({ type: 'compareDocument', fromHistory: false }) },
   ],
 });
 
@@ -925,6 +935,8 @@ onMessage((message) => {
     }
     syncCommentsUi();
     syncNotesUi();
+  } else if (message.type === 'diffReport') {
+    openDiffModal(message.report);
   } else if (message.type === 'error') {
     showStatus(host, message.message, true);
   }

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
+import { compareDelimitedDocument } from '../diff';
 import { saveConverted } from '../fileActions';
 import { configureWebview, debounce, handleCommonMessage, parentUri, t, onWebviewMessage } from '../webviewHtml';
 import type { TextEdit } from './csvParser';
@@ -144,6 +145,18 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
           case 'structure':
             enqueueEdit(() => session.structure(message.op, message.at, message.count));
             break;
+          case 'compareDocument': {
+            sync();
+            const delim = setting === 'auto' ? (name.toLowerCase().endsWith('.tsv') ? '\t' : ',') : setting;
+            void compareDelimitedDocument(document.uri, 'csv', document.getText(), delim, message.fromHistory)
+              .then((report) => {
+                if (report) post({ type: 'diffReport', report });
+              })
+              .catch((err: unknown) =>
+                vscode.window.showErrorMessage(String(err instanceof Error ? err.message : err)),
+              );
+            break;
+          }
         }
       }),
     ];

@@ -1,7 +1,9 @@
 import type {
   Cell,
   CellChange,
+  CellFormatPatch,
   CellObject,
+  CellStyle,
   HostMessage,
   MergeRange,
   SheetModel,
@@ -968,6 +970,95 @@ export class ExcelSession {
     };
   }
 
+  /** Applies bold/italic/alignment/fill/text-color/number-format to a rectangular cell range. */
+  formatCells(
+    sheetIndex: number,
+    r0: number,
+    c0: number,
+    r1: number,
+    c1: number,
+    patch: CellFormatPatch,
+  ): EditResult | undefined {
+    const loaded = this.workbook.sheets[sheetIndex];
+    if (!this.workbook.editable || !loaded) {
+      return undefined;
+    }
+    const before = this.takeSnapshot(sheetIndex);
+    const model = loaded.model;
+    model.styles ??= [];
+    const sr0 = Math.max(0, Math.min(r0, r1));
+    const sr1 = Math.min(Math.max(0, model.rowCount - 1), Math.max(r0, r1));
+    const sc0 = Math.max(0, Math.min(c0, c1));
+    const sc1 = Math.min(Math.max(0, model.colCount - 1), Math.max(c0, c1));
+
+    for (let r = sr0; r <= sr1; r++) {
+      while (model.rows.length <= r) model.rows.push([]);
+      const row = model.rows[r];
+      while (row.length <= sc1) row.push(null);
+      for (let c = sc0; c <= sc1; c++) {
+        const cur = row[c];
+        const obj: CellObject =
+          cur == null
+            ? { v: '' }
+            : typeof cur === 'string'
+              ? { v: cur }
+              : { ...cur };
+        const baseStyle: CellStyle = obj.s !== undefined ? { ...(model.styles[obj.s] ?? {}) } : {};
+        if (patch.bold !== undefined) baseStyle.bold = patch.bold;
+        if (patch.italic !== undefined) baseStyle.italic = patch.italic;
+        if (patch.align !== undefined) baseStyle.align = patch.align;
+        if (patch.bg !== undefined) baseStyle.bg = patch.bg || undefined;
+        if (patch.color !== undefined) baseStyle.color = patch.color || undefined;
+        const newStyleIdx = model.styles.length;
+        model.styles.push(baseStyle);
+        obj.s = newStyleIdx;
+
+        if (patch.numFmt !== undefined) {
+          const coord = `${r},${c}`;
+          if (patch.numFmt && patch.numFmt !== 'General') {
+            loaded.numFmts.set(coord, patch.numFmt);
+            const scalar = loaded.scalars.get(coord);
+            if (typeof scalar === 'number') {
+              obj.v = formatNumber(scalar, patch.numFmt, loaded.date1904);
+              obj.raw = String(scalar);
+              obj.n = true;
+            }
+          } else {
+            loaded.numFmts.delete(coord);
+            const scalar = loaded.scalars.get(coord);
+            if (typeof scalar === 'number') {
+              obj.v = String(scalar);
+              delete obj.raw;
+              obj.n = true;
+            }
+          }
+        }
+        row[c] = obj;
+      }
+    }
+
+    const after = this.takeSnapshot(sheetIndex);
+    const step: HistoryStep = {
+      op: { kind: 'format', sheet: loaded.name, r0: sr0, c0: sc0, r1: sr1, c1: sc1, patch },
+      before,
+      after,
+    };
+    this.pushStep(step);
+    const msg: HostMessage = { type: 'sheet', index: sheetIndex, model };
+    return {
+      message: msg,
+      messages: [msg],
+      undo: () => {
+        if (this.history[this.cursor - 1] === step) this.cursor--;
+        return this.restoreSnapshot(before);
+      },
+      redo: () => {
+        if (this.history[this.cursor] === step) this.cursor++;
+        return this.restoreSnapshot(after);
+      },
+    };
+  }
+
   // ---------------------------------------------------------------- persistence
 
   /** The workbook with all applied operations up to `cursor`. Does not change session state. */
@@ -1021,6 +1112,13 @@ export class ExcelSession {
           const idx = this.workbook.sheets.findIndex((s) => s.name === op.sheet);
           if (idx >= 0) {
             this.edit(idx, op.edits);
+          }
+          break;
+        }
+        case 'format': {
+          const idx = this.workbook.sheets.findIndex((s) => s.name === op.sheet);
+          if (idx >= 0) {
+            this.formatCells(idx, op.r0, op.c0, op.r1, op.c1, op.patch);
           }
           break;
         }

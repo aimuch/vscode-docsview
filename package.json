@@ -2,7 +2,7 @@
   "name": "docsview",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "publisher": "docsview",
   "private": true,
   "license": "MIT",
@@ -167,6 +167,32 @@
           { "filenamePattern": "*.jar" },
           { "filenamePattern": "*.apk" },
           { "filenamePattern": "*.nupkg" }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "docsview.database",
+        "displayName": "%editor.database%",
+        "selector": [
+          { "filenamePattern": "*.sqlite" },
+          { "filenamePattern": "*.sqlite3" },
+          { "filenamePattern": "*.db" },
+          { "filenamePattern": "*.parquet" }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "docsview.media",
+        "displayName": "%editor.media%",
+        "selector": [
+          { "filenamePattern": "*.mp3" },
+          { "filenamePattern": "*.wav" },
+          { "filenamePattern": "*.ogg" },
+          { "filenamePattern": "*.m4a" },
+          { "filenamePattern": "*.flac" },
+          { "filenamePattern": "*.mp4" },
+          { "filenamePattern": "*.webm" },
+          { "filenamePattern": "*.mov" }
         ],
         "priority": "default"
       }
@@ -334,6 +360,20 @@
           "type": "boolean",
           "default": true,
           "description": "%config.markdown.scrollSync%"
+        },
+        "docsview.markdown.fontSize": {
+          "type": "number",
+          "default": 15,
+          "minimum": 12,
+          "maximum": 24,
+          "description": "%config.markdown.fontSize%"
+        },
+        "docsview.markdown.lineHeight": {
+          "type": "number",
+          "default": 1.65,
+          "minimum": 1.2,
+          "maximum": 2.2,
+          "description": "%config.markdown.lineHeight%"
         },
         "docsview.markdown.contentWidth": {
           "type": "string",

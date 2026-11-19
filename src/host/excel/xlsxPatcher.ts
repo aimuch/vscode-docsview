@@ -3,7 +3,7 @@
 // charts, pivot tables, macros and media are carried over byte-for-byte. Pure module.
 import { DOMParser, XMLSerializer, type Document as XDocument, type Element as XElement } from '@xmldom/xmldom';
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
-import type { StructureOp } from '../../common/protocol';
+import type { CellFormatPatch, StructureOp } from '../../common/protocol';
 import { parseCellInput } from './cellInput';
 import { expandSharedFormula, renameSheetInFormula, shiftFormulaReferences } from './formula';
 
@@ -17,6 +17,7 @@ export interface CellEdit {
 
 export type WorkbookOp =
   | { kind: 'cells'; sheet: string; edits: CellEdit[] }
+  | { kind: 'format'; sheet: string; r0: number; c0: number; r1: number; c1: number; patch: CellFormatPatch }
   | { kind: 'structure'; sheet: string; op: StructureOp; at: number; count: number }
   | { kind: 'addSheet'; name: string }
   | { kind: 'renameSheet'; oldName: string; newName: string }
@@ -808,6 +809,168 @@ function coalesceOps(ops: readonly WorkbookOp[]): WorkbookOp[] {
   return out;
 }
 
+function hexToArgb(hex: string): string | undefined {
+  const clean = hex.trim().replace(/^#/, '');
+  if (/^[0-9a-fA-F]{6}$/.test(clean)) {
+    return `FF${clean.toUpperCase()}`;
+  }
+  return undefined;
+}
+
+function appendFormatXf(files: Record<string, Uint8Array>, patch: CellFormatPatch): number | undefined {
+  const stylesBytes = files['xl/styles.xml'];
+  if (!stylesBytes) {
+    return undefined;
+  }
+  const doc = createXmlParser().parseFromString(strFromU8(stylesBytes), XML);
+  const root = doc.documentElement;
+  if (!root) return undefined;
+  const ns = root.namespaceURI;
+  const mk = (tag: string) => (ns ? doc.createElementNS(ns, tag) : doc.createElement(tag));
+
+  let cellXfs = elements(root, 'cellXfs')[0];
+  if (!cellXfs) {
+    cellXfs = mk('cellXfs');
+    root.appendChild(cellXfs);
+  }
+  const xfs = elements(cellXfs, 'xf');
+  const xf = mk('xf');
+  xf.setAttribute('numFmtId', '0');
+  xf.setAttribute('fontId', '0');
+  xf.setAttribute('fillId', '0');
+  xf.setAttribute('borderId', '0');
+  xf.setAttribute('xfId', '0');
+
+  if (patch.numFmt) {
+    let numFmts = elements(root, 'numFmts')[0];
+    if (!numFmts) {
+      numFmts = mk('numFmts');
+      root.insertBefore(numFmts, root.firstChild);
+    }
+    const existing = elements(numFmts, 'numFmt');
+    let maxId = 164;
+    for (const nf of existing) {
+      const id = Number(nf.getAttribute('numFmtId') ?? 0);
+      if (id >= maxId) maxId = id + 1;
+    }
+    const nfEl = mk('numFmt');
+    nfEl.setAttribute('numFmtId', String(maxId));
+    nfEl.setAttribute('formatCode', patch.numFmt);
+    numFmts.appendChild(nfEl);
+    numFmts.setAttribute('count', String(existing.length + 1));
+    xf.setAttribute('numFmtId', String(maxId));
+    xf.setAttribute('applyNumberFormat', '1');
+  }
+
+  if (patch.bold !== undefined || patch.italic !== undefined || patch.color) {
+    let fonts = elements(root, 'fonts')[0];
+    if (!fonts) {
+      fonts = mk('fonts');
+      root.appendChild(fonts);
+    }
+    const fontList = elements(fonts, 'font');
+    const fontEl = mk('font');
+    if (patch.bold) fontEl.appendChild(mk('b'));
+    if (patch.italic) fontEl.appendChild(mk('i'));
+    const argb = patch.color ? hexToArgb(patch.color) : undefined;
+    if (argb) {
+      const col = mk('color');
+      col.setAttribute('rgb', argb);
+      fontEl.appendChild(col);
+    }
+    const fontId = fontList.length;
+    fonts.appendChild(fontEl);
+    fonts.setAttribute('count', String(fontId + 1));
+    xf.setAttribute('fontId', String(fontId));
+    xf.setAttribute('applyFont', '1');
+  }
+
+  if (patch.bg) {
+    const argb = hexToArgb(patch.bg);
+    if (argb) {
+      let fills = elements(root, 'fills')[0];
+      if (!fills) {
+        fills = mk('fills');
+        root.appendChild(fills);
+      }
+      const fillList = elements(fills, 'fill');
+      const fillEl = mk('fill');
+      const pf = mk('patternFill');
+      pf.setAttribute('patternType', 'solid');
+      const fg = mk('fgColor');
+      fg.setAttribute('rgb', argb);
+      pf.appendChild(fg);
+      fillEl.appendChild(pf);
+      const fillId = fillList.length;
+      fills.appendChild(fillEl);
+      fills.setAttribute('count', String(fillId + 1));
+      xf.setAttribute('fillId', String(fillId));
+      xf.setAttribute('applyFill', '1');
+    }
+  }
+
+  if (patch.align) {
+    const alignEl = mk('alignment');
+    alignEl.setAttribute('horizontal', patch.align);
+    xf.appendChild(alignEl);
+    xf.setAttribute('applyAlignment', '1');
+  }
+
+  const newIdx = xfs.length;
+  cellXfs.appendChild(xf);
+  cellXfs.setAttribute('count', String(newIdx + 1));
+  files['xl/styles.xml'] = strToU8(serializeXml(doc));
+  return newIdx;
+}
+
+function patchFormatInSheetXml(
+  xml: string,
+  r0: number,
+  c0: number,
+  r1: number,
+  c1: number,
+  styleIndex: number,
+): string {
+  const doc = createXmlParser().parseFromString(xml, XML);
+  const root = doc.documentElement;
+  if (!root) return xml;
+  const sheetData = elements(root, 'sheetData')[0];
+  if (!sheetData) return xml;
+  const ns = root.namespaceURI;
+  const mk = (tag: string) => (ns ? doc.createElementNS(ns, tag) : doc.createElement(tag));
+
+  const rowMap = new Map<number, XElement>();
+  for (const rowEl of elements(sheetData, 'row')) {
+    const rn = Number(rowEl.getAttribute('r') ?? 0) - 1;
+    if (rn >= 0) rowMap.set(rn, rowEl);
+  }
+
+  for (let r = r0; r <= r1; r++) {
+    let rowEl = rowMap.get(r);
+    if (!rowEl) {
+      rowEl = mk('row');
+      rowEl.setAttribute('r', String(r + 1));
+      sheetData.appendChild(rowEl);
+      rowMap.set(r, rowEl);
+    }
+    const cellMap = new Map<number, XElement>();
+    for (const cEl of elements(rowEl, 'c')) {
+      const coord = parseCellCoord(cEl.getAttribute('r') ?? '');
+      if (coord) cellMap.set(coord.c, cEl);
+    }
+    for (let c = c0; c <= c1; c++) {
+      let cEl = cellMap.get(c);
+      if (!cEl) {
+        cEl = mk('c');
+        cEl.setAttribute('r', `${colName(c)}${r + 1}`);
+        rowEl.appendChild(cEl);
+      }
+      cEl.setAttribute('s', String(styleIndex));
+    }
+  }
+  return serializeXml(doc);
+}
+
 /** Applies an ordered sequence of cell, row/column structure, and sheet operations to an `.xlsx` archive. */
 export function applyWorkbookOps(bytes: Uint8Array, ops: readonly WorkbookOp[]): Uint8Array {
   const merged = coalesceOps(ops);
@@ -827,6 +990,18 @@ export function applyWorkbookOps(bytes: Uint8Array, ops: readonly WorkbookOp[]):
         }
         files[path] = strToU8(patchSheetXml(strFromU8(files[path]), op.edits));
         touched = true;
+        break;
+      }
+      case 'format': {
+        const path = sheetPaths(files).get(op.sheet);
+        if (!path || !files[path]) {
+          break;
+        }
+        const styleIdx = appendFormatXf(files, op.patch);
+        if (styleIdx !== undefined) {
+          files[path] = strToU8(patchFormatInSheetXml(strFromU8(files[path]), op.r0, op.c0, op.r1, op.c1, styleIdx));
+          touched = true;
+        }
         break;
       }
       case 'structure': {

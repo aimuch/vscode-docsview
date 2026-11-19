@@ -83,6 +83,17 @@ export const icons = {
   ),
   stop: svg('<rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2" fill="currentColor" stroke="none"/>'),
   refresh: svg('<path d="M13.2 5.4A5.5 5.5 0 1013.6 10M13.5 2.6v3.1h-3.1"/>'),
+  chart: svg('<path d="M2.5 13.5h11M4.5 11V7.5M8 11V4.5M11.5 11V6"/>'),
+  pivot: svg('<rect x="2.2" y="2.5" width="11.6" height="11" rx="1.2"/><path d="M2.2 6h11.6M6 6v7.5M9.5 11.5l2-2-2-2M11.5 9.5H8"/>'),
+  clean: svg('<path d="M3 13l3.2-3.2M5.5 6.8l3.7 3.7 4-4a1.4 1.4 0 000-2L11.5 2.8a1.4 1.4 0 00-2 0z"/>'),
+  signature: svg('<path d="M2.5 12.5h11M3 10.5c1.5-4 3-5.5 3.6-5.5s.4 3.5 1.2 3.5 1.7-3 2.5-2.5.4 2.5 1.5 2.5c.6 0 1.2-.5 1.7-1"/>'),
+  watermark: svg('<rect x="2.5" y="2.5" width="11" height="11" rx="1.2"/><path d="M4.5 11.5l7-7M6.5 11.5l5-5M4.5 9.5l5-5" opacity="0.7"/>'),
+  focus: svg('<path d="M2.5 5.5V3a.5.5 0 01.5-.5h2.5M10.5 2.5H13a.5.5 0 01.5.5v2.5M13.5 10.5V13a.5.5 0 01-.5.5h-2.5M5.5 13.5H3a.5.5 0 01-.5-.5v-2.5"/>'),
+  camera: svg('<path d="M2.2 5.2h2.2l1-1.7h5.2l1 1.7h2.2v7.6H2.2z"/><circle cx="8" cy="9" r="2.2"/>'),
+  bookmark: svg('<path d="M4.2 2.5h7.6v11l-3.8-2.6-3.8 2.6z"/>'),
+  bold: svg('<path d="M4.8 3.2h3.6a2.3 2.3 0 010 4.6H4.8zm0 4.6h4.2a2.5 2.5 0 010 5H4.8z"/>'),
+  italic: svg('<path d="M9.8 3.2H6.5M9.5 12.8H6.2M8.8 3.2L7.2 12.8"/>'),
+  palette: svg('<path d="M8 2.4a5.6 5.6 0 100 11.2h.8a1.5 1.5 0 001.1-2.5 1.2 1.2 0 01.9-2h.8a2 2 0 002-2A5.6 5.6 0 008 2.4z"/><circle cx="5.6" cy="7.2" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="5.5" r=".7" fill="currentColor" stroke="none"/><circle cx="10.4" cy="7.2" r=".7" fill="currentColor" stroke="none"/>'),
 };
 
 export type IconName = keyof typeof icons;

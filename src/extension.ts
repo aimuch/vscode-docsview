@@ -5,11 +5,13 @@ import { clearAiApiKey, setAiApiKey } from './host/ai/aiProviders';
 import { ArchivePreviewProvider } from './host/archive/provider';
 import { BinaryPreviewProvider } from './host/binaryPreviewProvider';
 import { CsvEditorProvider } from './host/csv/provider';
+import { DatabasePreviewProvider } from './host/database/provider';
 import { EpubPreviewProvider } from './host/epub/provider';
 import { ExcelEditorProvider } from './host/excel/provider';
 import { initHistory, listVersions, showHistory, watchTextSaves } from './host/history';
 import { JsonlEditorProvider } from './host/jsonl/provider';
 import { MarkdownPreviewProvider } from './host/markdown/provider';
+import { MediaPreviewProvider } from './host/media/provider';
 import { OfficeEditorProvider } from './host/office/provider';
 import { getViewerStates, onViewerStatus } from './host/status';
 import {
@@ -78,6 +80,14 @@ export function activate(context: vscode.ExtensionContext): {
       supportsMultipleEditorsPerDocument: false,
     }),
     vscode.window.registerCustomEditorProvider(ExcelEditorProvider.viewType, new ExcelEditorProvider(context), {
+      webviewOptions,
+      supportsMultipleEditorsPerDocument: false,
+    }),
+    vscode.window.registerCustomEditorProvider(DatabasePreviewProvider.viewType, new DatabasePreviewProvider(context), {
+      webviewOptions,
+      supportsMultipleEditorsPerDocument: false,
+    }),
+    vscode.window.registerCustomEditorProvider(MediaPreviewProvider.viewType, new MediaPreviewProvider(context), {
       webviewOptions,
       supportsMultipleEditorsPerDocument: false,
     }),

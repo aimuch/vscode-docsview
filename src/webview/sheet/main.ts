@@ -1,11 +1,12 @@
 // Table view for CSV/TSV, JSONL and Excel workbooks.
 import { extractFormulaFromAiResponse, extractTableFromAiResponse } from '../../common/aiResponseParser';
-import type { AiSheetSchemaContext, Cell, CellChange, SheetModel, StructureOp, WorkbookInfo } from '../../common/protocol';
+import type { AiSheetSchemaContext, Cell, CellChange, CellFormatPatch, SheetModel, StructureOp, WorkbookInfo } from '../../common/protocol';
 import { cellRaw, cellText, columnName, Grid, type GridSource, type Selection } from '../grid/grid';
 import '../shared/base.css';
 import { createAiAssistant } from '../shared/aiAssistant';
 import { app, button, el, onMessage, post, showStatus, t } from '../shared/api';
 import { getAppearance, highlightToggle, lockToggle, onAppearanceChange, updateAppearance } from '../shared/appearance';
+import { openDiffModal } from '../shared/diffModal';
 import { getFileState } from '../shared/fileState';
 import { createFindBar } from '../shared/find';
 import { icons } from '../shared/icons';
@@ -24,7 +25,15 @@ import {
 } from '../shared/ui';
 import { createZoom } from '../shared/zoom';
 import './sheet.css';
+import { extractChartDataset, openChartModal } from './charts';
+import {
+  computeSelectionTextClean,
+  computeSplitColumn,
+  findDuplicateRowIndices,
+  type TextCleanMode,
+} from './cleaning';
 import { createJsonlInspector } from './jsonlInspector';
+import { openPivotModal } from './pivot';
 import {
   collectColumnUniqueValues,
   computeAutoFillChanges,
@@ -876,6 +885,236 @@ const condFormatDropdown = moreMenu(
   'bars',
   { compact: true },
 );
+
+function openQuickChart() {
+  const model = models.get(active);
+  if (!model) return;
+  const sel = grid?.selection;
+  let r0 = sel ? sel.r0 : 0;
+  let c0 = sel ? sel.c0 : 0;
+  let r1 = sel ? sel.r1 : Math.min(model.rows.length - 1, 50);
+  let c1 = sel ? sel.c1 : Math.min(model.colCount - 1, 7);
+  if (r0 === r1 && c0 === c1) {
+    r0 = 0;
+    c0 = 0;
+    r1 = Math.min((rowMap ? rowMap.length : model.rows.length) - 1, 50);
+    c1 = Math.min(model.colCount - 1, 7);
+  }
+  const dataset = extractChartDataset(
+    (r, c) => {
+      const srcR = toSource(r);
+      return srcR >= 0 ? model.rows[srcR]?.[c] : undefined;
+    },
+    r0,
+    c0,
+    r1,
+    c1,
+  );
+  if (!dataset) {
+    flash(t('sheetChartNoData'));
+    return;
+  }
+  openChartModal(dataset, {
+    onAiExplain: (summary) => ai.open({ presetAction: 'explain', initialPrompt: summary, autoRun: true }),
+  });
+}
+
+function openQuickPivot() {
+  const model = models.get(active);
+  if (!model) return;
+  const fixed = fixedRows(model, viewOf(active));
+  const headers: string[] = [];
+  for (let c = 0; c < model.colCount; c++) {
+    const h = fixed > 0 ? cellText(model.rows[0]?.[c]).trim() : '';
+    headers.push(h || columnName(c));
+  }
+  openPivotModal(model.rows, headers, fixed, grid?.selection.c0 ?? 0);
+}
+
+function runDeduplicate() {
+  const model = models.get(active);
+  if (!model || !canEdit()) {
+    flash(t('locked'));
+    return;
+  }
+  if (rowMap) {
+    flash(t('structureBlocked'));
+    return;
+  }
+  const sel = grid?.selection;
+  const keyCols: number[] = [];
+  if (sel && sel.c1 > sel.c0) {
+    for (let c = sel.c0; c <= sel.c1; c++) keyCols.push(c);
+  } else if (sel && sel.r1 === sel.r0) {
+    for (let c = 0; c < model.colCount; c++) keyCols.push(c);
+  } else if (sel) {
+    keyCols.push(sel.c0);
+  }
+  const dups = findDuplicateRowIndices(model.rows, fixedRows(model, viewOf(active)), keyCols);
+  if (!dups.length) {
+    flash(t('sheetCleanDedupeDone', 0));
+    return;
+  }
+  for (const r of dups) {
+    post({ type: 'structure', index: active, op: 'deleteRows', at: r, count: 1 });
+  }
+  flash(t('sheetCleanDedupeDone', dups.length));
+}
+
+function openSplitColumnModal() {
+  const model = models.get(active);
+  const sel = grid?.selection;
+  if (!model || !sel || !canEdit()) {
+    flash(t('locked'));
+    return;
+  }
+  if (rowMap) {
+    flash(t('structureBlocked'));
+    return;
+  }
+  const backdrop = el('div', { class: 'dv-modal-backdrop' });
+  const input = el('input', { class: 'dv-input' }) as HTMLInputElement;
+  input.placeholder = ', / ; / | / -';
+  input.value = ',';
+  const close = () => {
+    overlayStack.remove('sheetSplitModal');
+    backdrop.remove();
+  };
+  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('sheetCleanSplitCol') });
+  applyBtn.type = 'button';
+  applyBtn.addEventListener('click', () => {
+    const delim = input.value;
+    if (!delim) return;
+    const { extraCols, changes } = computeSplitColumn(
+      model.rows,
+      fixedRows(model, viewOf(active)),
+      sel.c0,
+      delim,
+    );
+    if (extraCols > 0) {
+      for (let i = 0; i < extraCols; i++) {
+        post({ type: 'structure', index: active, op: 'insertCol', at: sel.c0 + 1, count: 1 });
+      }
+      setTimeout(() => {
+        if (changes.length) edit(changes);
+      }, 150);
+    }
+    close();
+  });
+  const hintEl = el('div', { class: 'dv-label', text: t('sheetCleanSplitPrompt') });
+  hintEl.style.marginBottom = '8px';
+  const modal = el('div', { class: 'dv-modal' }, [
+    el('div', { class: 'dv-modal-header' }, [
+      el('span', { class: 'dv-modal-title', text: `${t('sheetCleanSplitCol')} (${columnName(sel.c0)})` }),
+      iconButton('close', t('cancel'), close),
+    ]),
+    el('div', { class: 'dv-modal-body' }, [hintEl, input]),
+    el('div', { class: 'dv-modal-footer' }, [applyBtn]),
+  ]);
+  modal.style.width = 'min(380px,92vw)';
+  backdrop.append(modal);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+  document.body.append(backdrop);
+  overlayStack.push({ id: 'sheetSplitModal', isOpen: () => backdrop.isConnected, close });
+  input.focus();
+  input.select();
+}
+
+function runTextClean(mode: TextCleanMode) {
+  const model = models.get(active);
+  const sel = grid?.selection;
+  if (!model || !sel || !canEdit()) {
+    flash(t('locked'));
+    return;
+  }
+  const changes = computeSelectionTextClean(
+    (r, c) => {
+      const srcR = toSource(r);
+      return srcR >= 0 ? cellText(model.rows[srcR]?.[c]) : '';
+    },
+    sel.r0,
+    sel.c0,
+    sel.r1,
+    sel.c1,
+    mode,
+  );
+  if (!changes.length) {
+    return;
+  }
+  const mapped: CellChange[] = [];
+  for (const ch of changes) {
+    const srcR = toSource(ch.r);
+    if (srcR >= 0) mapped.push({ r: srcR, c: ch.c, text: ch.text });
+  }
+  if (mapped.length) {
+    edit(mapped);
+  }
+}
+
+function applyExcelFormat(patch: CellFormatPatch) {
+  const sel = grid?.selection;
+  if (!sel || !info?.editable || info.hasSource || getAppearance().lockEdits) {
+    flash(t('locked'));
+    return;
+  }
+  if (rowMap) {
+    flash(t('structureBlocked'));
+    return;
+  }
+  post({
+    type: 'formatCells',
+    index: active,
+    r0: sel.r0,
+    c0: sel.c0,
+    r1: sel.r1,
+    c1: sel.c1,
+    patch,
+  });
+}
+
+const chartBtn = iconButton('chart', t('sheetChart'), openQuickChart);
+const pivotBtn = iconButton('pivot', t('sheetPivot'), openQuickPivot);
+const cleanDropdown = moreMenu(
+  t('sheetClean'),
+  [
+    { label: t('sheetCleanDedupe'), onClick: runDeduplicate },
+    { label: t('sheetCleanSplitCol'), onClick: openSplitColumnModal },
+    '-',
+    { label: t('sheetCleanTrim'), onClick: () => runTextClean('trim') },
+    { label: t('sheetCleanUpper'), onClick: () => runTextClean('upper') },
+    { label: t('sheetCleanLower'), onClick: () => runTextClean('lower') },
+    { label: t('sheetCleanTitle'), onClick: () => runTextClean('title') },
+  ],
+  'clean',
+  { compact: true },
+);
+const formatDropdown = moreMenu(
+  t('sheetFormatBg'),
+  [
+    { label: t('sheetFormatBold'), icon: 'bold', onClick: () => applyExcelFormat({ bold: true }) },
+    { label: t('sheetFormatItalic'), icon: 'italic', onClick: () => applyExcelFormat({ italic: true }) },
+    { label: `${t('sheetFormatBold')} / ${t('sheetFormatItalic')} ✕`, onClick: () => applyExcelFormat({ bold: false, italic: false }) },
+    '-',
+    { label: `${t('sheetFormatBg')}: Yellow`, onClick: () => applyExcelFormat({ bg: '#FEF08A' }) },
+    { label: `${t('sheetFormatBg')}: Green`, onClick: () => applyExcelFormat({ bg: '#BBF7D0' }) },
+    { label: `${t('sheetFormatBg')}: Blue`, onClick: () => applyExcelFormat({ bg: '#BFDBFE' }) },
+    { label: `${t('sheetFormatBg')}: Red`, onClick: () => applyExcelFormat({ bg: '#FECACA' }) },
+    { label: `${t('sheetFormatBg')} ✕`, onClick: () => applyExcelFormat({ bg: '' }) },
+    '-',
+    { label: t('sheetFormatGeneral'), onClick: () => applyExcelFormat({ numFmt: 'General' }) },
+    { label: t('sheetFormatComma'), onClick: () => applyExcelFormat({ numFmt: '#,##0.00' }) },
+    { label: t('sheetFormatPercent'), onClick: () => applyExcelFormat({ numFmt: '0.0%' }) },
+    { label: t('sheetFormatCurrency'), onClick: () => applyExcelFormat({ numFmt: '$#,##0.00' }) },
+    { label: `${t('sheetFormatNum')}: yyyy-mm-dd`, onClick: () => applyExcelFormat({ numFmt: 'yyyy-mm-dd' }) },
+  ],
+  'palette',
+  { compact: true },
+);
+formatDropdown.hidden = true;
+cleanDropdown.hidden = true;
+
 const copyMdBtn = iconButton('copyMd', t('copyAsMarkdown'), copySelectionMarkdown);
 const copyJsonBtn = iconButton('copy', t('copyAsJson'), copySelectionJson);
 const historyBtn = iconButton('history', t('slotHistory'), () => post({ type: 'history' }));
@@ -930,10 +1169,23 @@ function captureSheetAiContext() {
     }
   }
 
+  const otherSheetsHeaders: Record<string, string[]> = {};
+  for (const [idx, m] of models.entries()) {
+    if (idx === active || !m.rows[0]) continue;
+    const h: string[] = [];
+    for (let c = 0; c < Math.min(m.colCount, 25); c++) {
+      h.push(cellText(m.rows[0]?.[c]).trim());
+    }
+    if (h.some(Boolean)) {
+      otherSheetsHeaders[m.name] = h;
+    }
+  }
+
   const schema: AiSheetSchemaContext = {
     sheetName: model?.name ?? 'Sheet1',
     allSheets: info?.sheets.map((s) => s.name) ?? [model?.name ?? 'Sheet1'],
     headers,
+    otherSheetsHeaders: Object.keys(otherSheetsHeaders).length ? otherSheetsHeaders : undefined,
     sampleRows,
     activeCell: activeAddr,
     selectionRange: rangeAddr,
@@ -1123,9 +1375,9 @@ const topBar = customToolbar({
     { id: 'cellBar', nodes: [address, formulaBar] },
     { id: 'find', nodes: [...sheetFindBar.nodes, replaceToggle.node] },
     { id: 'edit', label: t('lockEdits'), nodes: [lock] },
-    { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node, freezeColBtn.node, condFormatDropdown] },
-    { id: 'structure', nodes: [structureGroup] },
-    { id: 'ai', nodes: [ai.button] },
+    { id: 'highlight', nodes: [highlightToggle(), freezeBtn.node, freezeColBtn.node, condFormatDropdown, formatDropdown] },
+    { id: 'structure', nodes: [structureGroup, cleanDropdown] },
+    { id: 'ai', nodes: [chartBtn, pivotBtn, ai.button] },
     {
       id: 'actions',
       label: t('convertMenu'),
@@ -1137,6 +1389,10 @@ const topBar = customToolbar({
   ],
   documentActions: [
     { label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
+    { label: t('sheetChart'), icon: 'chart', onClick: openQuickChart },
+    { label: t('sheetPivot'), icon: 'pivot', onClick: openQuickPivot },
+    { label: t('diffCompareHistory'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'compareDocument', fromHistory: true }) },
+    { label: t('diffCompareFile'), icon: 'history', onClick: () => post({ type: 'compareDocument', fromHistory: false }) },
     openExternalMenuItem(),
     { label: t('copyAsMarkdown'), icon: 'copyMd', onClick: copySelectionMarkdown },
     { label: t('copyAsJson'), icon: 'copy', onClick: copySelectionJson },
@@ -1915,6 +2171,8 @@ onMessage((message) => {
       csvView.node.hidden = !isCsv;
       excelView.node.hidden = isCsv;
       structureGroup.hidden = !info.canStructure;
+      cleanDropdown.hidden = !info.editable;
+      formatDropdown.hidden = !info.editable || isCsv;
       lock.hidden = !info.editable;
       replaceToggle.node.hidden = !info.editable;
       if (!info.editable) {
@@ -1990,6 +2248,9 @@ onMessage((message) => {
     }
     case 'viewState':
       csvView.set(message.split ? 'split' : 'table');
+      break;
+    case 'diffReport':
+      openDiffModal(message.report);
       break;
     case 'error':
       grid = undefined;
