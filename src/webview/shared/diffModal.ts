@@ -1,96 +1,108 @@
-// Shared read-only Version Diff modal for Word (.docx), PowerPoint (.pptx), Excel (.xlsx), CSV & JSONL.
+// Accessible modal viewer for Version Diff reports (Word/PPTX paragraphs & Excel/CSV/JSONL cells).
 import type { DocumentDiffReport } from '../../common/docDiff';
 import { diffInlineText } from '../../common/textDiff';
 import { el, t } from './api';
-import { overlayStack } from './overlayStack';
-import { iconButton } from './ui';
+import { openAccessibleModal } from './modal';
 
 export function openDiffModal(report: DocumentDiffReport): void {
-  const backdrop = el('div', { class: 'dv-modal-backdrop' });
-  const close = () => {
-    overlayStack.remove('docDiffModal');
-    backdrop.remove();
-  };
-
   const summaryEl = el('div', {
-    class: 'dv-label',
+    class: 'dv-st-muted',
     text: `${report.baseLabel}  →  ${report.currentLabel}   (${t('diffSummary', report.addedCount, report.removedCount, report.changedCount)})`,
   });
+  summaryEl.style.wordBreak = 'break-word';
 
-  const body = el('div', { class: 'dv-modal-body' });
+  const bodyNodes: HTMLElement[] = [summaryEl];
+  const totalDiffs = report.addedCount + report.removedCount + report.changedCount;
 
-  if (report.kind === 'cells') {
-    const cells = report.cells ?? [];
-    if (!cells.length) {
-      body.append(el('div', { class: 'dv-status', text: t('diffNoChanges') }));
-    } else {
-      const rows = cells.map((c) => {
-        const diffCell = el('td');
-        for (const span of diffInlineText(c.before, c.after)) {
-          if (span.kind === 'del') diffCell.append(el('del', { class: 'dv-diff-del', text: span.text }));
-          else if (span.kind === 'add') diffCell.append(el('ins', { class: 'dv-diff-ins', text: span.text }));
-          else diffCell.append(document.createTextNode(span.text));
+  if (totalDiffs === 0) {
+    bodyNodes.push(el('div', { class: 'dv-status', text: t('diffNoChanges') }));
+  } else if (report.kind === 'cells' && report.cells?.length) {
+    const tbody = el('tbody');
+    // Limit synchronous inline diffing to first 500 rows for smooth rendering; show plain cells beyond that.
+    for (let idx = 0; idx < report.cells.length; idx++) {
+      const c = report.cells[idx];
+      const beforeTd = el('td');
+      const afterTd = el('td');
+      if (idx < 500 && c.before.length + c.after.length < 400) {
+        const inline = diffInlineText(c.before, c.after);
+        for (const sp of inline) {
+          if (sp.kind === 'del') {
+            beforeTd.append(el('del', { class: 'dv-diff-del', text: sp.text }));
+          } else if (sp.kind === 'add') {
+            afterTd.append(el('ins', { class: 'dv-diff-ins', text: sp.text }));
+          } else {
+            beforeTd.append(document.createTextNode(sp.text));
+            afterTd.append(document.createTextNode(sp.text));
+          }
         }
-        return el('tr', {}, [
+      } else {
+        beforeTd.textContent = c.before;
+        afterTd.textContent = c.after;
+      }
+      tbody.append(
+        el('tr', {}, [
           el('td', { text: c.sheet }),
           el('td', { text: c.addr }),
-          el('td', { text: c.before || '—' }),
-          diffCell,
-        ]);
-      });
-      body.append(
-        el('table', { class: 'dv-diff-table' }, [
-          el('thead', {}, [
-            el('tr', {}, [
-              el('th', { text: 'Sheet' }),
-              el('th', { text: 'Cell' }),
-              el('th', { text: report.baseLabel }),
-              el('th', { text: report.currentLabel }),
-            ]),
-          ]),
-          el('tbody', {}, rows),
+          beforeTd,
+          afterTd,
         ]),
       );
     }
-  } else {
-    const lines = (report.lines ?? []).filter((l) => l.kind !== 'same');
-    if (!lines.length) {
-      body.append(el('div', { class: 'dv-status', text: t('diffNoChanges') }));
-    } else {
-      for (const l of report.lines ?? []) {
-        if (l.kind === 'same') {
-          continue;
-        }
-        const prefix = l.kind === 'add' ? `+ [${l.newIndex ?? ''}] ` : `- [${l.oldIndex ?? ''}] `;
-        body.append(
-          el('div', {
-            class: l.kind === 'add' ? 'dv-diff-line dv-diff-line-add' : 'dv-diff-line dv-diff-line-del',
-            text: `${prefix}${l.text}`,
-          }),
-        );
-      }
+    const table = el('table', { class: 'dv-diff-table' }, [
+      el('thead', {}, [
+        el('tr', {}, [
+          el('th', { text: t('sheetName') }),
+          el('th', { text: '#' }),
+          el('th', { text: report.baseLabel }),
+          el('th', { text: report.currentLabel }),
+        ]),
+      ]),
+      tbody,
+    ]);
+    bodyNodes.push(table);
+    if (report.truncated) {
+      bodyNodes.push(
+        el('div', {
+          class: 'dv-st-muted',
+          text: `Showing first ${report.cells.length.toLocaleString()} cell differences (truncated).`,
+        }),
+      );
     }
+  } else if (report.kind === 'paragraphs' && report.lines?.length) {
+    const lines = report.lines;
+    const include = new Set<number>();
+    lines.forEach((line, idx) => {
+      if (line.kind !== 'same') {
+        include.add(idx);
+        if (idx > 0) include.add(idx - 1);
+        if (idx + 1 < lines.length) include.add(idx + 1);
+      }
+    });
+    const list = el('div', { class: 'dv-diff-lines' });
+    let prevIncluded = -1;
+    for (let idx = 0; idx < lines.length; idx++) {
+      if (!include.has(idx)) continue;
+      if (prevIncluded >= 0 && idx > prevIncluded + 1) {
+        list.append(el('div', { class: 'dv-st-muted', text: '···' }));
+      }
+      prevIncluded = idx;
+      const line = lines[idx];
+      const cls =
+        line.kind === 'add'
+          ? 'dv-diff-line dv-diff-line-add'
+          : line.kind === 'del'
+            ? 'dv-diff-line dv-diff-line-del'
+            : 'dv-diff-line dv-diff-line-same';
+      const prefix = line.kind === 'add' ? '+ ' : line.kind === 'del' ? '- ' : '  ';
+      list.append(el('div', { class: cls, text: `${prefix}${line.text}` }));
+    }
+    bodyNodes.push(list);
   }
 
-  const modal = el('div', { class: 'dv-modal' }, [
-    el('div', { class: 'dv-modal-head' }, [
-      el('span', { class: 'dv-modal-title', text: t('diffTitle') }),
-      el('div', { class: 'dv-spacer' }),
-      iconButton('close', t('close'), close),
-    ]),
-    summaryEl,
-    body,
-  ]);
-
-  backdrop.append(modal);
-  backdrop.addEventListener('mousedown', (e) => {
-    if (e.target === backdrop) close();
-  });
-  document.body.append(backdrop);
-
-  overlayStack.push({
+  openAccessibleModal({
     id: 'docDiffModal',
-    isOpen: () => backdrop.isConnected,
-    close,
+    title: t('diffTitle'),
+    width: 'min(780px, 92vw)',
+    body: bodyNodes,
   });
 }

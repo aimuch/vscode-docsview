@@ -218,6 +218,7 @@ export class Outline {
   private nodes: Node[] = [];
   private byKey = new Map<string, Node>();
   private activeKey: string | undefined;
+  private draggingKey: string | undefined;
 
   constructor(
     private readonly onSelect: (key: string) => void,
@@ -225,7 +226,7 @@ export class Outline {
       emptyText?: string;
       countText?: (n: number) => string;
       showFilter?: boolean;
-      onReorder?: (fromKey: string, toKey: string) => void;
+      onReorder?: (fromKey: string, toKey: string, position: 'before' | 'after') => void;
     } = {},
   ) {
     this.count = el('span', { class: 'dv-ol-count' });
@@ -250,7 +251,10 @@ export class Outline {
     search.innerHTML = icons.search;
     search.append(this.filter);
     this.list = el('div', { class: 'dv-ol-list' });
-    const head = el('div', { class: 'dv-ol-head' }, [this.count]);
+    const head = el('div', { class: 'dv-ol-head' }, [
+      this.count,
+      ...(opts.onReorder ? [el('span', { class: 'dv-st-muted', text: t('mdReorderHint'), title: t('mdReorderHint') })] : []),
+    ]);
     this.node = el('div', { class: 'dv-ol' }, opts.showFilter === false ? [head, this.list] : [head, search, this.list]);
   }
 
@@ -292,27 +296,38 @@ export class Outline {
       row.append(link);
       if (this.opts.onReorder) {
         row.draggable = true;
+        row.style.cursor = 'grab';
         row.dataset.olKey = node.item.key;
         row.addEventListener('dragstart', (e) => {
+          this.draggingKey = node.item.key;
           e.dataTransfer?.setData('text/plain', node.item.key);
           row.style.opacity = '0.5';
         });
         row.addEventListener('dragend', () => {
+          this.draggingKey = undefined;
           row.style.opacity = '';
-          this.list.querySelectorAll('.dv-ol-drop').forEach((n) => n.classList.remove('dv-ol-drop'));
+          this.list.querySelectorAll('.dv-drop-before, .dv-drop-after').forEach((n) =>
+            n.classList.remove('dv-drop-before', 'dv-drop-after'),
+          );
         });
         row.addEventListener('dragover', (e) => {
+          if (!this.draggingKey || this.draggingKey === node.item.key) return;
           e.preventDefault();
-          row.classList.add('dv-ol-drop');
+          const rect = row.getBoundingClientRect();
+          const before = e.clientY < rect.top + rect.height / 2;
+          row.classList.toggle('dv-drop-before', before);
+          row.classList.toggle('dv-drop-after', !before);
         });
-        row.addEventListener('dragleave', () => row.classList.remove('dv-ol-drop'));
+        row.addEventListener('dragleave', () => row.classList.remove('dv-drop-before', 'dv-drop-after'));
         row.addEventListener('drop', (e) => {
+          if (!this.draggingKey || this.draggingKey === node.item.key) return;
           e.preventDefault();
-          row.classList.remove('dv-ol-drop');
-          const fromKey = e.dataTransfer?.getData('text/plain');
-          if (fromKey && fromKey !== node.item.key) {
-            this.opts.onReorder?.(fromKey, node.item.key);
-          }
+          const rect = row.getBoundingClientRect();
+          const pos = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+          row.classList.remove('dv-drop-before', 'dv-drop-after');
+          const fromKey = this.draggingKey;
+          this.draggingKey = undefined;
+          this.opts.onReorder?.(fromKey, node.item.key, pos);
         });
       }
       node.row = row;

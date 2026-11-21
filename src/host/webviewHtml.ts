@@ -71,7 +71,7 @@ export function readAppearance(): Appearance {
     loupePosition: pick(SETTING_KEYS.loupePosition, LOUPE_POSITIONS),
     sidebarPosition: pick(SETTING_KEYS.sidebarPosition, SIDEBAR_POSITIONS),
     mdFontSize: clampNum(SETTING_KEYS.mdFontSize, 15, 12, 24),
-    mdLineHeight: clampNum(SETTING_KEYS.mdLineHeight, 1.7, 1.3, 2.2),
+    mdLineHeight: clampNum(SETTING_KEYS.mdLineHeight, 1.65, 1.2, 2.2),
   };
 }
 
@@ -402,6 +402,8 @@ export function watchViews(): vscode.Disposable[] {
         !e.affectsConfiguration('docsview.table.lockEditing') &&
         !e.affectsConfiguration('docsview.markdown.contentWidth') &&
         !e.affectsConfiguration('docsview.markdown.splitPosition') &&
+        !e.affectsConfiguration('docsview.markdown.fontSize') &&
+        !e.affectsConfiguration('docsview.markdown.lineHeight') &&
         !e.affectsConfiguration('docsview.showNotices') &&
         !e.affectsConfiguration('docsview.image.loupePosition') &&
         !e.affectsConfiguration('docsview.sidebarPosition')
@@ -571,14 +573,35 @@ export function handleCommonMessage(
         })
         .then(async (target) => {
           if (!target) return;
-          const clean =
-            message.bytes.constructor === Uint8Array ? message.bytes : new Uint8Array(message.bytes);
+          const clean = toSafeUint8Array(message.bytes);
           await vscode.workspace.fs.writeFile(target, clean);
           void vscode.window.showInformationMessage(t('exportSaved', target.fsPath));
         });
       break;
     }
   }
+}
+
+export function toSafeUint8Array(raw: unknown): Uint8Array {
+  if (raw instanceof Uint8Array) {
+    return raw.constructor === Uint8Array ? raw : new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+  }
+  if (ArrayBuffer.isView(raw)) {
+    return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+  }
+  if (Array.isArray(raw)) {
+    return Uint8Array.from(raw);
+  }
+  if (raw && typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    const len = typeof obj.length === 'number' ? obj.length : Object.keys(obj).length;
+    const out = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      out[i] = Number(obj[String(i)] ?? 0) & 0xff;
+    }
+    return out;
+  }
+  return new Uint8Array(0);
 }
 
 export function debounce<A extends unknown[]>(fn: (...args: A) => void, ms: number): (...args: A) => void {

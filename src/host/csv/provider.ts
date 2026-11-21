@@ -147,7 +147,7 @@ export class CsvEditorProvider implements vscode.CustomTextEditorProvider {
             break;
           case 'compareDocument': {
             sync();
-            const delim = setting === 'auto' ? (name.toLowerCase().endsWith('.tsv') ? '\t' : ',') : setting;
+            const delim = session.currentDelimiter;
             void compareDelimitedDocument(document.uri, 'csv', document.getText(), delim, message.fromHistory)
               .then((report) => {
                 if (report) post({ type: 'diffReport', report });

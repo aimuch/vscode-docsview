@@ -68,8 +68,18 @@ function isLocalEndpoint(endpoint: string | null): boolean {
   if (!endpoint) {
     return false;
   }
-  const host = endpoint.split(':')[0].toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  const lower = endpoint.trim().toLowerCase();
+  if (lower.startsWith('[::1]')) {
+    return true;
+  }
+  try {
+    const parsed = new URL(lower.includes('://') ? lower : `http://${lower}`);
+    const h = parsed.hostname;
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+  } catch {
+    const host = lower.split(':')[0];
+    return host === 'localhost' || host === '127.0.0.1';
+  }
 }
 
 async function ensureTargetConsent(target: LanguageModelTarget, fileName: string): Promise<boolean> {
@@ -169,94 +179,97 @@ export function handleAiWebviewMessage(webview: vscode.Webview, uri: vscode.Uri,
       activeStreams.set(webview, entry);
 
       void (async () => {
-        let resolved = await resolveAvailableModels();
-        if (resolved.needsApiKey && !cts.token.isCancellationRequested) {
-          const saved = await setAiApiKey();
-          if (saved) {
-            await postAiSettingsToWebview(webview, false);
-            resolved = await resolveAvailableModels();
-          }
-        }
-        if (cts.token.isCancellationRequested) {
-          return;
-        }
-        if (resolved.error || resolved.models.length === 0) {
-          void webview.postMessage({
-            type: 'aiStream',
-            requestId,
-            text: '',
-            done: true,
-            error: resolved.error ?? t('aiUnavailable'),
-          } satisfies HostMessage);
-          return;
-        }
-
-        const target = resolved.models[0];
-        const fileName = context.fileName || uri.path.slice(uri.path.lastIndexOf('/') + 1);
-        const allowed = await ensureTargetConsent(target, fileName);
-        if (!allowed || cts.token.isCancellationRequested) {
-          void webview.postMessage({
-            type: 'aiStream',
-            requestId,
-            text: '',
-            model: target.name,
-            done: true,
-          } satisfies HostMessage);
-          return;
-        }
-
-        const prompt = buildAiPrompt({ ...context, fileName }, lang());
-        let accumulated = '';
-        let flushTimer: ReturnType<typeof setTimeout> | null = null;
-
-        const flush = (done: boolean, error?: string) => {
-          if (flushTimer !== null) {
-            clearTimeout(flushTimer);
-            flushTimer = null;
-          }
-          void webview.postMessage({
-            type: 'aiStream',
-            requestId,
-            text: accumulated,
-            model: `${target.vendor} · ${target.name}`,
-            done,
-            error,
-          } satisfies HostMessage);
-        };
-
-        const err = await runAiTarget(
-          target,
-          prompt,
-          (delta) => {
-            accumulated += delta;
-            if (flushTimer === null) {
-              flushTimer = setTimeout(() => {
-                flushTimer = null;
-                if (!cts.token.isCancellationRequested) {
-                  void webview.postMessage({
-                    type: 'aiStream',
-                    requestId,
-                    text: accumulated,
-                    model: `${target.vendor} · ${target.name}`,
-                    done: false,
-                  } satisfies HostMessage);
-                }
-              }, STREAM_THROTTLE_MS);
+        try {
+          let resolved = await resolveAvailableModels();
+          if (resolved.needsApiKey && !cts.token.isCancellationRequested) {
+            const saved = await setAiApiKey();
+            if (saved) {
+              await postAiSettingsToWebview(webview, false);
+              resolved = await resolveAvailableModels();
             }
-          },
-          cts.token,
-          { history: context.history, imageDataUrl: context.imageDataUrl },
-        );
+          }
+          if (cts.token.isCancellationRequested) {
+            return;
+          }
+          if (resolved.error || resolved.models.length === 0) {
+            void webview.postMessage({
+              type: 'aiStream',
+              requestId,
+              text: '',
+              done: true,
+              error: resolved.error ?? t('aiUnavailable'),
+            } satisfies HostMessage);
+            return;
+          }
 
-        if (activeStreams.get(webview) === entry) {
-          activeStreams.delete(webview);
+          const target = resolved.models[0];
+          const fileName = context.fileName || uri.path.slice(uri.path.lastIndexOf('/') + 1);
+          const allowed = await ensureTargetConsent(target, fileName);
+          if (!allowed || cts.token.isCancellationRequested) {
+            void webview.postMessage({
+              type: 'aiStream',
+              requestId,
+              text: '',
+              model: target.name,
+              done: true,
+            } satisfies HostMessage);
+            return;
+          }
+
+          const prompt = buildAiPrompt({ ...context, fileName }, lang());
+          let accumulated = '';
+          let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+          const flush = (done: boolean, error?: string) => {
+            if (flushTimer !== null) {
+              clearTimeout(flushTimer);
+              flushTimer = null;
+            }
+            void webview.postMessage({
+              type: 'aiStream',
+              requestId,
+              text: accumulated,
+              model: `${target.vendor} · ${target.name}`,
+              done,
+              error,
+            } satisfies HostMessage);
+          };
+
+          const err = await runAiTarget(
+            target,
+            prompt,
+            (delta) => {
+              accumulated += delta;
+              if (flushTimer === null) {
+                flushTimer = setTimeout(() => {
+                  flushTimer = null;
+                  if (!cts.token.isCancellationRequested) {
+                    void webview.postMessage({
+                      type: 'aiStream',
+                      requestId,
+                      text: accumulated,
+                      model: `${target.vendor} · ${target.name}`,
+                      done: false,
+                    } satisfies HostMessage);
+                  }
+                }, STREAM_THROTTLE_MS);
+              }
+            },
+            cts.token,
+            { history: context.history, imageDataUrl: context.imageDataUrl },
+          );
+
+          if (!cts.token.isCancellationRequested) {
+            flush(true, err ?? undefined);
+          } else {
+            flush(true);
+          }
+        } finally {
+          if (activeStreams.get(webview) === entry) {
+            activeStreams.delete(webview);
+          }
+          cts.dispose();
         }
-        if (!cts.token.isCancellationRequested) {
-          flush(true, err ?? undefined);
-        } else {
-          flush(true);
-        }
-        cts.dispose();
       })();
       return true;
     }

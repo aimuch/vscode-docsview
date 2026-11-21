@@ -270,16 +270,31 @@ export class OfficeSession {
   }
 
   backup(): string {
+    const toB64 = (u: Uint8Array) =>
+      Buffer.from(u.buffer, u.byteOffset, u.byteLength).toString('base64');
     const serialized = this.history.slice(0, this.cursor).map((s) => {
       if (s.mutation.kind === 'appendPdfBytes') {
         return {
           kind: 'appendPdfBytes',
           label: s.mutation.label,
-          otherBytesB64: Buffer.from(
-            s.mutation.otherBytes.buffer,
-            s.mutation.otherBytes.byteOffset,
-            s.mutation.otherBytes.byteLength,
-          ).toString('base64'),
+          otherBytesB64: toB64(s.mutation.otherBytes),
+        };
+      }
+      if (s.mutation.kind === 'addPdfImageStamp') {
+        return {
+          kind: 'addPdfImageStamp',
+          page: s.mutation.page,
+          rect: s.mutation.rect,
+          label: s.mutation.label,
+          pngBytesB64: toB64(s.mutation.pngBytes),
+        };
+      }
+      if (s.mutation.kind === 'addPdfWatermark') {
+        return {
+          kind: 'addPdfWatermark',
+          pageNumbers: s.mutation.pageNumbers,
+          label: s.mutation.label,
+          watermarkPngBytesB64: s.mutation.watermarkPngBytes ? toB64(s.mutation.watermarkPngBytes) : undefined,
         };
       }
       return s.mutation;
@@ -297,14 +312,33 @@ export class OfficeSession {
     if (!Array.isArray(items)) {
       return;
     }
+    const fromB64 = (b64: string) => {
+      const buf = Buffer.from(b64, 'base64');
+      return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    };
     for (const item of items) {
       if (item && typeof item === 'object' && 'kind' in item) {
         const rec = item as Record<string, unknown>;
         if (rec.kind === 'appendPdfBytes' && typeof rec.otherBytesB64 === 'string') {
-          const buf = Buffer.from(rec.otherBytesB64, 'base64');
           await this.apply({
             kind: 'appendPdfBytes',
-            otherBytes: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength),
+            otherBytes: fromB64(rec.otherBytesB64),
+            label: typeof rec.label === 'string' ? rec.label : undefined,
+          });
+        } else if (rec.kind === 'addPdfImageStamp' && typeof rec.pngBytesB64 === 'string') {
+          await this.apply({
+            kind: 'addPdfImageStamp',
+            page: Number(rec.page) || 1,
+            rect: rec.rect as { x: number; y: number; w: number; h: number },
+            pngBytes: fromB64(rec.pngBytesB64),
+            label: typeof rec.label === 'string' ? rec.label : undefined,
+          });
+        } else if (rec.kind === 'addPdfWatermark') {
+          await this.apply({
+            kind: 'addPdfWatermark',
+            watermarkPngBytes:
+              typeof rec.watermarkPngBytesB64 === 'string' ? fromB64(rec.watermarkPngBytesB64) : undefined,
+            pageNumbers: typeof rec.pageNumbers === 'boolean' ? rec.pageNumbers : undefined,
             label: typeof rec.label === 'string' ? rec.label : undefined,
           });
         } else {

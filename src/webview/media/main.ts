@@ -1,13 +1,16 @@
 // Audio & Video Media Player webview: speed control, loop, Web Audio spectrum visualiser,
-// keyboard shortcuts, timestamped bookmarks, and video frame capture to Image Inspector.
+// keyboard shortcuts, editable timestamped bookmarks, CORS-safe playback fallback,
+// and video frame capture to Image Inspector.
 import '../shared/base.css';
 import './media.css';
 import { app, el, onMessage, post, showStatus, t } from '../shared/api';
 import { getFileState } from '../shared/fileState';
+import { overlayStack } from '../shared/overlayStack';
 import { readState, writeState } from '../shared/sidebar';
 import { customToolbar, iconButton, noticeBanner, openExternalButton, openExternalMenuItem, toggleButton } from '../shared/ui';
 
 interface MediaBookmark {
+  id: number;
   time: number;
   label: string;
 }
@@ -15,14 +18,23 @@ interface MediaBookmark {
 let mediaEl: HTMLMediaElement | undefined;
 let mediaKind: 'audio' | 'video' = 'audio';
 let fileName = 'Media';
+let nextBookmarkId = 1;
 let bookmarks: MediaBookmark[] = Array.isArray(readState().mediaBookmarks)
-  ? (readState().mediaBookmarks as MediaBookmark[])
+  ? (readState().mediaBookmarks as { id?: number; time: number; label: string }[]).map((b) => ({
+      id: b.id ?? nextBookmarkId++,
+      time: b.time,
+      label: b.label,
+    }))
   : [];
+for (const bm of bookmarks) {
+  if (bm.id >= nextBookmarkId) nextBookmarkId = bm.id + 1;
+}
 
 const notice = noticeBanner();
 const stage = el('div', { class: 'media-stage' });
 const playerWrap = el('div', { class: 'media-player-wrap' });
 const bookmarkPanel = el('aside', { class: 'media-bookmarks' });
+const bmTitleEl = el('span', { class: 'media-bm-title' });
 const bookmarkList = el('div', { class: 'media-bm-list' });
 const metaLabel = el('span', { class: 'dv-label' });
 const statusBar = el('div', { class: 'dv-statusbar' }, [el('div', { class: 'dv-spacer' }), metaLabel]);
@@ -44,12 +56,16 @@ function fmtSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+const exportBmBtn = iconButton('export', t('mediaExportBookmarks'), exportBookmarksMarkdown);
+
 function saveBookmarks() {
   writeState({ mediaBookmarks: bookmarks });
   renderBookmarks();
 }
 
 function renderBookmarks() {
+  bmTitleEl.textContent = t('mediaBookmarks', bookmarks.length);
+  exportBmBtn.disabled = bookmarks.length === 0;
   if (!bookmarks.length) {
     bookmarkList.replaceChildren(el('div', { class: 'media-bm-empty', text: t('mediaNoBookmarks') }));
     return;
@@ -57,19 +73,51 @@ function renderBookmarks() {
   const sorted = [...bookmarks].sort((a, b) => a.time - b.time);
   bookmarkList.replaceChildren(
     ...sorted.map((bm) => {
-      const jumpBtn = el('button', { class: 'media-bm-jump', text: `${fmtTime(bm.time)}  ${bm.label}` });
+      const jumpBtn = el('button', { class: 'media-bm-jump', text: `${fmtTime(bm.time)}  ${bm.label}`, title: bm.label });
       jumpBtn.type = 'button';
       jumpBtn.addEventListener('click', () => {
         if (mediaEl) {
+          // Preserve paused state when seeking so users can inspect frames cleanly
           mediaEl.currentTime = bm.time;
-          void mediaEl.play().catch(() => undefined);
         }
       });
+      const startEdit = () => {
+        const input = el('input', { class: 'dv-input' }) as HTMLInputElement;
+        input.value = bm.label;
+        input.placeholder = t('mediaBookmarkPlaceholder', fmtTime(bm.time));
+        input.style.flex = '1';
+        const commit = () => {
+          const next = input.value.trim();
+          if (next) {
+            bm.label = next;
+          }
+          saveBookmarks();
+        };
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            renderBookmarks();
+          }
+        });
+        row.replaceChildren(input);
+        input.focus();
+        input.select();
+      };
+      jumpBtn.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        startEdit();
+      });
+      const editBtn = iconButton('pencil', t('renameSheet'), startEdit);
       const delBtn = iconButton('close', t('deleteComment'), () => {
-        bookmarks = bookmarks.filter((item) => item !== bm);
+        bookmarks = bookmarks.filter((item) => item.id !== bm.id);
         saveBookmarks();
       });
-      return el('div', { class: 'media-bm-item' }, [jumpBtn, delBtn]);
+      const row = el('div', { class: 'media-bm-item' }, [jumpBtn, editBtn, delBtn]);
+      return row;
     }),
   );
 }
@@ -77,7 +125,8 @@ function renderBookmarks() {
 function addBookmark() {
   if (!mediaEl) return;
   const time = mediaEl.currentTime || 0;
-  bookmarks.push({ time, label: `Note #${bookmarks.length + 1}` });
+  const id = nextBookmarkId++;
+  bookmarks.push({ id, time, label: `Note #${id}` });
   saveBookmarks();
   notice.flash(`${t('mediaAddBookmark')}: ${fmtTime(time)}`, 1800);
 }
@@ -102,22 +151,26 @@ function captureVideoFrame() {
   canvas.width = mediaEl.videoWidth;
   canvas.height = mediaEl.videoHeight;
   const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(mediaEl, 0, 0, canvas.width, canvas.height);
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-    void blob.arrayBuffer().then((ab) => {
-      const stem = fileName.replace(/\.[^.]+$/, '');
-      const stamp = fmtTime(mediaEl?.currentTime || 0).replace(/:/g, '-');
-      post({
-        type: 'openCapturedImage',
-        suffix: `${stem}-${stamp}`,
-        bytes: new Uint8Array(ab),
+  try {
+    ctx.drawImage(mediaEl, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      void blob.arrayBuffer().then((ab) => {
+        const stem = fileName.replace(/\.[^.]+$/, '');
+        const stamp = fmtTime(mediaEl?.currentTime || 0).replace(/:/g, '-');
+        post({
+          type: 'openCapturedImage',
+          suffix: `${stem}-${stamp}`,
+          bytes: new Uint8Array(ab),
+        });
       });
-    });
-  }, 'image/png');
+    }, 'image/png');
+  } catch (err) {
+    notice.flash(t('loadFailed', err instanceof Error ? err.message : String(err)), 3500);
+  }
 }
 
-const speedSelect = el('select', { class: 'dv-input media-speed', title: t('mediaSpeed') }, [
+const speedSelect = el('select', { class: 'dv-select media-speed', title: t('mediaSpeed') }, [
   ...['0.5', '0.75', '1', '1.25', '1.5', '2'].map((v) => {
     const opt = el('option', { text: `${v}×` }) as HTMLOptionElement;
     opt.value = v;
@@ -131,14 +184,13 @@ speedSelect.addEventListener('change', () => {
   }
 });
 
-const loopToggle = toggleButton('rotateCW', t('mediaLoop'), (on) => {
+const loopToggle = toggleButton('repeat', t('mediaLoop'), (on) => {
   if (mediaEl) mediaEl.loop = on;
 });
 
 const bookmarkBtn = iconButton('bookmark', t('mediaAddBookmark'), addBookmark);
 const captureBtn = iconButton('camera', t('mediaCaptureFrame'), captureVideoFrame);
 captureBtn.hidden = true;
-const exportBmBtn = iconButton('export', t('exportMarkdown'), exportBookmarksMarkdown);
 
 const topBar = customToolbar({
   subtitle: () => (getFileState().ext ? getFileState().ext.toUpperCase() : 'MEDIA'),
@@ -157,14 +209,21 @@ const topBar = customToolbar({
       visible: () => mediaKind === 'video',
       onClick: captureVideoFrame,
     },
-    { id: 'exportMd', slotId: 'actions', label: t('exportMarkdown'), icon: 'export', onClick: exportBookmarksMarkdown },
+    {
+      id: 'exportMd',
+      slotId: 'actions',
+      label: t('mediaExportBookmarks'),
+      icon: 'export',
+      visible: () => bookmarks.length > 0,
+      onClick: exportBookmarksMarkdown,
+    },
     openExternalMenuItem(),
   ],
 });
 
 bookmarkPanel.append(
   el('div', { class: 'media-bm-head' }, [
-    el('span', { class: 'media-bm-title', text: t('mediaBookmarks') }),
+    bmTitleEl,
     iconButton('plus', t('mediaAddBookmark'), addBookmark),
   ]),
   bookmarkList,
@@ -176,12 +235,13 @@ app.append(topBar.node, notice.node, stage, statusBar);
 showStatus(playerWrap, t('loading'));
 
 let rafId = 0;
-function startAudioVisualizer(audio: HTMLAudioElement, canvas: HTMLCanvasElement) {
+function startAudioVisualizer(audio: HTMLAudioElement, canvas: HTMLCanvasElement, canUseWebAudio: () => boolean) {
   let ctxAudio: AudioContext | undefined;
   let analyser: AnalyserNode | undefined;
   const ctx2d = canvas.getContext('2d')!;
 
   const ensureGraph = () => {
+    if (!canUseWebAudio()) return;
     if (ctxAudio) {
       if (ctxAudio.state === 'suspended') void ctxAudio.resume();
       return;
@@ -217,7 +277,7 @@ function startAudioVisualizer(audio: HTMLAudioElement, canvas: HTMLCanvasElement
 
   audio.addEventListener('play', () => {
     ensureGraph();
-    if (!rafId) draw();
+    if (!rafId && analyser) draw();
   });
   audio.addEventListener('pause', () => {
     if (rafId) {
@@ -228,9 +288,9 @@ function startAudioVisualizer(audio: HTMLAudioElement, canvas: HTMLCanvasElement
 }
 
 window.addEventListener('keydown', (e) => {
-  if (!mediaEl) return;
+  if (!mediaEl || e.ctrlKey || e.metaKey || e.altKey || overlayStack.hasOpen()) return;
   const tag = (e.target as HTMLElement | null)?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return;
   if (e.code === 'Space') {
     e.preventDefault();
     if (mediaEl.paused) void mediaEl.play().catch(() => undefined);
@@ -257,6 +317,24 @@ onMessage((message) => {
     fileName = message.name;
     mediaKind = message.mediaKind;
     captureBtn.hidden = mediaKind !== 'video';
+    let corsAllowed = true;
+
+    const attachFallbackError = (elMedia: HTMLMediaElement, onCorsDowngrade?: () => void) => {
+      elMedia.addEventListener('error', () => {
+        if (corsAllowed && elMedia.crossOrigin) {
+          // Some remote/local webview hosts omit CORS headers; retry cleanly without crossOrigin.
+          corsAllowed = false;
+          elMedia.removeAttribute('crossorigin');
+          elMedia.crossOrigin = null;
+          onCorsDowngrade?.();
+          elMedia.load();
+          return;
+        }
+        const msg = t('loadFailed', elMedia.error?.message || `Media error (${elMedia.error?.code ?? 'unsupported codec'})`);
+        showStatus(playerWrap, msg, true);
+        post({ type: 'status', ok: false, detail: msg });
+      });
+    };
 
     if (mediaKind === 'video') {
       const video = document.createElement('video');
@@ -264,6 +342,7 @@ onMessage((message) => {
       video.controls = true;
       video.preload = 'metadata';
       video.crossOrigin = 'anonymous';
+      attachFallbackError(video);
       video.src = message.src;
       video.addEventListener('loadedmetadata', () => {
         metaLabel.textContent = `${video.videoWidth}×${video.videoHeight} · ${fmtTime(video.duration)} · ${fmtSize(message.byteLength)}`;
@@ -281,12 +360,15 @@ onMessage((message) => {
       audio.controls = true;
       audio.preload = 'metadata';
       audio.crossOrigin = 'anonymous';
+      attachFallbackError(audio, () => {
+        canvas.hidden = true;
+      });
       audio.src = message.src;
       audio.addEventListener('loadedmetadata', () => {
         metaLabel.textContent = `${fmtTime(audio.duration)} · ${fmtSize(message.byteLength)}`;
         post({ type: 'status', ok: true, detail: fmtTime(audio.duration) });
       });
-      startAudioVisualizer(audio, canvas);
+      startAudioVisualizer(audio, canvas, () => corsAllowed);
       mediaEl = audio;
       playerWrap.replaceChildren(
         el('div', { class: 'media-audio-card' }, [

@@ -109,14 +109,24 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
               const fromStart = Math.max(0, Math.min(total, Math.floor(message.fromStart)));
               const fromEnd = Math.max(fromStart, Math.min(total, Math.floor(message.fromEnd)));
               const toLine = Math.max(0, Math.min(total, Math.floor(message.toLine)));
-              if (fromEnd <= fromStart || (toLine >= fromStart && toLine <= fromEnd)) {
+              if (fromEnd <= fromStart || (toLine >= fromStart && toLine < fromEnd)) {
                 return;
               }
               const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
               const lines = document.getText().split(/\r?\n/);
               const slice = lines.splice(fromStart, fromEnd - fromStart);
-              const insertAt = toLine > fromStart ? toLine - slice.length : toLine;
-              lines.splice(Math.max(0, Math.min(lines.length, insertAt)), 0, ...slice);
+              // Ensure moved section ends with a blank line separator when placed before another section
+              while (slice.length > 1 && slice[slice.length - 1] === '' && slice[slice.length - 2] === '') {
+                slice.pop();
+              }
+              const insertAt = Math.max(0, Math.min(lines.length, toLine > fromStart ? toLine - slice.length : toLine));
+              if (insertAt < lines.length && slice[slice.length - 1] !== '' && lines[insertAt] !== '') {
+                slice.push('');
+              }
+              if (insertAt > 0 && lines[insertAt - 1] !== '' && slice[0] !== '') {
+                slice.unshift('');
+              }
+              lines.splice(insertAt, 0, ...slice);
               const fullRange = new vscode.Range(
                 new vscode.Position(0, 0),
                 document.positionAt(document.getText().length),
@@ -215,6 +225,22 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
     expected: string,
   ): Promise<void> {
     const lineCount = document.lineCount;
+    const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
+    // Pure insertion (e.g. AI Assistant "Insert below"): start === end && expected === ''
+    if (end === start && expected === '' && start >= 0 && start <= lineCount && text !== '') {
+      const edit = new vscode.WorkspaceEdit();
+      const normalized = text.replace(/\r?\n/g, eol);
+      if (start >= lineCount) {
+        const lastIdx = Math.max(0, lineCount - 1);
+        const lastPos = new vscode.Position(lastIdx, document.lineAt(lastIdx).text.length);
+        const prefix = document.lineAt(lastIdx).text.length > 0 ? eol : '';
+        edit.insert(document.uri, lastPos, `${prefix}${normalized}`);
+      } else {
+        edit.insert(document.uri, new vscode.Position(start, 0), normalized);
+      }
+      await vscode.workspace.applyEdit(edit);
+      return;
+    }
     if (start < 0 || end <= start || start >= lineCount) {
       return;
     }
@@ -241,7 +267,6 @@ export class MarkdownPreviewProvider implements vscode.CustomTextEditorProvider 
       // Replace the lines' text only (not the line break after the last one). `text` carries the
       // block's own trailing blank lines, so the separation from the next block is kept.
       const range = new vscode.Range(start, 0, lastLine, document.lineAt(lastLine).text.length);
-      const eol = document.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
       edit.replace(document.uri, range, text.replace(/\r?\n/g, eol));
     }
     await vscode.workspace.applyEdit(edit);

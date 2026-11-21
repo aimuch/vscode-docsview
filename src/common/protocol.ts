@@ -81,8 +81,12 @@ export interface WorkbookInfo {
   supportsFormulas?: boolean;
   /** True when backed by `.jsonl` / `.ndjson` records (enables Record JSON Inspector & schema row semantics). */
   isJsonl?: boolean;
+  /** Whether the host supports `compareDocument` diffing (`true` by default; `false` for read-only DB views). */
+  canCompare?: boolean;
   /** Informational banner, as a string key so the webview can show it in the current UI language. */
   noticeKey?: StringKey;
+  /** Optional dynamic informational banner text (e.g. SQLite WAL or row truncation notice). */
+  noticeText?: string;
 }
 
 export interface CellChange {

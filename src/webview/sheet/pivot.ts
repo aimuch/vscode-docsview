@@ -1,8 +1,7 @@
 // Zero-dependency Group-By & Pivot Summary engine for CSV, Excel, JSONL, SQLite & Parquet.
 import type { Cell } from '../../common/protocol';
 import { el, t } from '../shared/api';
-import { overlayStack } from '../shared/overlayStack';
-import { iconButton } from '../shared/ui';
+import { openAccessibleModal } from '../shared/modal';
 import { numericValue } from './view';
 
 export type PivotAgg = 'count' | 'sum' | 'avg' | 'min' | 'max';
@@ -82,7 +81,6 @@ export function openPivotModal(
   let valCol = Math.min(headers.length - 1, groupCol === 0 && headers.length > 1 ? 1 : 0);
   let agg: PivotAgg = 'sum';
 
-  const backdrop = el('div', { class: 'dv-modal-backdrop' });
   const groupSelect = el('select', { class: 'dv-select' });
   const valSelect = el('select', { class: 'dv-select' });
   const aggSelect = el('select', { class: 'dv-select' });
@@ -124,14 +122,14 @@ export function openPivotModal(
 
     const trs = res.rows.slice(0, 500).map((r) =>
       el('tr', {}, [
-        el('td', { text: r.group }),
+        el('td', { text: r.group === '(Blanks)' ? t('blanksLabel') : r.group }),
         el('td', { text: String(r.count) }),
         el('td', { text: fmtVal(r.value) }),
       ]),
     );
     trs.push(
       el('tr', { class: 'sheet-pivot-total' }, [
-        el('td', { text: 'Total' }),
+        el('td', { text: t('statSum') }),
         el('td', { text: String(res.totalCount) }),
         el('td', { text: fmtVal(res.grandTotal) }),
       ]),
@@ -143,13 +141,22 @@ export function openPivotModal(
       ]),
       el('tbody', {}, trs),
     ]);
-    tableHost.replaceChildren(table);
+    const children: HTMLElement[] = [table];
+    if (res.rows.length > 500) {
+      children.push(
+        el('div', {
+          class: 'dv-st-muted',
+          text: `Showing top 500 of ${res.rows.length.toLocaleString()} groups.`,
+        }),
+      );
+    }
+    tableHost.replaceChildren(...children);
 
     lastMarkdown = [
       `| ${gHeader} | ${t('statCount')} | ${vHeader} |`,
       `| --- | ---: | ---: |`,
       ...res.rows.map((r) => `| ${r.group.replace(/\|/g, '\\|')} | ${r.count} | ${fmtVal(r.value)} |`),
-      `| **Total** | **${res.totalCount}** | **${fmtVal(res.grandTotal)}** |`,
+      `| **${t('statSum')}** | **${res.totalCount}** | **${fmtVal(res.grandTotal)}** |`,
     ].join('\n');
   };
 
@@ -166,12 +173,7 @@ export function openPivotModal(
     render();
   });
 
-  const close = () => {
-    overlayStack.remove('sheetPivotModal');
-    backdrop.remove();
-  };
-
-  const copyMdBtn = el('button', { class: 'dv-btn dv-cm-primary', text: t('sheetPivotCopyMd') });
+  const copyMdBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('sheetPivotCopyMd') });
   copyMdBtn.type = 'button';
   copyMdBtn.addEventListener('click', () => {
     void navigator.clipboard?.writeText(lastMarkdown);
@@ -185,27 +187,13 @@ export function openPivotModal(
     el('label', { class: 'sheet-pivot-field' }, [el('span', { text: t('sheetPivotAgg') }), aggSelect]),
   ]);
 
-  const modal = el('div', { class: 'dv-modal' }, [
-    el('div', { class: 'dv-modal-head' }, [
-      el('span', { class: 'dv-modal-title', text: t('sheetPivot') }),
-      el('div', { class: 'dv-spacer' }),
-      iconButton('close', t('close'), close),
-    ]),
-    controls,
-    el('div', { class: 'dv-modal-body' }, [tableHost]),
-    el('div', { class: 'dv-modal-footer' }, [copyMdBtn]),
-  ]);
-
-  backdrop.append(modal);
-  backdrop.addEventListener('mousedown', (e) => {
-    if (e.target === backdrop) close();
-  });
-  document.body.append(backdrop);
   render();
-
-  overlayStack.push({
+  openAccessibleModal({
     id: 'sheetPivotModal',
-    isOpen: () => backdrop.isConnected,
-    close,
+    title: t('sheetPivot'),
+    width: 'min(720px, 94vw)',
+    body: [controls, tableHost],
+    footer: [copyMdBtn],
+    initialFocus: groupSelect,
   });
 }

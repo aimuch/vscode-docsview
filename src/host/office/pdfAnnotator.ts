@@ -429,14 +429,19 @@ export async function applyPdfMutations(bytes: Uint8Array, mutations: readonly D
       if (!pngBytes.byteLength) continue;
       const img = await doc.embedPng(pngBytes);
       const box = page.getCropBox() ?? page.getMediaBox();
-      const rot = page.getRotation().angle || 0;
+      const rot = normAngle(page.getRotation().angle || 0);
       const [x1, y1, x2, y2] = visualRectToPdfRect(mut.rect, box, rot, 0.01);
-      page.drawImage(img, {
-        x: x1,
-        y: y1,
-        width: Math.max(4, x2 - x1),
-        height: Math.max(4, y2 - y1),
-      });
+      const dx = Math.max(4, x2 - x1);
+      const dy = Math.max(4, y2 - y1);
+      if (rot === 90) {
+        page.drawImage(img, { x: x2, y: y1, width: dy, height: dx, rotate: degrees(90) });
+      } else if (rot === 180) {
+        page.drawImage(img, { x: x2, y: y2, width: dx, height: dy, rotate: degrees(180) });
+      } else if (rot === 270) {
+        page.drawImage(img, { x: x1, y: y2, width: dy, height: dx, rotate: degrees(270) });
+      } else {
+        page.drawImage(img, { x: x1, y: y1, width: dx, height: dy });
+      }
     } else if (mut.kind === 'addPdfWatermark') {
       const pages = doc.getPages();
       if (!pages.length) continue;
@@ -447,28 +452,46 @@ export async function applyPdfMutations(bytes: Uint8Array, mutations: readonly D
       for (let i = 0; i < total; i++) {
         const page = pages[i];
         const box = page.getCropBox() ?? page.getMediaBox();
+        const rot = normAngle(page.getRotation().angle || 0);
+        const visW = rot === 90 || rot === 270 ? box.height : box.width;
+        const visH = rot === 90 || rot === 270 ? box.width : box.height;
         if (wmImg) {
-          const targetW = box.width * 0.68;
-          const targetH = (targetW * wmImg.height) / Math.max(1, wmImg.width);
-          page.drawImage(wmImg, {
-            x: box.x + (box.width - targetW) / 2,
-            y: box.y + (box.height - targetH) / 2,
-            width: targetW,
-            height: targetH,
-            opacity: 0.22,
-          });
+          const maxSpan = Math.min(visW, visH) * 0.68;
+          const aspect = wmImg.width / Math.max(1, wmImg.height);
+          const targetW = aspect >= 1 ? maxSpan : maxSpan * aspect;
+          const targetH = aspect >= 1 ? maxSpan / aspect : maxSpan;
+          const vx = (visW - targetW) / 2 / Math.max(1, visW);
+          const vy = (visH - targetH) / 2 / Math.max(1, visH);
+          const vw = targetW / Math.max(1, visW);
+          const vh = targetH / Math.max(1, visH);
+          const [x1, y1, x2, y2] = visualRectToPdfRect({ x: vx, y: vy, w: vw, h: vh }, box, rot, 0.01);
+          const dx = Math.max(4, x2 - x1);
+          const dy = Math.max(4, y2 - y1);
+          if (rot === 90) {
+            page.drawImage(wmImg, { x: x2, y: y1, width: dy, height: dx, rotate: degrees(90), opacity: 0.22 });
+          } else if (rot === 180) {
+            page.drawImage(wmImg, { x: x2, y: y2, width: dx, height: dy, rotate: degrees(180), opacity: 0.22 });
+          } else if (rot === 270) {
+            page.drawImage(wmImg, { x: x1, y: y2, width: dy, height: dx, rotate: degrees(270), opacity: 0.22 });
+          } else {
+            page.drawImage(wmImg, { x: x1, y: y1, width: dx, height: dy, opacity: 0.22 });
+          }
         }
         if (font && mut.pageNumbers) {
           const label = `${i + 1} / ${total}`;
           const size = 10;
           const tw = font.widthOfTextAtSize(label, size);
-          page.drawText(label, {
-            x: box.x + (box.width - tw) / 2,
-            y: box.y + 18,
-            size,
-            font,
-            color: rgb(0.35, 0.35, 0.35),
-          });
+          const margin = 18;
+          const opts = { size, font, color: rgb(0.35, 0.35, 0.35) };
+          if (rot === 90) {
+            page.drawText(label, { ...opts, x: box.x + box.width - margin, y: box.y + (box.height - tw) / 2, rotate: degrees(90) });
+          } else if (rot === 180) {
+            page.drawText(label, { ...opts, x: box.x + (box.width + tw) / 2, y: box.y + box.height - margin, rotate: degrees(180) });
+          } else if (rot === 270) {
+            page.drawText(label, { ...opts, x: box.x + margin, y: box.y + (box.height + tw) / 2, rotate: degrees(270) });
+          } else {
+            page.drawText(label, { ...opts, x: box.x + (box.width - tw) / 2, y: box.y + margin });
+          }
         }
       }
     }

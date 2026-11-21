@@ -61,7 +61,12 @@ class WebviewOverlayStack {
       this.entries.splice(i, 1);
       const focusTarget = restoreFocus ? entry.restoreFocus?.() : undefined;
       entry.close();
-      focusTarget?.focus?.();
+      // Only restore focus if the overlay actually closed (e.g. Esc canceling a stream keeps the card open).
+      if (!entry.isOpen()) {
+        focusTarget?.focus?.();
+      } else {
+        this.entries.push(entry);
+      }
       this.notify();
       return true;
     }

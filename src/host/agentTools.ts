@@ -77,6 +77,23 @@ export async function readDocumentMarkdown(
   const maxChars = Math.max(1_000, opts.maxChars ?? DEFAULT_MAX_CHARS);
   const ext = extOf(uri);
   const fileName = uri.path.slice(uri.path.lastIndexOf('/') + 1);
+
+  const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'ico', 'avif']);
+  const MEDIA_EXTS = new Set(['mp3', 'wav', 'ogg', 'm4a', 'flac', 'mp4', 'webm', 'mov', 'm4v']);
+  let fileSize = 0;
+  try {
+    const stat = await vscode.workspace.fs.stat(uri);
+    fileSize = stat.size;
+  } catch {
+    // Let readFile surface the real error if file doesn't exist
+  }
+  if (IMAGE_EXTS.has(ext) || MEDIA_EXTS.has(ext)) {
+    const kindLabel = IMAGE_EXTS.has(ext) ? 'Image' : 'Audio/Video Media';
+    return `# ${fileName}\n\n- Type: ${kindLabel} (.${ext})\n- Size: ${(fileSize / 1024).toFixed(1)} KB\n\n_(Binary media asset — open in DocsView to inspect or run Vision AI.)_`;
+  }
+  if (fileSize > 50 * 1024 * 1024) {
+    throw new Error(`File "${fileName}" (${Math.round(fileSize / (1024 * 1024))} MB) exceeds the 50 MB Markdown extraction limit.`);
+  }
   const bytes = await vscode.workspace.fs.readFile(uri);
 
   let out = '';
@@ -157,14 +174,17 @@ export async function readDocumentMarkdown(
     }
 
     case 'pdf': {
-      const { extractPdfText, inspectPdf } = await import('./office');
-      const [comments, pages] = await Promise.all([inspectPdf(bytes), extractPdfText(bytes)]);
-      const lines = [`# ${fileName}`, `- Pages: ${pages.length}`, `- Annotations / comments: ${comments.length}`];
+      const { extractPdfTextWithMeta, inspectPdf } = await import('./office');
+      const [comments, { pages, totalPages }] = await Promise.all([inspectPdf(bytes), extractPdfTextWithMeta(bytes)]);
+      const lines = [`# ${fileName}`, `- Pages: ${totalPages}`, `- Annotations / comments: ${comments.length}`];
       pages.forEach((txt, idx) => {
         if (txt) {
           lines.push(`\n## Page ${idx + 1}\n\n${txt}`);
         }
       });
+      if (totalPages > pages.length) {
+        lines.push(`\n_(Text extracted for first ${pages.length} of ${totalPages} pages.)_`);
+      }
       if (comments.length > 0) {
         lines.push('\n## Annotations');
         for (const c of comments) {

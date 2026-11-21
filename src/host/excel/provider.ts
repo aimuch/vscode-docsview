@@ -193,7 +193,16 @@ export class ExcelEditorProvider implements vscode.CustomEditorProvider<ExcelDoc
           }
           case 'compareDocument': {
             if (!session) break;
-            void compareExcelDocument(document.uri, session.export(), message.fromHistory)
+            const currentSheets = session.info.sheets.map((_, idx) => {
+              const m = session.sheet(idx)!;
+              return {
+                name: m.name,
+                rows: m.rows.map((row) =>
+                  row.map((c) => (c == null ? '' : typeof c === 'string' ? c : c.v)),
+                ),
+              };
+            });
+            void compareExcelDocument(document.uri, session.export(), message.fromHistory, currentSheets)
               .then((report) => {
                 if (report) post({ type: 'diffReport', report });
               })

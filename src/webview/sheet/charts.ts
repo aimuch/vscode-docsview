@@ -1,8 +1,8 @@
 // Zero-dependency interactive SVG Chart engine (Bar / Line / Pie / Scatter) for CSV, Excel & JSONL.
 import type { Cell } from '../../common/protocol';
 import { el, post, t } from '../shared/api';
-import { overlayStack } from '../shared/overlayStack';
-import { iconButton, segmented } from '../shared/ui';
+import { openAccessibleModal } from '../shared/modal';
+import { segmented } from '../shared/ui';
 import { numericValue } from './view';
 
 export type ChartKind = 'bar' | 'line' | 'pie' | 'scatter';
@@ -111,12 +111,16 @@ export function renderChartSvg(data: ChartDataset, kind: ChartKind, width = 660,
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" style="font-family:system-ui,-apple-system,sans-serif;font-size:11px">`,
   ];
 
-  // Legend
+  // Legend (CJK-aware width measurement so Chinese & multi-series labels don't overlap)
   let lx = padL;
   for (const s of data.series) {
+    const label = s.name.slice(0, 14);
+    let approxW = 24;
+    for (let i = 0; i < label.length; i++) approxW += label.charCodeAt(i) > 0x2e7f ? 12 : 7;
+    if (lx + approxW > width - padR) break;
     parts.push(`<rect x="${lx}" y="8" width="10" height="10" rx="2" fill="${s.color}"/>`);
-    parts.push(`<text x="${lx + 14}" y="17" fill="currentColor" opacity="0.85">${escXml(s.name.slice(0, 18))}</text>`);
-    lx += Math.min(130, 32 + s.name.length * 7);
+    parts.push(`<text x="${lx + 14}" y="17" fill="currentColor" opacity="0.85">${escXml(label)}</text>`);
+    lx += approxW + 10;
   }
 
   if (kind === 'pie') {
@@ -141,7 +145,7 @@ export function renderChartSvg(data: ChartDataset, kind: ChartKind, width = 660,
         parts.push(`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${color}"/>`);
       } else {
         parts.push(
-          `<path d="M ${cx} ${cy} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z" fill="${color}" stroke="#ffffff" stroke-width="1"><title>${escXml(data.labels[idx])}: ${val} (${(frac * 100).toFixed(1)}%)</title></path>`,
+          `<path d="M ${cx} ${cy} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r} ${r} 0 ${large} 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z" fill="${color}" stroke="var(--dv-surface, #ffffff)" stroke-width="1"><title>${escXml(data.labels[idx])}: ${val} (${(frac * 100).toFixed(1)}%)</title></path>`,
         );
       }
       angle = nextAngle;
@@ -268,8 +272,13 @@ export function openChartModal(
   let kind: ChartKind = 'bar';
   let currentSvg = '';
 
-  const backdrop = el('div', { class: 'dv-modal-backdrop' });
   const chartBox = el('div', { class: 'sheet-chart-canvas' });
+  const legendBox = el('div', { class: 'sheet-chart-legend' });
+  for (const s of dataset.series) {
+    const sw = el('span', { class: 'sheet-chart-swatch' });
+    sw.style.background = s.color;
+    legendBox.append(el('span', { class: 'sheet-chart-legend-item' }, [sw, el('span', { text: s.name })]));
+  }
 
   const render = () => {
     currentSvg = renderChartSvg(dataset, kind);
@@ -291,28 +300,31 @@ export function openChartModal(
     },
   );
 
-  const close = () => {
-    overlayStack.remove('sheetChartModal');
-    backdrop.remove();
-  };
+  let closeModal: () => void = () => undefined;
 
   const exportSvgBtn = el('button', { class: 'dv-btn', text: t('mdExportSvg') });
   exportSvgBtn.type = 'button';
   exportSvgBtn.addEventListener('click', () => {
-    post({ type: 'saveTextExport', ext: 'svg', suffix: '-chart', content: currentSvg.replace(/currentColor/g, '#1f2937') });
+    post({
+      type: 'saveTextExport',
+      ext: 'svg',
+      suffix: '-chart',
+      content: currentSvg.replace(/currentColor/g, '#1f2937').replace(/var\(--dv-surface,\s*#ffffff\)/g, '#ffffff'),
+    });
   });
 
   const exportPngBtn = el('button', { class: 'dv-btn', text: t('mdExportPng') });
   exportPngBtn.type = 'button';
   exportPngBtn.addEventListener('click', () => {
-    void svgToPngBytes(currentSvg).then(({ bytes }) => {
+    const clean = currentSvg.replace(/var\(--dv-surface,\s*#ffffff\)/g, '#ffffff');
+    void svgToPngBytes(clean).then(({ bytes }) => {
       post({ type: 'saveBytesExport', ext: 'png', suffix: '-chart', bytes });
     });
   });
 
   const footerBtns: HTMLElement[] = [exportSvgBtn, exportPngBtn];
   if (opts.onAiExplain) {
-    const aiBtn = el('button', { class: 'dv-btn dv-ai-primary-btn', text: `✨ ${t('sheetChartAiAnalyze')}` });
+    const aiBtn = el('button', { class: 'dv-btn dv-btn-primary', text: `✨ ${t('sheetChartAiAnalyze')}` });
     aiBtn.type = 'button';
     aiBtn.addEventListener('click', () => {
       const summary = [
@@ -320,40 +332,28 @@ export function openChartModal(
         `Labels (${dataset.labels.length}): ${dataset.labels.slice(0, 30).join(', ')}`,
         ...dataset.series.map((s) => `${s.name}: ${s.values.slice(0, 30).join(', ')}`),
       ].join('\n');
-      void svgToPngBytes(currentSvg)
+      const clean = currentSvg.replace(/var\(--dv-surface,\s*#ffffff\)/g, '#ffffff');
+      void svgToPngBytes(clean)
         .then(({ dataUrl }) => {
-          close();
+          closeModal();
           opts.onAiExplain?.(summary, dataUrl);
         })
         .catch(() => {
-          close();
+          closeModal();
           opts.onAiExplain?.(summary);
         });
     });
     footerBtns.push(aiBtn);
   }
 
-  const modal = el('div', { class: 'dv-modal' }, [
-    el('div', { class: 'dv-modal-head' }, [
-      el('span', { class: 'dv-modal-title', text: t('sheetChart') }),
-      kindSeg.node,
-      el('div', { class: 'dv-spacer' }),
-      iconButton('close', t('close'), close),
-    ]),
-    el('div', { class: 'dv-modal-body' }, [chartBox]),
-    el('div', { class: 'dv-modal-footer' }, footerBtns),
-  ]);
-
-  backdrop.append(modal);
-  backdrop.addEventListener('mousedown', (e) => {
-    if (e.target === backdrop) close();
-  });
-  document.body.append(backdrop);
   render();
-
-  overlayStack.push({
+  const handle = openAccessibleModal({
     id: 'sheetChartModal',
-    isOpen: () => backdrop.isConnected,
-    close,
+    title: t('sheetChart'),
+    width: 'min(740px, 94vw)',
+    headExtra: [kindSeg.node],
+    body: [chartBox, ...(dataset.series.length > 1 ? [legendBox] : [])],
+    footer: footerBtns,
   });
+  closeModal = handle.close;
 }

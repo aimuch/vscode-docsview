@@ -10,6 +10,7 @@ import { openDiffModal } from '../shared/diffModal';
 import { getFileState } from '../shared/fileState';
 import { createFindBar } from '../shared/find';
 import { icons } from '../shared/icons';
+import { openAccessibleModal } from '../shared/modal';
 import { bindLiveViewerStatus, overlayStack } from '../shared/overlayStack';
 import { readState, writeState } from '../shared/sidebar';
 import {
@@ -916,7 +917,13 @@ function openQuickChart() {
     return;
   }
   openChartModal(dataset, {
-    onAiExplain: (summary) => ai.open({ presetAction: 'explain', initialPrompt: summary, autoRun: true }),
+    onAiExplain: (summary, imageDataUrl) =>
+      ai.open({
+        presetAction: imageDataUrl ? 'visionChart' : 'explain',
+        initialPrompt: summary,
+        capturedOverride: { ...captureSheetAiContext(), imageDataUrl, badge: t('sheetChart') },
+        autoRun: true,
+      }),
   });
 }
 
@@ -931,6 +938,8 @@ function openQuickPivot() {
   }
   openPivotModal(model.rows, headers, fixed, grid?.selection.c0 ?? 0);
 }
+
+let pendingSplitChanges: { sheetIndex: number; changes: CellChange[] } | undefined;
 
 function runDeduplicate() {
   const model = models.get(active);
@@ -956,8 +965,16 @@ function runDeduplicate() {
     flash(t('sheetCleanDedupeDone', 0));
     return;
   }
-  for (const r of dups) {
-    post({ type: 'structure', index: active, op: 'deleteRows', at: r, count: 1 });
+  // Coalesce contiguous descending duplicate rows into minimal range deletes (fewer Undo steps & faster Excel recalc).
+  let i = 0;
+  while (i < dups.length) {
+    let end = dups[i];
+    let start = end;
+    while (i + 1 < dups.length && dups[i + 1] === start - 1) {
+      start = dups[++i];
+    }
+    post({ type: 'structure', index: active, op: 'deleteRows', at: start, count: end - start + 1 });
+    i++;
   }
   flash(t('sheetCleanDedupeDone', dups.length));
 }
@@ -973,17 +990,12 @@ function openSplitColumnModal() {
     flash(t('structureBlocked'));
     return;
   }
-  const backdrop = el('div', { class: 'dv-modal-backdrop' });
   const input = el('input', { class: 'dv-input' }) as HTMLInputElement;
   input.placeholder = ', / ; / | / -';
   input.value = ',';
-  const close = () => {
-    overlayStack.remove('sheetSplitModal');
-    backdrop.remove();
-  };
-  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('sheetCleanSplitCol') });
-  applyBtn.type = 'button';
-  applyBtn.addEventListener('click', () => {
+
+  let closeModal: () => void = () => undefined;
+  const submit = () => {
     const delim = input.value;
     if (!delim) return;
     const { extraCols, changes } = computeSplitColumn(
@@ -992,34 +1004,38 @@ function openSplitColumnModal() {
       sel.c0,
       delim,
     );
-    if (extraCols > 0) {
-      for (let i = 0; i < extraCols; i++) {
-        post({ type: 'structure', index: active, op: 'insertCol', at: sel.c0 + 1, count: 1 });
-      }
-      setTimeout(() => {
-        if (changes.length) edit(changes);
-      }, 150);
+    if (extraCols <= 0) {
+      flash(t('noMatch'));
+      closeModal();
+      return;
     }
-    close();
+    // Single atomic insertCol + deterministic application once host returns updated sheet model (no setTimeout race!)
+    pendingSplitChanges = { sheetIndex: active, changes };
+    post({ type: 'structure', index: active, op: 'insertCol', at: sel.c0 + 1, count: extraCols });
+    closeModal();
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submit();
+    }
   });
+
+  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('sheetCleanSplitCol') });
+  applyBtn.type = 'button';
+  applyBtn.addEventListener('click', submit);
+
   const hintEl = el('div', { class: 'dv-label', text: t('sheetCleanSplitPrompt') });
-  hintEl.style.marginBottom = '8px';
-  const modal = el('div', { class: 'dv-modal' }, [
-    el('div', { class: 'dv-modal-header' }, [
-      el('span', { class: 'dv-modal-title', text: `${t('sheetCleanSplitCol')} (${columnName(sel.c0)})` }),
-      iconButton('close', t('cancel'), close),
-    ]),
-    el('div', { class: 'dv-modal-body' }, [hintEl, input]),
-    el('div', { class: 'dv-modal-footer' }, [applyBtn]),
-  ]);
-  modal.style.width = 'min(380px,92vw)';
-  backdrop.append(modal);
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) close();
+  const handle = openAccessibleModal({
+    id: 'sheetSplitModal',
+    title: `${t('sheetCleanSplitCol')} (${columnName(sel.c0)})`,
+    width: 'min(380px, 92vw)',
+    body: [hintEl, input],
+    footer: [applyBtn],
+    initialFocus: input,
   });
-  document.body.append(backdrop);
-  overlayStack.push({ id: 'sheetSplitModal', isOpen: () => backdrop.isConnected, close });
-  input.focus();
+  closeModal = handle.close;
   input.select();
 }
 
@@ -1033,7 +1049,12 @@ function runTextClean(mode: TextCleanMode) {
   const changes = computeSelectionTextClean(
     (r, c) => {
       const srcR = toSource(r);
-      return srcR >= 0 ? cellText(model.rows[srcR]?.[c]) : '';
+      const cell = srcR >= 0 ? model.rows[srcR]?.[c] : undefined;
+      if (cell && typeof cell === 'object' && cell.ro) {
+        return '';
+      }
+      // Pass raw string so formula cells (`=...`) are preserved intact by computeSelectionTextClean
+      return cellRaw(cell);
     },
     sel.r0,
     sel.c0,
@@ -1041,17 +1062,20 @@ function runTextClean(mode: TextCleanMode) {
     sel.c1,
     mode,
   );
-  if (!changes.length) {
-    return;
+  if (changes.length) {
+    // edit() already maps displayed row indices through toSource() once — pass display coords directly!
+    edit(changes);
   }
-  const mapped: CellChange[] = [];
-  for (const ch of changes) {
-    const srcR = toSource(ch.r);
-    if (srcR >= 0) mapped.push({ r: srcR, c: ch.c, text: ch.text });
-  }
-  if (mapped.length) {
-    edit(mapped);
-  }
+}
+
+function activeCellStyle() {
+  const model = models.get(active);
+  const sel = grid?.selection;
+  if (!model || !sel) return undefined;
+  const srcR = toSource(sel.r0);
+  const cell = srcR >= 0 ? model.rows[srcR]?.[sel.c0] : undefined;
+  if (!cell || typeof cell !== 'object' || cell.s === undefined) return undefined;
+  return model.styles?.[cell.s];
 }
 
 function applyExcelFormat(patch: CellFormatPatch) {
@@ -1092,22 +1116,69 @@ const cleanDropdown = moreMenu(
   { compact: true },
 );
 const formatDropdown = moreMenu(
-  t('sheetFormatBg'),
+  t('sheetFormatNum'),
   [
-    { label: t('sheetFormatBold'), icon: 'bold', onClick: () => applyExcelFormat({ bold: true }) },
-    { label: t('sheetFormatItalic'), icon: 'italic', onClick: () => applyExcelFormat({ italic: true }) },
-    { label: `${t('sheetFormatBold')} / ${t('sheetFormatItalic')} ✕`, onClick: () => applyExcelFormat({ bold: false, italic: false }) },
+    {
+      label: t('sheetFormatBold'),
+      icon: 'bold',
+      checked: () => Boolean(activeCellStyle()?.bold),
+      onClick: () => applyExcelFormat({ bold: !activeCellStyle()?.bold }),
+    },
+    {
+      label: t('sheetFormatItalic'),
+      icon: 'italic',
+      checked: () => Boolean(activeCellStyle()?.italic),
+      onClick: () => applyExcelFormat({ italic: !activeCellStyle()?.italic }),
+    },
     '-',
-    { label: `${t('sheetFormatBg')}: Yellow`, onClick: () => applyExcelFormat({ bg: '#FEF08A' }) },
-    { label: `${t('sheetFormatBg')}: Green`, onClick: () => applyExcelFormat({ bg: '#BBF7D0' }) },
-    { label: `${t('sheetFormatBg')}: Blue`, onClick: () => applyExcelFormat({ bg: '#BFDBFE' }) },
-    { label: `${t('sheetFormatBg')}: Red`, onClick: () => applyExcelFormat({ bg: '#FECACA' }) },
+    {
+      label: 'Align: Left',
+      checked: () => activeCellStyle()?.align === 'left',
+      onClick: () => applyExcelFormat({ align: 'left' }),
+    },
+    {
+      label: 'Align: Center',
+      checked: () => activeCellStyle()?.align === 'center',
+      onClick: () => applyExcelFormat({ align: 'center' }),
+    },
+    {
+      label: 'Align: Right',
+      checked: () => activeCellStyle()?.align === 'right',
+      onClick: () => applyExcelFormat({ align: 'right' }),
+    },
+    '-',
+    {
+      label: `${t('sheetFormatBg')}: #FEF08A`,
+      checked: () => activeCellStyle()?.bg?.toUpperCase() === '#FEF08A',
+      onClick: () => applyExcelFormat({ bg: '#FEF08A' }),
+    },
+    {
+      label: `${t('sheetFormatBg')}: #BBF7D0`,
+      checked: () => activeCellStyle()?.bg?.toUpperCase() === '#BBF7D0',
+      onClick: () => applyExcelFormat({ bg: '#BBF7D0' }),
+    },
+    {
+      label: `${t('sheetFormatBg')}: #BFDBFE`,
+      checked: () => activeCellStyle()?.bg?.toUpperCase() === '#BFDBFE',
+      onClick: () => applyExcelFormat({ bg: '#BFDBFE' }),
+    },
+    {
+      label: `${t('sheetFormatBg')}: #FECACA`,
+      checked: () => activeCellStyle()?.bg?.toUpperCase() === '#FECACA',
+      onClick: () => applyExcelFormat({ bg: '#FECACA' }),
+    },
     { label: `${t('sheetFormatBg')} ✕`, onClick: () => applyExcelFormat({ bg: '' }) },
+    '-',
+    { label: 'Text: Red (#DC2626)', onClick: () => applyExcelFormat({ color: '#DC2626' }) },
+    { label: 'Text: Blue (#1D4ED8)', onClick: () => applyExcelFormat({ color: '#1D4ED8' }) },
+    { label: 'Text: Green (#15803D)', onClick: () => applyExcelFormat({ color: '#15803D' }) },
+    { label: 'Text Color ✕', onClick: () => applyExcelFormat({ color: '' }) },
     '-',
     { label: t('sheetFormatGeneral'), onClick: () => applyExcelFormat({ numFmt: 'General' }) },
     { label: t('sheetFormatComma'), onClick: () => applyExcelFormat({ numFmt: '#,##0.00' }) },
     { label: t('sheetFormatPercent'), onClick: () => applyExcelFormat({ numFmt: '0.0%' }) },
-    { label: t('sheetFormatCurrency'), onClick: () => applyExcelFormat({ numFmt: '$#,##0.00' }) },
+    { label: t('sheetFormatCurrency'), onClick: () => applyExcelFormat({ numFmt: '¥#,##0.00' }) },
+    { label: `${t('sheetFormatNum')}: $#,##0.00`, onClick: () => applyExcelFormat({ numFmt: '$#,##0.00' }) },
     { label: `${t('sheetFormatNum')}: yyyy-mm-dd`, onClick: () => applyExcelFormat({ numFmt: 'yyyy-mm-dd' }) },
   ],
   'palette',
@@ -1392,8 +1463,10 @@ const topBar = customToolbar({
     { id: 'ai', slotId: 'ai', label: t('aiAssistant'), icon: 'sparkle', onClick: () => ai.open() },
     { id: 'chart', label: t('sheetChart'), icon: 'chart', toolbarNode: chartBtn, onClick: openQuickChart },
     { id: 'pivot', label: t('sheetPivot'), icon: 'pivot', toolbarNode: pivotBtn, onClick: openQuickPivot },
-    { id: 'diffHistory', label: t('diffCompareHistory'), icon: 'history', visible: () => getFileState().history, onClick: () => post({ type: 'compareDocument', fromHistory: true }) },
-    { id: 'diffFile', label: t('diffCompareFile'), icon: 'history', onClick: () => post({ type: 'compareDocument', fromHistory: false }) },
+    { id: 'diffHistory', label: t('diffCompareHistory'), icon: 'history', visible: () => getFileState().history && info?.canCompare !== false, onClick: () => post({ type: 'compareDocument', fromHistory: true }) },
+    { id: 'diffFile', label: t('diffCompareFile'), icon: 'history', visible: () => info?.canCompare !== false, onClick: () => post({ type: 'compareDocument', fromHistory: false }) },
+    { id: 'cleanDedupe', label: t('sheetCleanDedupe'), icon: 'clean', visible: () => Boolean(info?.editable), onClick: runDeduplicate },
+    { id: 'cleanSplit', label: t('sheetCleanSplitCol'), icon: 'clean', visible: () => Boolean(info?.editable), onClick: openSplitColumnModal },
     openExternalMenuItem(),
     { id: 'copyMd', label: t('copyAsMarkdown'), icon: 'copyMd', onClick: copySelectionMarkdown },
     { id: 'copyJson', label: t('copyAsJson'), icon: 'copy', onClick: copySelectionJson },
@@ -1896,7 +1969,7 @@ function openGridContextMenu(x: number, y: number) {
 }
 
 function showNotice() {
-  notice.setInfo(info?.noticeKey ? t(info.noticeKey) : '');
+  notice.setInfo(info?.noticeText ?? (info?.noticeKey ? t(info.noticeKey) : ''));
 }
 
 function flash(message: string) {
@@ -2190,6 +2263,13 @@ onMessage((message) => {
       models.set(message.index, message.model);
       if (message.index === active) {
         show(active, known);
+      }
+      if (pendingSplitChanges && pendingSplitChanges.sheetIndex === message.index) {
+        const queued = pendingSplitChanges;
+        pendingSplitChanges = undefined;
+        if (queued.changes.length) {
+          post({ type: 'edit', index: queued.sheetIndex, changes: queued.changes });
+        }
       }
       break;
     }

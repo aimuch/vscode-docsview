@@ -817,66 +817,124 @@ function hexToArgb(hex: string): string | undefined {
   return undefined;
 }
 
-function appendFormatXf(files: Record<string, Uint8Array>, patch: CellFormatPatch): number | undefined {
-  const stylesBytes = files['xl/styles.xml'];
-  if (!stylesBytes) {
-    return undefined;
+const STYLE_SECTION_ORDER = ['numFmts', 'fonts', 'fills', 'borders', 'cellStyleXfs', 'cellXfs'];
+
+function ensureStyleSection(doc: XDocument, root: XElement, tag: string): XElement {
+  const existing = elements(root, tag)[0];
+  if (existing) return existing;
+  const ns = root.namespaceURI;
+  const el = ns ? doc.createElementNS(ns, tag) : doc.createElement(tag);
+  const myIdx = STYLE_SECTION_ORDER.indexOf(tag);
+  const afterTags = myIdx >= 0 ? new Set(STYLE_SECTION_ORDER.slice(myIdx + 1)) : new Set<string>();
+  let insertBeforeNode: XElement | null = null;
+  for (let n = root.firstChild; n; n = n.nextSibling) {
+    if (n.nodeType === 1 && afterTags.has((n as XElement).localName ?? (n as XElement).tagName)) {
+      insertBeforeNode = n as XElement;
+      break;
+    }
   }
-  const doc = createXmlParser().parseFromString(strFromU8(stylesBytes), XML);
-  const root = doc.documentElement;
-  if (!root) return undefined;
+  if (insertBeforeNode) {
+    root.insertBefore(el, insertBeforeNode);
+  } else {
+    root.appendChild(el);
+  }
+  return el;
+}
+
+function findStylesEntry(files: Record<string, Uint8Array>): string {
+  for (const key of Object.keys(files)) {
+    if (key.toLowerCase() === 'xl/styles.xml') return key;
+  }
+  files['xl/styles.xml'] = strToU8(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>' +
+      '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>' +
+      '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+      '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>' +
+      '</styleSheet>',
+  );
+  return 'xl/styles.xml';
+}
+
+function deriveStyleIndex(
+  doc: XDocument,
+  root: XElement,
+  baseIdx: number,
+  patch: CellFormatPatch,
+): number {
   const ns = root.namespaceURI;
   const mk = (tag: string) => (ns ? doc.createElementNS(ns, tag) : doc.createElement(tag));
 
-  let cellXfs = elements(root, 'cellXfs')[0];
-  if (!cellXfs) {
-    cellXfs = mk('cellXfs');
-    root.appendChild(cellXfs);
-  }
+  const cellXfs = ensureStyleSection(doc, root, 'cellXfs');
   const xfs = elements(cellXfs, 'xf');
-  const xf = mk('xf');
-  xf.setAttribute('numFmtId', '0');
-  xf.setAttribute('fontId', '0');
-  xf.setAttribute('fillId', '0');
-  xf.setAttribute('borderId', '0');
-  xf.setAttribute('xfId', '0');
+  const baseXf = xfs[baseIdx] ?? xfs[0];
+  const xf = baseXf ? (baseXf.cloneNode(true) as XElement) : mk('xf');
+  if (!xf.getAttribute('numFmtId')) xf.setAttribute('numFmtId', '0');
+  if (!xf.getAttribute('fontId')) xf.setAttribute('fontId', '0');
+  if (!xf.getAttribute('fillId')) xf.setAttribute('fillId', '0');
+  if (!xf.getAttribute('borderId')) xf.setAttribute('borderId', '0');
+  if (!xf.getAttribute('xfId')) xf.setAttribute('xfId', '0');
 
-  if (patch.numFmt) {
-    let numFmts = elements(root, 'numFmts')[0];
-    if (!numFmts) {
-      numFmts = mk('numFmts');
-      root.insertBefore(numFmts, root.firstChild);
+  if (patch.numFmt !== undefined) {
+    if (!patch.numFmt || patch.numFmt === 'General') {
+      xf.setAttribute('numFmtId', '0');
+      xf.setAttribute('applyNumberFormat', '1');
+    } else {
+      const numFmts = ensureStyleSection(doc, root, 'numFmts');
+      const existing = elements(numFmts, 'numFmt');
+      const matched = existing.find((nf) => nf.getAttribute('formatCode') === patch.numFmt);
+      let fmtId: number;
+      if (matched) {
+        fmtId = Number(matched.getAttribute('numFmtId') ?? 164);
+      } else {
+        fmtId = 164;
+        for (const nf of existing) {
+          const id = Number(nf.getAttribute('numFmtId') ?? 0);
+          if (id >= fmtId) fmtId = id + 1;
+        }
+        const nfEl = mk('numFmt');
+        nfEl.setAttribute('numFmtId', String(fmtId));
+        nfEl.setAttribute('formatCode', patch.numFmt);
+        numFmts.appendChild(nfEl);
+        numFmts.setAttribute('count', String(existing.length + 1));
+      }
+      xf.setAttribute('numFmtId', String(fmtId));
+      xf.setAttribute('applyNumberFormat', '1');
     }
-    const existing = elements(numFmts, 'numFmt');
-    let maxId = 164;
-    for (const nf of existing) {
-      const id = Number(nf.getAttribute('numFmtId') ?? 0);
-      if (id >= maxId) maxId = id + 1;
-    }
-    const nfEl = mk('numFmt');
-    nfEl.setAttribute('numFmtId', String(maxId));
-    nfEl.setAttribute('formatCode', patch.numFmt);
-    numFmts.appendChild(nfEl);
-    numFmts.setAttribute('count', String(existing.length + 1));
-    xf.setAttribute('numFmtId', String(maxId));
-    xf.setAttribute('applyNumberFormat', '1');
   }
 
-  if (patch.bold !== undefined || patch.italic !== undefined || patch.color) {
-    let fonts = elements(root, 'fonts')[0];
-    if (!fonts) {
-      fonts = mk('fonts');
-      root.appendChild(fonts);
-    }
+  if (patch.bold !== undefined || patch.italic !== undefined || patch.color !== undefined) {
+    const fonts = ensureStyleSection(doc, root, 'fonts');
     const fontList = elements(fonts, 'font');
-    const fontEl = mk('font');
-    if (patch.bold) fontEl.appendChild(mk('b'));
-    if (patch.italic) fontEl.appendChild(mk('i'));
-    const argb = patch.color ? hexToArgb(patch.color) : undefined;
-    if (argb) {
-      const col = mk('color');
-      col.setAttribute('rgb', argb);
-      fontEl.appendChild(col);
+    const baseFontIdx = Number(xf.getAttribute('fontId') ?? 0);
+    const baseFont = fontList[baseFontIdx] ?? fontList[0];
+    const fontEl = baseFont ? (baseFont.cloneNode(true) as XElement) : mk('font');
+    if (!baseFont) {
+      const sz = mk('sz');
+      sz.setAttribute('val', '11');
+      const nm = mk('name');
+      nm.setAttribute('val', 'Calibri');
+      fontEl.appendChild(sz);
+      fontEl.appendChild(nm);
+    }
+    if (patch.bold !== undefined) {
+      for (const b of elements(fontEl, 'b')) fontEl.removeChild(b);
+      if (patch.bold) fontEl.insertBefore(mk('b'), fontEl.firstChild);
+    }
+    if (patch.italic !== undefined) {
+      for (const it of elements(fontEl, 'i')) fontEl.removeChild(it);
+      if (patch.italic) fontEl.insertBefore(mk('i'), fontEl.firstChild);
+    }
+    if (patch.color !== undefined) {
+      for (const c of elements(fontEl, 'color')) fontEl.removeChild(c);
+      const argb = patch.color ? hexToArgb(patch.color) : undefined;
+      if (argb) {
+        const col = mk('color');
+        col.setAttribute('rgb', argb);
+        fontEl.appendChild(col);
+      }
     }
     const fontId = fontList.length;
     fonts.appendChild(fontEl);
@@ -885,90 +943,160 @@ function appendFormatXf(files: Record<string, Uint8Array>, patch: CellFormatPatc
     xf.setAttribute('applyFont', '1');
   }
 
-  if (patch.bg) {
-    const argb = hexToArgb(patch.bg);
-    if (argb) {
-      let fills = elements(root, 'fills')[0];
-      if (!fills) {
-        fills = mk('fills');
-        root.appendChild(fills);
-      }
-      const fillList = elements(fills, 'fill');
-      const fillEl = mk('fill');
-      const pf = mk('patternFill');
-      pf.setAttribute('patternType', 'solid');
-      const fg = mk('fgColor');
-      fg.setAttribute('rgb', argb);
-      pf.appendChild(fg);
-      fillEl.appendChild(pf);
-      const fillId = fillList.length;
-      fills.appendChild(fillEl);
-      fills.setAttribute('count', String(fillId + 1));
-      xf.setAttribute('fillId', String(fillId));
+  if (patch.bg !== undefined) {
+    if (!patch.bg) {
+      xf.setAttribute('fillId', '0');
       xf.setAttribute('applyFill', '1');
+    } else {
+      const argb = hexToArgb(patch.bg);
+      if (argb) {
+        const fills = ensureStyleSection(doc, root, 'fills');
+        let fillList = elements(fills, 'fill');
+        // OOXML reserves fillId 0 = none, fillId 1 = gray125.
+        while (fillList.length < 2) {
+          const padFill = mk('fill');
+          const pf = mk('patternFill');
+          pf.setAttribute('patternType', fillList.length === 0 ? 'none' : 'gray125');
+          padFill.appendChild(pf);
+          fills.appendChild(padFill);
+          fillList = elements(fills, 'fill');
+        }
+        const fillEl = mk('fill');
+        const pf = mk('patternFill');
+        pf.setAttribute('patternType', 'solid');
+        const fg = mk('fgColor');
+        fg.setAttribute('rgb', argb);
+        pf.appendChild(fg);
+        fillEl.appendChild(pf);
+        const fillId = fillList.length;
+        fills.appendChild(fillEl);
+        fills.setAttribute('count', String(fillId + 1));
+        xf.setAttribute('fillId', String(fillId));
+        xf.setAttribute('applyFill', '1');
+      }
     }
   }
 
-  if (patch.align) {
-    const alignEl = mk('alignment');
+  if (patch.align !== undefined) {
+    let alignEl = elements(xf, 'alignment')[0];
+    if (!alignEl) {
+      alignEl = mk('alignment');
+      xf.appendChild(alignEl);
+    }
     alignEl.setAttribute('horizontal', patch.align);
-    xf.appendChild(alignEl);
     xf.setAttribute('applyAlignment', '1');
   }
 
   const newIdx = xfs.length;
   cellXfs.appendChild(xf);
   cellXfs.setAttribute('count', String(newIdx + 1));
-  files['xl/styles.xml'] = strToU8(serializeXml(doc));
   return newIdx;
 }
 
-function patchFormatInSheetXml(
-  xml: string,
+function applyFormatToSheetAndStyles(
+  files: Record<string, Uint8Array>,
+  sheetPath: string,
   r0: number,
   c0: number,
   r1: number,
   c1: number,
-  styleIndex: number,
-): string {
-  const doc = createXmlParser().parseFromString(xml, XML);
-  const root = doc.documentElement;
-  if (!root) return xml;
-  const sheetData = elements(root, 'sheetData')[0];
-  if (!sheetData) return xml;
-  const ns = root.namespaceURI;
-  const mk = (tag: string) => (ns ? doc.createElementNS(ns, tag) : doc.createElement(tag));
+  patch: CellFormatPatch,
+): boolean {
+  const stylesPath = findStylesEntry(files);
+  const stylesDoc = createXmlParser().parseFromString(strFromU8(files[stylesPath]), XML);
+  const stylesRoot = stylesDoc.documentElement;
+  if (!stylesRoot) return false;
 
-  const rowMap = new Map<number, XElement>();
+  const sheetDoc = createXmlParser().parseFromString(strFromU8(files[sheetPath]), XML);
+  const sheetRoot = sheetDoc.documentElement;
+  if (!sheetRoot) return false;
+  const sheetData = elements(sheetRoot, 'sheetData')[0];
+  if (!sheetData) return false;
+  const ns = sheetRoot.namespaceURI;
+  const mk = (tag: string) => (ns ? sheetDoc.createElementNS(ns, tag) : sheetDoc.createElement(tag));
+
+  // Build ordered row list (handling implicit row numbers too).
+  const rowEntries: { num: number; el: XElement }[] = [];
+  let prevRowNum = 0;
   for (const rowEl of elements(sheetData, 'row')) {
-    const rn = Number(rowEl.getAttribute('r') ?? 0) - 1;
-    if (rn >= 0) rowMap.set(rn, rowEl);
+    const rawR = Number(rowEl.getAttribute('r') ?? 0);
+    const num = rawR > 0 ? rawR : prevRowNum + 1;
+    prevRowNum = num;
+    rowEntries.push({ num, el: rowEl });
   }
+
+  const findOrInsertRow = (rowNum1: number): XElement => {
+    let lo = 0;
+    let hi = rowEntries.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rowEntries[mid].num < rowNum1) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo < rowEntries.length && rowEntries[lo].num === rowNum1) {
+      return rowEntries[lo].el;
+    }
+    const rowEl = mk('row');
+    rowEl.setAttribute('r', String(rowNum1));
+    if (lo < rowEntries.length) {
+      sheetData.insertBefore(rowEl, rowEntries[lo].el);
+    } else {
+      sheetData.appendChild(rowEl);
+    }
+    rowEntries.splice(lo, 0, { num: rowNum1, el: rowEl });
+    return rowEl;
+  };
+
+  const derivedCache = new Map<number, number>();
+  const getDerived = (baseIdx: number): number => {
+    let next = derivedCache.get(baseIdx);
+    if (next === undefined) {
+      next = deriveStyleIndex(stylesDoc, stylesRoot, baseIdx, patch);
+      derivedCache.set(baseIdx, next);
+    }
+    return next;
+  };
 
   for (let r = r0; r <= r1; r++) {
-    let rowEl = rowMap.get(r);
-    if (!rowEl) {
-      rowEl = mk('row');
-      rowEl.setAttribute('r', String(r + 1));
-      sheetData.appendChild(rowEl);
-      rowMap.set(r, rowEl);
-    }
-    const cellMap = new Map<number, XElement>();
+    const rowEl = findOrInsertRow(r + 1);
+    rowEl.removeAttribute('spans');
+    const cellEntries: { col: number; el: XElement }[] = [];
+    let prevCol = -1;
     for (const cEl of elements(rowEl, 'c')) {
       const coord = parseCellCoord(cEl.getAttribute('r') ?? '');
-      if (coord) cellMap.set(coord.c, cEl);
+      const col = coord ? coord.c : prevCol + 1;
+      prevCol = col;
+      cellEntries.push({ col, el: cEl });
     }
     for (let c = c0; c <= c1; c++) {
-      let cEl = cellMap.get(c);
-      if (!cEl) {
+      let lo = 0;
+      let hi = cellEntries.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (cellEntries[mid].col < c) lo = mid + 1;
+        else hi = mid;
+      }
+      let cEl: XElement;
+      if (lo < cellEntries.length && cellEntries[lo].col === c) {
+        cEl = cellEntries[lo].el;
+      } else {
         cEl = mk('c');
         cEl.setAttribute('r', `${colName(c)}${r + 1}`);
-        rowEl.appendChild(cEl);
+        if (lo < cellEntries.length) {
+          rowEl.insertBefore(cEl, cellEntries[lo].el);
+        } else {
+          rowEl.appendChild(cEl);
+        }
+        cellEntries.splice(lo, 0, { col: c, el: cEl });
       }
-      cEl.setAttribute('s', String(styleIndex));
+      const baseIdx = Number(cEl.getAttribute('s') ?? 0) || 0;
+      cEl.setAttribute('s', String(getDerived(baseIdx)));
     }
   }
-  return serializeXml(doc);
+
+  files[stylesPath] = strToU8(serializeXml(stylesDoc));
+  files[sheetPath] = strToU8(serializeXml(sheetDoc));
+  return true;
 }
 
 /** Applies an ordered sequence of cell, row/column structure, and sheet operations to an `.xlsx` archive. */
@@ -997,9 +1125,7 @@ export function applyWorkbookOps(bytes: Uint8Array, ops: readonly WorkbookOp[]):
         if (!path || !files[path]) {
           break;
         }
-        const styleIdx = appendFormatXf(files, op.patch);
-        if (styleIdx !== undefined) {
-          files[path] = strToU8(patchFormatInSheetXml(strFromU8(files[path]), op.r0, op.c0, op.r1, op.c1, styleIdx));
+        if (applyFormatToSheetAndStyles(files, path, op.r0, op.c0, op.r1, op.c1, op.patch)) {
           touched = true;
         }
         break;

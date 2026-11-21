@@ -71,10 +71,12 @@ function decodePdfHexString(hex: string): string {
   let s = '';
   for (let i = 0; i < bytes.length; i++) {
     const b = bytes[i];
-    if (b >= 32 && b < 127) s += String.fromCharCode(b);
+    if ((b >= 32 && b < 127) || b >= 160) s += String.fromCharCode(b);
   }
   return s;
 }
+
+const isPdfDelim = (ch: string | undefined) => !ch || /[\s/([<\]>)]/.test(ch);
 
 function extractTextFromContentStream(streamText: string): string {
   const chunks: string[] = [];
@@ -108,13 +110,40 @@ function extractTextFromContentStream(streamText: string): string {
   };
 
   while (i < n) {
-    // Check BT / ET boundaries
-    if (streamText[i] === 'B' && streamText[i + 1] === 'T' && (i === 0 || /\s/.test(streamText[i - 1])) && (i + 2 >= n || /\s/.test(streamText[i + 2]))) {
+    // Skip PDF dictionaries `<< ... >>` completely so they are never mistaken for hex strings
+    if (streamText[i] === '<' && streamText[i + 1] === '<') {
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (streamText[i] === '<' && streamText[i + 1] === '<') {
+          depth++;
+          i += 2;
+        } else if (streamText[i] === '>' && streamText[i + 1] === '>') {
+          depth--;
+          i += 2;
+        } else {
+          i++;
+        }
+      }
+      continue;
+    }
+    // Check BT / ET boundaries (PDF allows delimiters like `/` or `(` immediately after BT)
+    if (
+      streamText[i] === 'B' &&
+      streamText[i + 1] === 'T' &&
+      isPdfDelim(streamText[i - 1]) &&
+      isPdfDelim(streamText[i + 2])
+    ) {
       inText = true;
       i += 2;
       continue;
     }
-    if (streamText[i] === 'E' && streamText[i + 1] === 'T' && (i === 0 || /\s/.test(streamText[i - 1])) && (i + 2 >= n || /\s/.test(streamText[i + 2]))) {
+    if (
+      streamText[i] === 'E' &&
+      streamText[i + 1] === 'T' &&
+      isPdfDelim(streamText[i - 1]) &&
+      isPdfDelim(streamText[i + 2])
+    ) {
       inText = false;
       if (chunks.length && chunks[chunks.length - 1] !== '\n') chunks.push('\n');
       i += 2;
@@ -168,8 +197,13 @@ function extractTextFromContentStream(streamText: string): string {
       if (i < n && streamText[i] === ']') i++;
       continue;
     }
-    if ((ch === 'T' && (streamText[i + 1] === 'd' || streamText[i + 1] === 'D' || streamText[i + 1] === '*')) && (i === 0 || /\s/.test(streamText[i - 1]))) {
-      chunks.push('\n');
+    if (
+      ch === 'T' &&
+      (streamText[i + 1] === 'd' || streamText[i + 1] === 'D' || streamText[i + 1] === '*' || streamText[i + 1] === 'm') &&
+      isPdfDelim(streamText[i - 1]) &&
+      isPdfDelim(streamText[i + 2])
+    ) {
+      if (chunks.length && chunks[chunks.length - 1] !== '\n') chunks.push('\n');
       i += 2;
       continue;
     }
@@ -183,26 +217,36 @@ function extractTextFromContentStream(streamText: string): string {
     .trim();
 }
 
+const MAX_INFLATED_STREAM = 16 * 1024 * 1024;
+
 function decodeRawStream(raw: PDFRawStream): string {
   const filter = raw.dict.get(PDFName.of('Filter'));
   const bytes = raw.contents;
-  const isFlate =
+  const isSingleFlate =
     filter?.toString() === '/FlateDecode' ||
-    (filter instanceof PDFArray &&
-      Array.from({ length: filter.size() }, (_, idx) => filter.get(idx)?.toString()).includes('/FlateDecode'));
-  if (isFlate) {
+    (filter instanceof PDFArray && filter.size() === 1 && filter.get(0)?.toString() === '/FlateDecode');
+  if (isSingleFlate) {
     try {
       const inflated = unzlibSync(bytes);
+      if (inflated.byteLength > MAX_INFLATED_STREAM) {
+        return '';
+      }
       return Buffer.from(inflated).toString('latin1');
     } catch {
       return '';
     }
   }
+  if (filter) {
+    return '';
+  }
   return Buffer.from(bytes).toString('latin1');
 }
 
-/** Extracts plain text per page from a PDF byte buffer. */
-export async function extractPdfText(bytes: Uint8Array, maxPages = 100): Promise<string[]> {
+/** Extracts plain text per page plus the true total page count from a PDF byte buffer. */
+export async function extractPdfTextWithMeta(
+  bytes: Uint8Array,
+  maxPages = 100,
+): Promise<{ pages: string[]; totalPages: number }> {
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
   const pages = doc.getPages();
   const limit = Math.min(pages.length, maxPages);
@@ -234,5 +278,10 @@ export async function extractPdfText(bytes: Uint8Array, maxPages = 100): Promise
     out.push(pageParts.join('\n').trim());
   }
 
-  return out;
+  return { pages: out, totalPages: pages.length };
+}
+
+/** Extracts plain text per page from a PDF byte buffer. */
+export async function extractPdfText(bytes: Uint8Array, maxPages = 100): Promise<string[]> {
+  return (await extractPdfTextWithMeta(bytes, maxPages)).pages;
 }

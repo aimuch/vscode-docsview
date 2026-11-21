@@ -74,15 +74,12 @@ export async function compareExcelDocument(
   uri: vscode.Uri,
   currentBytes: Uint8Array,
   fromHistory?: boolean,
+  currentSheets?: { name: string; rows: string[][] }[],
 ): Promise<DocumentDiffReport | undefined> {
   const base = await pickBaseBytes(uri, fromHistory, { Spreadsheets: ['xlsx', 'xlsm', 'xls', 'ods'] });
   if (!base) return undefined;
   const currentName = uri.path.slice(uri.path.lastIndexOf('/') + 1);
   const { ExcelSession } = await import('./spreadsheet');
-  const [prevSess, currSess] = await Promise.all([
-    ExcelSession.open(base.bytes, base.label),
-    ExcelSession.open(currentBytes, currentName),
-  ]);
   const extract = (sess: Awaited<ReturnType<typeof ExcelSession.open>>) =>
     sess.info.sheets.map((_, idx) => {
       const m = sess.sheet(idx)!;
@@ -93,7 +90,9 @@ export async function compareExcelDocument(
         ),
       };
     });
-  return buildSheetsDiff(base.label, currentName, extract(prevSess), extract(currSess));
+  const prevSess = await ExcelSession.open(base.bytes, base.label);
+  const currExtracted = currentSheets ?? extract(await ExcelSession.open(currentBytes, currentName));
+  return buildSheetsDiff(base.label, currentName, extract(prevSess), currExtracted);
 }
 
 export async function compareDelimitedDocument(

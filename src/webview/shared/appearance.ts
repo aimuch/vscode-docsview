@@ -4,6 +4,7 @@ import type { Appearance, SchemeSetting, ThemeId } from '../../common/protocol';
 import type { StringKey } from '../../common/strings';
 import { config, el, onMessage, post, t } from './api';
 import { icons } from './icons';
+import { overlayStack } from './overlayStack';
 
 let current: Appearance = { ...config.appearance };
 const listeners = new Set<(a: Appearance) => void>();
@@ -259,6 +260,7 @@ export function themeToolbarButton(): HTMLElement {
       popup.hidden = true;
       button.setAttribute('aria-expanded', 'false');
       document.removeEventListener('mousedown', onOutside);
+      overlayStack.remove('themeToolbarMenu');
     }
   };
 
@@ -299,6 +301,12 @@ export function themeToolbarButton(): HTMLElement {
     popup.hidden = false;
     button.setAttribute('aria-expanded', 'true');
     document.addEventListener('mousedown', onOutside);
+    overlayStack.push({
+      id: 'themeToolbarMenu',
+      isOpen: () => !popup.hidden,
+      close,
+      restoreFocus: () => button,
+    });
     const rect = button.getBoundingClientRect();
     const mw = popup.offsetWidth || 372;
     const mh = popup.offsetHeight || 280;
@@ -308,9 +316,15 @@ export function themeToolbarButton(): HTMLElement {
     popup.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
   });
   popup.addEventListener('keydown', (e) => {
+    const rows = [...popup.querySelectorAll<HTMLElement>('.dv-menu-item')];
+    const idx = rows.indexOf(document.activeElement as HTMLElement);
     if (e.key === 'Escape') {
       close();
       button.focus();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next = (idx + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+      rows[next]?.focus();
     }
   });
   document.body.append(popup);

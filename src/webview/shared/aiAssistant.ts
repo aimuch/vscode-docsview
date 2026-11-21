@@ -173,6 +173,62 @@ function renderFormattedOutput(container: HTMLElement, raw: string): void {
       nodes.push(ul);
       continue;
     }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const ol = el('ol', { class: 'dv-ai-md-list' });
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        const li = el('li');
+        appendInlineFormatted(li, lines[i].replace(/^\s*\d+\.\s+/, ''));
+        ol.append(li);
+        i++;
+      }
+      nodes.push(ol);
+      continue;
+    }
+    // GFM Markdown table: header row + separator row `| --- | --- |`
+    if (
+      line.includes('|') &&
+      i + 1 < lines.length &&
+      /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(lines[i + 1])
+    ) {
+      const splitCells = (row: string) =>
+        row
+          .trim()
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map((c) => c.trim());
+      const headers = splitCells(line);
+      i += 2;
+      const tbody = el('tbody');
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+        const cells = splitCells(lines[i]);
+        tbody.append(
+          el(
+            'tr',
+            {},
+            headers.map((_, cIdx) => {
+              const td = el('td');
+              appendInlineFormatted(td, cells[cIdx] ?? '');
+              return td;
+            }),
+          ),
+        );
+        i++;
+      }
+      const thead = el('thead', {}, [
+        el(
+          'tr',
+          {},
+          headers.map((h) => {
+            const th = el('th');
+            appendInlineFormatted(th, h);
+            return th;
+          }),
+        ),
+      ]);
+      nodes.push(el('table', { class: 'dv-ai-md-table' }, [thead, tbody]));
+      continue;
+    }
     if (line.trim() === '') {
       i++;
       continue;
@@ -248,11 +304,14 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
   const turnsBadgeEl = el('span', { class: 'dv-ai-turns-badge' });
   turnsBadgeEl.hidden = true;
 
-  const providerPillBtn = el('button', { class: 'dv-ai-provider-pill', title: t('settings') });
+  const providerPillBtn = el('button', { class: 'dv-ai-provider-pill', title: t('aiModelLabel') });
   providerPillBtn.type = 'button';
+  providerPillBtn.setAttribute('aria-haspopup', 'menu');
+  providerPillBtn.setAttribute('aria-expanded', 'false');
 
   // Quick model switcher popover anchored to providerPillBtn
   const modelMenu = el('div', { class: 'dv-menu dv-more-menu dv-ai-model-menu' });
+  modelMenu.setAttribute('role', 'menu');
   modelMenu.hidden = true;
   document.body.append(modelMenu);
 
@@ -264,21 +323,35 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
   const closeModelMenu = () => {
     if (!modelMenu.hidden) {
       modelMenu.hidden = true;
+      providerPillBtn.setAttribute('aria-expanded', 'false');
       document.removeEventListener('mousedown', onModelMenuOutside);
       overlayStack.remove('aiModelMenu');
     }
   };
+  modelMenu.addEventListener('keydown', (e) => {
+    const items = [...modelMenu.querySelectorAll<HTMLElement>('.dv-menu-item')];
+    const idx = items.indexOf(document.activeElement as HTMLElement);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next = (idx + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items[next]?.focus();
+    }
+  });
   providerPillBtn.addEventListener('click', () => {
     if (!modelMenu.hidden) {
       closeModelMenu();
       return;
     }
     const { settings, models } = getAiSettings();
+    if (models.length === 0) {
+      post({ type: 'aiGetSettings', discoverModels: true });
+    }
     const rows: HTMLElement[] = [];
     if (models.length > 0) {
       for (const m of models.slice(0, 20)) {
         const row = el('button', { class: 'dv-menu-item' });
         row.type = 'button';
+        row.setAttribute('role', 'menuitemradio');
         const mark = el('span', { class: 'dv-menu-check' });
         if (settings?.model === m) {
           mark.innerHTML = icons.check;
@@ -294,6 +367,7 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
     }
     const refreshRow = el('button', { class: 'dv-menu-item' });
     refreshRow.type = 'button';
+    refreshRow.setAttribute('role', 'menuitem');
     refreshRow.append(el('span', { class: 'dv-menu-check' }), el('span', { class: 'dv-menu-label', text: t('aiDiscoverModels') }));
     refreshRow.addEventListener('click', () => {
       closeModelMenu();
@@ -301,6 +375,7 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
     });
     const settingsRow = el('button', { class: 'dv-menu-item' });
     settingsRow.type = 'button';
+    settingsRow.setAttribute('role', 'menuitem');
     settingsRow.append(el('span', { class: 'dv-menu-check' }), el('span', { class: 'dv-menu-label', text: t('settings') }));
     settingsRow.addEventListener('click', () => {
       closeModelMenu();
@@ -309,6 +384,7 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
     rows.push(refreshRow, settingsRow);
     modelMenu.replaceChildren(...rows);
     modelMenu.hidden = false;
+    providerPillBtn.setAttribute('aria-expanded', 'true');
     document.addEventListener('mousedown', onModelMenuOutside);
     overlayStack.push({
       id: 'aiModelMenu',
@@ -317,9 +393,11 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
       restoreFocus: () => providerPillBtn,
     });
     const r = providerPillBtn.getBoundingClientRect();
+    const mh = modelMenu.offsetHeight || 220;
     modelMenu.style.left = `${Math.max(8, Math.min(window.innerWidth - 230, r.right - 220))}px`;
-    modelMenu.style.top = `${r.bottom + 4}px`;
+    modelMenu.style.top = `${Math.max(8, Math.min(window.innerHeight - mh - 8, r.bottom + 4))}px`;
     modelMenu.style.right = 'auto';
+    modelMenu.querySelector<HTMLElement>('.dv-menu-item')?.focus();
   });
 
   const newChatBtn = el('button', { class: 'dv-btn dv-ai-mini-btn', text: t('aiNewChat') });
@@ -606,28 +684,63 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
     } else if (phase === 'error' && errorMessage) {
       statusLineEl.hidden = false;
       statusLineEl.className = 'dv-ai-status dv-ai-status-error';
-      statusLineEl.textContent = errorMessage;
+      const retryBtn = el('button', { class: 'dv-btn dv-ai-mini-btn', text: t('aiRetry') });
+      retryBtn.type = 'button';
+      retryBtn.addEventListener('click', () => runAction(lastAction));
+      const cfgBtn = el('button', { class: 'dv-btn dv-ai-mini-btn', text: t('settings') });
+      cfgBtn.type = 'button';
+      cfgBtn.addEventListener('click', () => opts.onOpenSettings?.());
+      statusLineEl.replaceChildren(el('span', { text: errorMessage }), retryBtn, cfgBtn);
     } else {
       statusLineEl.hidden = true;
     }
 
-    const canDiff = Boolean(captured.selection && captured.selection.trim() && outputText.trim() && !streaming);
+    const DIFFABLE_ACTIONS = new Set<AiActionKind>(['polish', 'concise', 'expand', 'translate', 'fix', 'generate']);
+    const canDiff = Boolean(
+      captured.selection &&
+        captured.selection.trim() &&
+        outputText.trim() &&
+        !streaming &&
+        DIFFABLE_ACTIONS.has(lastAction),
+    );
     outputViewBar.hidden = !canDiff;
     if (!canDiff && outputViewMode === 'diff') {
       outputViewMode = 'formatted';
     }
     viewFormattedBtn.classList.toggle('dv-active', outputViewMode === 'formatted');
     viewDiffBtn.classList.toggle('dv-active', outputViewMode === 'diff');
+    viewFormattedBtn.setAttribute('aria-pressed', String(outputViewMode === 'formatted'));
+    viewDiffBtn.setAttribute('aria-pressed', String(outputViewMode === 'diff'));
 
-    if (outputText) {
+    // Show prior multi-turn thread + latest output cleanly
+    const priorTurns = conversation.length >= 2 && outputText ? conversation.slice(0, -2) : conversation;
+    if (outputText || priorTurns.length > 0) {
       outputPre.hidden = false;
-      if (streaming) {
-        outputPre.textContent = outputText;
-      } else if (outputViewMode === 'diff' && captured.selection) {
-        renderDiffOutput(outputPre, captured.selection, outputText);
-      } else {
-        renderFormattedOutput(outputPre, outputText);
+      const bodyWrap = el('div');
+      if (priorTurns.length > 0) {
+        const threadEl = el('div', { class: 'dv-ai-thread' });
+        for (const turn of priorTurns.slice(-6)) {
+          threadEl.append(
+            el('div', {
+              class: turn.role === 'user' ? 'dv-ai-turn-user' : 'dv-ai-turn-asst',
+              text: turn.content,
+            }),
+          );
+        }
+        bodyWrap.append(threadEl);
       }
+      if (outputText) {
+        const latestBox = el('div');
+        if (streaming) {
+          latestBox.textContent = outputText;
+        } else if (outputViewMode === 'diff' && captured.selection) {
+          renderDiffOutput(latestBox, captured.selection, outputText);
+        } else {
+          renderFormattedOutput(latestBox, outputText);
+        }
+        bodyWrap.append(latestBox);
+      }
+      outputPre.replaceChildren(bodyWrap);
       outputPre.scrollTop = outputPre.scrollHeight;
     } else {
       outputPre.hidden = true;
@@ -657,20 +770,27 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
     writeState({ aiPromptHistory: promptHistory });
   }
 
+  let hasExplicitOverride = false;
+  let draftBeforeHistory = '';
+
   function runAction(actionOverride?: AiActionKind): void {
     const action = actionOverride ?? lastAction;
     lastAction = action;
-    const fresh = opts.captureContext();
-    if (!captured.selection && fresh.selection) {
-      captured = fresh;
-    } else if (fresh.sheetSchema) {
-      captured = {
-        ...captured,
-        sheetSchema: fresh.sheetSchema,
-        badge: fresh.badge ?? captured.badge,
-        meta: fresh.meta ?? captured.meta,
-      };
+    if (!hasExplicitOverride) {
+      const fresh = opts.captureContext();
+      if (!captured.selection && fresh.selection) {
+        captured = fresh;
+      } else {
+        captured = {
+          ...captured,
+          sheetSchema: fresh.sheetSchema ?? captured.sheetSchema,
+          imageDataUrl: fresh.imageDataUrl ?? captured.imageDataUrl,
+          badge: fresh.badge ?? captured.badge,
+          meta: fresh.meta ?? captured.meta,
+        };
+      }
     }
+    hasExplicitOverride = false;
 
     const typed = promptInput.value.trim();
     if (typed) {
@@ -733,9 +853,17 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
     if (!card.isConnected) {
       document.body.append(card);
     }
+    hasExplicitOverride = Boolean(openOpts?.capturedOverride);
     const nextCap = openOpts?.capturedOverride ?? opts.captureContext();
-    if (nextCap.selection !== captured.selection || nextCap.badge !== captured.badge) {
+    if (
+      nextCap.selection !== captured.selection ||
+      nextCap.badge !== captured.badge ||
+      nextCap.imageDataUrl !== captured.imageDataUrl
+    ) {
       conversation = [];
+      outputText = '';
+      errorMessage = '';
+      activeModelLabel = '';
       outputViewMode = 'formatted';
     }
     captured = nextCap;
@@ -753,6 +881,8 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
     }
     if (phaseMachine.state === 'closed') {
       phaseMachine.transition(outputText.trim() ? 'done' : 'idle');
+    } else if (!outputText.trim() && phaseMachine.state !== 'idle') {
+      phaseMachine.transition('idle');
     } else {
       syncUi();
     }
@@ -799,14 +929,23 @@ export function createAiAssistant(opts: AiAssistantOptions): AiAssistantHandle {
     }
     if (e.key === 'ArrowUp' && promptHistory.length > 0 && promptInput.selectionStart === 0 && promptInput.selectionEnd === 0) {
       e.preventDefault();
+      if (historyCursor === -1) {
+        draftBeforeHistory = promptInput.value;
+      }
       historyCursor = Math.min(promptHistory.length - 1, historyCursor + 1);
       promptInput.value = promptHistory[historyCursor] ?? '';
+      promptInput.setSelectionRange(0, 0);
       return;
     }
-    if (e.key === 'ArrowDown' && historyCursor >= 0 && promptInput.selectionStart === promptInput.value.length) {
+    if (
+      e.key === 'ArrowDown' &&
+      historyCursor >= 0 &&
+      promptInput.selectionStart === promptInput.value.length &&
+      promptInput.selectionEnd === promptInput.value.length
+    ) {
       e.preventDefault();
       historyCursor--;
-      promptInput.value = historyCursor >= 0 ? promptHistory[historyCursor] : '';
+      promptInput.value = historyCursor >= 0 ? promptHistory[historyCursor] : draftBeforeHistory;
     }
   });
 

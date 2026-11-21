@@ -156,8 +156,8 @@ body[data-theme='academic'].dv-dark {
 }
 
 body.md-focus-mode .dv-toolbar,
-body.md-focus-mode .dv-sidebar,
-body.md-focus-mode .dv-sidebar-expand,
+body.md-focus-mode .dv-side,
+body.md-focus-mode .dv-side-expand,
 body.md-focus-mode .dv-statusbar {
   display: none !important;
 }

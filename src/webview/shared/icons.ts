@@ -95,6 +95,7 @@ export const icons = {
   italic: svg('<path d="M9.8 3.2H6.5M9.5 12.8H6.2M8.8 3.2L7.2 12.8"/>'),
   palette: svg('<path d="M8 2.4a5.6 5.6 0 100 11.2h.8a1.5 1.5 0 001.1-2.5 1.2 1.2 0 01.9-2h.8a2 2 0 002-2A5.6 5.6 0 008 2.4z"/><circle cx="5.6" cy="7.2" r=".7" fill="currentColor" stroke="none"/><circle cx="8" cy="5.5" r=".7" fill="currentColor" stroke="none"/><circle cx="10.4" cy="7.2" r=".7" fill="currentColor" stroke="none"/>'),
   pin: svg('<path d="M9.8 2.4l3.8 3.8-1.5 1.5-1.1-.4-2.4 2.4.5 1.9-1.2 1.2-2.6-2.6-2.8 2.8-.6-.6 2.8-2.8-2.6-2.6 1.2-1.2 1.9.5 2.4-2.4-.4-1.1z"/>'),
+  repeat: svg('<path d="M11.5 3.2L13.6 5.3 11.5 7.4M2.5 8V6.3a1 1 0 011-1h10M4.5 12.8L2.4 10.7 4.5 8.6M13.5 8v1.7a1 1 0 01-1 1h-10"/>'),
 };
 
 export type IconName = keyof typeof icons;

@@ -5,9 +5,24 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { HostMessage, WebviewMessage } from '../../common/protocol';
-import { configureWebview, handleCommonMessage, onWebviewMessage, parentUri } from '../webviewHtml';
+import { configureWebview, handleCommonMessage, onWebviewMessage, toSafeUint8Array } from '../webviewHtml';
 
 const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v']);
+const capturedTempUris = new Set<vscode.Uri>();
+
+export async function cleanupMediaTempFiles(): Promise<void> {
+  const list = [...capturedTempUris];
+  capturedTempUris.clear();
+  await Promise.all(
+    list.map(async (u) => {
+      try {
+        await vscode.workspace.fs.delete(u);
+      } catch {
+        // Already gone.
+      }
+    }),
+  );
+}
 
 function baseName(uri: vscode.Uri): string {
   return uri.path.slice(uri.path.lastIndexOf('/') + 1);
@@ -58,7 +73,11 @@ export class MediaPreviewProvider implements vscode.CustomReadonlyEditorProvider
         void (async () => {
           const safe = (message.suffix || 'frame').replace(/[^a-zA-Z0-9._-]/g, '_');
           const outUri = vscode.Uri.file(path.join(os.tmpdir(), `docsview-${Date.now()}-${safe}.png`));
-          const bytes = new Uint8Array(message.bytes);
+          const bytes = toSafeUint8Array(message.bytes);
+          if (!bytes.byteLength) {
+            return;
+          }
+          capturedTempUris.add(outUri);
           await vscode.workspace.fs.writeFile(outUri, bytes);
           await vscode.commands.executeCommand('vscode.openWith', outUri, 'docsview.image');
         })().catch((err: unknown) =>

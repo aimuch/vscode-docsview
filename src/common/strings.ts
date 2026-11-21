@@ -456,11 +456,11 @@ const en = {
   mediaSpeed: 'Speed',
   mediaLoop: 'Loop',
   mediaCaptureFrame: 'Capture frame → Image Inspector',
-  mediaAddBookmark: 'Add marker (M)',
+  mediaAddBookmark: 'Add marker (B)',
   mediaBookmarks: 'Markers ({0})',
   mediaExportBookmarks: 'Export markers (.md)',
   mediaBookmarkPlaceholder: 'Note at {0}…',
-  mediaNoBookmarks: 'Press M or click + to bookmark timestamps.',
+  mediaNoBookmarks: 'Press B or click + to bookmark timestamps.',
   docCustomize: 'Pin & reorder',
   docCustomizeDone: 'Done',
   docPinOutside: 'Show on top toolbar',
@@ -469,6 +469,8 @@ const en = {
   toolbarHiddenHint: 'Unpinned items stay off the top bar. Click "Use / Configure" to access them right here, or pin to Left / Right.',
   toolbarUseNow: 'Use',
   toolbarGoSetting: 'Configure',
+  aiRetry: 'Retry',
+  sheetName: 'Sheet',
 };
 
 const zh: typeof en = {
@@ -925,11 +927,11 @@ const zh: typeof en = {
   mediaSpeed: '倍速',
   mediaLoop: '循环播放',
   mediaCaptureFrame: '截帧并送入图片检查器',
-  mediaAddBookmark: '添加时间打点 (M)',
+  mediaAddBookmark: '添加时间打点 (B)',
   mediaBookmarks: '时间点标注 ({0})',
   mediaExportBookmarks: '导出打点笔记 (.md)',
   mediaBookmarkPlaceholder: '在 {0} 处记录笔记…',
-  mediaNoBookmarks: '按 M 键或点击 + 在当前时间点添加笔记打点。',
+  mediaNoBookmarks: '按 B 键或点击 + 在当前时间点添加笔记打点。',
   docCustomize: '管理显示与排序',
   docCustomizeDone: '完成',
   docPinOutside: '显示在外面顶栏',
@@ -938,6 +940,8 @@ const zh: typeof en = {
   toolbarHiddenHint: '未固定项不会显示在外面顶栏；点「使用 / 去设置」可直接在设置内操作或定位配置，点「+ 左侧 / + 右侧」可固定到顶栏。',
   toolbarUseNow: '使用',
   toolbarGoSetting: '去设置',
+  aiRetry: '重试',
+  sheetName: '工作表',
 };
 
 export type StringKey = keyof typeof en;

@@ -1304,9 +1304,9 @@ const compareDropdown = moreMenu(
   'compare',
   { compact: true },
 );
-const prevImgBtn = iconButton('left', `${t('imgPrevFile')} ([)`, () => post({ type: 'stepFolderImage', delta: -1 }));
+const prevImgBtn = iconButton('left', t('imgPrevFile'), () => post({ type: 'stepFolderImage', delta: -1 }));
 const siblingLabel = el('span', { class: 'dv-label img-sibling-label' });
-const nextImgBtn = iconButton('right', `${t('imgNextFile')} (])`, () => post({ type: 'stepFolderImage', delta: 1 }));
+const nextImgBtn = iconButton('right', t('imgNextFile'), () => post({ type: 'stepFolderImage', delta: 1 }));
 const folderNavGroup = el('div', { class: 'dv-pager' }, [prevImgBtn, siblingLabel, nextImgBtn]);
 
 const copyImgBtn = iconButton('copy', t('imgCopyClipboard'), () => void copyImageToClipboard());
@@ -1347,7 +1347,8 @@ function captureVisionDataUrl(): string | undefined {
   tmp.height = outH;
   const ctx = tmp.getContext('2d');
   if (!ctx) return undefined;
-  ctx.fillStyle = '#ffffff';
+  // Use a subtle neutral matte instead of pure white so white transparent PNG icons stay visible to Vision models
+  ctx.fillStyle = '#e5e7eb';
   ctx.fillRect(0, 0, outW, outH);
   ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, outW, outH);
   try {

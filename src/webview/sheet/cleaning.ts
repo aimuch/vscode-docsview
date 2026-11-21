@@ -40,10 +40,16 @@ export function computeSplitColumn(
   if (!delimiter) {
     return { extraCols: 0, changes: [] };
   }
+  const MAX_EXTRA = 20;
   let maxParts = 1;
   const splitRows: { r: number; parts: string[] }[] = [];
   for (let r = Math.max(0, fixedRows); r < rows.length; r++) {
-    const raw = cellStr(rows[r]?.[col]);
+    const cell = rows[r]?.[col];
+    // Never overwrite formula cells or read-only cells
+    if (cell && typeof cell === 'object' && (cell.ro || cell.raw?.startsWith('='))) {
+      continue;
+    }
+    const raw = cellStr(cell);
     if (!raw || !raw.includes(delimiter)) {
       continue;
     }
@@ -53,14 +59,17 @@ export function computeSplitColumn(
     }
     splitRows.push({ r, parts });
   }
-  const extraCols = Math.max(0, Math.min(20, maxParts - 1));
+  const extraCols = Math.max(0, Math.min(MAX_EXTRA, maxParts - 1));
   if (extraCols === 0) {
     return { extraCols: 0, changes: [] };
   }
   const changes: CellChange[] = [];
+  const maxCols = extraCols + 1;
   for (const { r, parts } of splitRows) {
-    for (let i = 0; i < Math.min(parts.length, extraCols + 1); i++) {
-      changes.push({ r, c: col + i, text: parts[i] });
+    for (let i = 0; i < Math.min(parts.length, maxCols); i++) {
+      // Keep any overflow segments joined in the last column instead of silently dropping data
+      const text = i === maxCols - 1 && parts.length > maxCols ? parts.slice(i).join(delimiter) : parts[i];
+      changes.push({ r, c: col + i, text });
     }
   }
   return { extraCols, changes };

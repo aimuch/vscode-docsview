@@ -35,6 +35,13 @@
     "zip",
     "image",
     "bbox",
+    "sqlite",
+    "parquet",
+    "media",
+    "audio",
+    "video",
+    "ai",
+    "diff",
     "preview"
   ],
   "main": "./dist/extension.js",
@@ -192,7 +199,8 @@
           { "filenamePattern": "*.flac" },
           { "filenamePattern": "*.mp4" },
           { "filenamePattern": "*.webm" },
-          { "filenamePattern": "*.mov" }
+          { "filenamePattern": "*.mov" },
+          { "filenamePattern": "*.m4v" }
         ],
         "priority": "default"
       }

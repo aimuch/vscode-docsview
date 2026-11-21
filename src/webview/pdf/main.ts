@@ -24,6 +24,7 @@ import {
 import { getFileState } from '../shared/fileState';
 import { createFindBar } from '../shared/find';
 import { icons, type IconName } from '../shared/icons';
+import { openAccessibleModal } from '../shared/modal';
 import { bindLiveViewerStatus, overlayStack } from '../shared/overlayStack';
 import { Outline, readState, Sidebar, writeState, type OutlineItem } from '../shared/sidebar';
 import {
@@ -846,30 +847,30 @@ function mkOption(val: string, label: string): HTMLOptionElement {
 }
 
 function openPdfTextBoxModal() {
-  const backdrop = el('div', { class: 'dv-modal-backdrop' });
   const textArea = el('textarea', { class: 'dv-input' }) as HTMLTextAreaElement;
   textArea.placeholder = t('pdfAddText');
   textArea.rows = 3;
-  const colorSelect = el('select', { class: 'dv-input' }, [
-    mkOption('#111827', 'Black'),
-    mkOption('#1d4ed8', 'Blue'),
-    mkOption('#dc2626', 'Red'),
+  const colorSelect = el('select', { class: 'dv-select' }, [
+    mkOption('#111827', 'Black (#111827)'),
+    mkOption('#1d4ed8', 'Blue (#1D4ED8)'),
+    mkOption('#dc2626', 'Red (#DC2626)'),
   ]) as HTMLSelectElement;
   colorSelect.style.width = 'auto';
-  const posSelect = el('select', { class: 'dv-input' }, [
-    mkOption('top', 'Top'),
-    mkOption('center', 'Center'),
-    mkOption('bottom', 'Bottom'),
+  const posSelect = el('select', { class: 'dv-select' }, [
+    mkOption('top', 'Top (10%)'),
+    mkOption('center', 'Center (45%)'),
+    mkOption('bottom', 'Bottom (80%)'),
   ]) as HTMLSelectElement;
   posSelect.style.width = 'auto';
 
-  const close = () => {
-    overlayStack.remove('pdfTextBoxModal');
-    backdrop.remove();
-  };
-
-  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('pdfSignaturePlace') });
+  let closeModal: () => void = () => undefined;
+  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('save') });
   applyBtn.type = 'button';
+  applyBtn.disabled = true;
+  textArea.addEventListener('input', () => {
+    applyBtn.disabled = !textArea.value.trim();
+  });
+
   applyBtn.addEventListener('click', () => {
     const raw = textArea.value.trim();
     if (!raw) return;
@@ -901,34 +902,24 @@ function openPdfTextBoxModal() {
           pngBytes,
         },
       });
-      close();
+      closeModal();
     });
   });
 
   const controlsRow = el('div', {}, [colorSelect, posSelect]);
   controlsRow.style.cssText = 'display:flex;gap:8px;align-items:center';
-  const body = el('div', { class: 'dv-modal-body' }, [textArea, controlsRow]);
-  body.style.cssText = 'display:flex;flex-direction:column;gap:8px';
-  const modal = el('div', { class: 'dv-modal' }, [
-    el('div', { class: 'dv-modal-header' }, [
-      el('span', { class: 'dv-modal-title', text: t('pdfAddText') }),
-      iconButton('close', t('cancel'), close),
-    ]),
-    body,
-    el('div', { class: 'dv-modal-footer' }, [applyBtn]),
-  ]);
-  modal.style.width = 'min(440px,92vw)';
-  backdrop.append(modal);
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) close();
+  const handle = openAccessibleModal({
+    id: 'pdfTextBoxModal',
+    title: t('pdfAddText'),
+    width: 'min(440px, 92vw)',
+    body: [textArea, controlsRow],
+    footer: [applyBtn],
+    initialFocus: textArea,
   });
-  document.body.append(backdrop);
-  overlayStack.push({ id: 'pdfTextBoxModal', isOpen: () => backdrop.isConnected, close });
-  textArea.focus();
+  closeModal = handle.close;
 }
 
 function openPdfSignatureModal() {
-  const backdrop = el('div', { class: 'dv-modal-backdrop' });
   const canvas = document.createElement('canvas');
   canvas.width = 560;
   canvas.height = 200;
@@ -942,6 +933,15 @@ function openPdfSignatureModal() {
   let drawing = false;
   let hasInk = false;
   let uploadedPng: Uint8Array | undefined;
+  let stampAspect = 560 / 200;
+
+  let closeModal: () => void = () => undefined;
+  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('pdfSignaturePlace') });
+  applyBtn.type = 'button';
+  applyBtn.disabled = true;
+  const syncReady = () => {
+    applyBtn.disabled = !hasInk;
+  };
 
   const pt = (e: PointerEvent) => {
     const r = canvas.getBoundingClientRect();
@@ -952,8 +952,10 @@ function openPdfSignatureModal() {
   };
   canvas.addEventListener('pointerdown', (e) => {
     uploadedPng = undefined;
+    stampAspect = 560 / 200;
     drawing = true;
     hasInk = true;
+    syncReady();
     canvas.setPointerCapture(e.pointerId);
     const p = pt(e);
     ctx.beginPath();
@@ -981,9 +983,11 @@ function openPdfSignatureModal() {
     void f.arrayBuffer().then((ab) => {
       uploadedPng = new Uint8Array(ab);
       hasInk = true;
+      syncReady();
       const url = URL.createObjectURL(f);
       const img = new Image();
       img.onload = () => {
+        stampAspect = img.width / Math.max(1, img.height);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
         const dw = img.width * scale;
@@ -995,38 +999,36 @@ function openPdfSignatureModal() {
     });
   });
 
-  const close = () => {
-    overlayStack.remove('pdfSignatureModal');
-    backdrop.remove();
-  };
-
   const clearBtn = el('button', { class: 'dv-btn', text: t('pdfSignatureClear') });
   clearBtn.type = 'button';
   clearBtn.addEventListener('click', () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     hasInk = false;
     uploadedPng = undefined;
+    stampAspect = 560 / 200;
+    syncReady();
   });
 
   const loadBtn = el('button', { class: 'dv-btn', text: t('pdfSignatureLoadPng') });
   loadBtn.type = 'button';
   loadBtn.addEventListener('click', () => fileInput.click());
 
-  const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('pdfSignaturePlace') });
-  applyBtn.type = 'button';
   applyBtn.addEventListener('click', () => {
     if (!hasInk) return;
     const finish = (pngBytes: Uint8Array) => {
+      // Preserve natural aspect ratio (e.g. square seals stay square, wide signatures stay wide)
+      const w = stampAspect >= 1.5 ? 0.28 : 0.18;
+      const h = Math.min(0.24, Math.max(0.06, (w / Math.max(0.3, stampAspect)) * 0.77));
       post({
         type: 'docMutate',
         mutation: {
           kind: 'addPdfImageStamp',
           page: viewer.currentPageNumber || 1,
-          rect: { x: 0.62, y: 0.78, w: 0.28, h: 0.1 },
+          rect: { x: Math.max(0.08, 0.9 - w), y: Math.max(0.08, 0.9 - h), w, h },
           pngBytes,
         },
       });
-      close();
+      closeModal();
     };
     if (uploadedPng) {
       finish(uploadedPng);
@@ -1035,31 +1037,18 @@ function openPdfSignatureModal() {
     }
   });
 
-  const sigBody = el('div', { class: 'dv-modal-body' }, [
-    el('div', { class: 'dv-label', text: t('pdfSignatureHint') }),
-    canvas,
-    fileInput,
-  ]);
-  sigBody.style.cssText = 'display:flex;flex-direction:column;gap:8px';
-  const modal = el('div', { class: 'dv-modal' }, [
-    el('div', { class: 'dv-modal-header' }, [
-      el('span', { class: 'dv-modal-title', text: t('pdfAddSignature') }),
-      iconButton('close', t('cancel'), close),
-    ]),
-    sigBody,
-    el('div', { class: 'dv-modal-footer' }, [clearBtn, loadBtn, applyBtn]),
-  ]);
-  modal.style.width = 'min(520px,92vw)';
-  backdrop.append(modal);
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) close();
+  const handle = openAccessibleModal({
+    id: 'pdfSignatureModal',
+    title: t('pdfAddSignature'),
+    width: 'min(520px, 92vw)',
+    body: [el('div', { class: 'dv-st-muted', text: t('pdfSignatureHint') }), canvas, fileInput],
+    footer: [clearBtn, loadBtn, applyBtn],
+    initialFocus: loadBtn,
   });
-  document.body.append(backdrop);
-  overlayStack.push({ id: 'pdfSignatureModal', isOpen: () => backdrop.isConnected, close });
+  closeModal = handle.close;
 }
 
 function openPdfWatermarkModal() {
-  const backdrop = el('div', { class: 'dv-modal-backdrop' });
   const textInput = el('input', { class: 'dv-input' }) as HTMLInputElement;
   textInput.placeholder = t('pdfWatermarkText');
   textInput.value = 'CONFIDENTIAL';
@@ -1067,14 +1056,17 @@ function openPdfWatermarkModal() {
   pageNumCb.type = 'checkbox';
   pageNumCb.checked = true;
 
-  const close = () => {
-    overlayStack.remove('pdfWatermarkModal');
-    backdrop.remove();
-  };
-
+  let closeModal: () => void = () => undefined;
   const applyBtn = el('button', { class: 'dv-btn dv-btn-primary', text: t('pdfWatermarkApply') });
   applyBtn.type = 'button';
-  applyBtn.addEventListener('click', () => {
+
+  const syncReady = () => {
+    applyBtn.disabled = !textInput.value.trim() && !pageNumCb.checked;
+  };
+  textInput.addEventListener('input', syncReady);
+  pageNumCb.addEventListener('change', syncReady);
+
+  const submit = () => {
     const label = textInput.value.trim();
     const pageNumbers = pageNumCb.checked;
     if (!label && !pageNumbers) return;
@@ -1087,7 +1079,7 @@ function openPdfWatermarkModal() {
           pageNumbers,
         },
       });
-      close();
+      closeModal();
     };
     if (!label) {
       send(undefined);
@@ -1105,29 +1097,28 @@ function openPdfWatermarkModal() {
     ctx.textBaseline = 'middle';
     ctx.fillText(label, 0, 0);
     void canvasToPngBytes(canvas).then(send);
+  };
+
+  applyBtn.addEventListener('click', submit);
+  textInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submit();
+    }
   });
 
-  const wmBody = el('div', { class: 'dv-modal-body' }, [
-    textInput,
-    el('label', { class: 'dv-check' }, [pageNumCb, el('span', { text: t('pdfWatermarkPageNums') })]),
-  ]);
-  wmBody.style.cssText = 'display:flex;flex-direction:column;gap:10px';
-  const modal = el('div', { class: 'dv-modal' }, [
-    el('div', { class: 'dv-modal-header' }, [
-      el('span', { class: 'dv-modal-title', text: t('pdfAddWatermark') }),
-      iconButton('close', t('cancel'), close),
-    ]),
-    wmBody,
-    el('div', { class: 'dv-modal-footer' }, [applyBtn]),
-  ]);
-  modal.style.width = 'min(420px,92vw)';
-  backdrop.append(modal);
-  backdrop.addEventListener('click', (e) => {
-    if (e.target === backdrop) close();
+  const handle = openAccessibleModal({
+    id: 'pdfWatermarkModal',
+    title: t('pdfAddWatermark'),
+    width: 'min(420px, 92vw)',
+    body: [
+      textInput,
+      el('label', { class: 'dv-check' }, [pageNumCb, el('span', { text: t('pdfWatermarkPageNums') })]),
+    ],
+    footer: [applyBtn],
+    initialFocus: textInput,
   });
-  document.body.append(backdrop);
-  overlayStack.push({ id: 'pdfWatermarkModal', isOpen: () => backdrop.isConnected, close });
-  textInput.focus();
+  closeModal = handle.close;
   textInput.select();
 }
 

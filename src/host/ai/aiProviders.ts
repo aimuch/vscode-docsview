@@ -604,7 +604,15 @@ export async function streamChatCompletion(
     }
     const messages: { role: 'user' | 'assistant'; content: unknown }[] = [];
     if (opts?.history?.length) {
-      for (const turn of opts.history.slice(-12)) {
+      let budget = 12_000;
+      const trimmed: { role: 'user' | 'assistant'; content: string }[] = [];
+      for (let i = opts.history.length - 1; i >= 0 && trimmed.length < 12; i--) {
+        const turn = opts.history[i];
+        if (turn.content.length > budget && trimmed.length > 0) break;
+        budget -= turn.content.length;
+        trimmed.unshift(turn);
+      }
+      for (const turn of trimmed) {
         messages.push({ role: turn.role, content: turn.content });
       }
     }
@@ -760,11 +768,37 @@ export async function runAiTarget(
     }
     const lmMessages: unknown[] = [];
     if (opts?.history?.length) {
-      for (const turn of opts.history.slice(-12)) {
+      let budget = 12_000;
+      const trimmed: { role: 'user' | 'assistant'; content: string }[] = [];
+      for (let i = opts.history.length - 1; i >= 0 && trimmed.length < 12; i--) {
+        const turn = opts.history[i];
+        if (turn.content.length > budget && trimmed.length > 0) break;
+        budget -= turn.content.length;
+        trimmed.unshift(turn);
+      }
+      for (const turn of trimmed) {
         lmMessages.push(turn.role === 'assistant' ? vsLm.assistantMessage(turn.content) : vsLm.userMessage(turn.content));
       }
     }
-    lmMessages.push(vsLm.userMessage(prompt));
+    if (opts?.imageDataUrl) {
+      const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/.exec(opts.imageDataUrl);
+      const DataPart = (vscode as unknown as {
+        LanguageModelDataPart?: { image?(data: Uint8Array, mime: string): unknown };
+        LanguageModelTextPart?: new (val: string) => unknown;
+      }).LanguageModelDataPart;
+      const TextPart = (vscode as unknown as {
+        LanguageModelTextPart?: new (val: string) => unknown;
+      }).LanguageModelTextPart;
+      if (m && DataPart?.image && TextPart) {
+        const imgBuf = Buffer.from(m[2], 'base64');
+        const imgBytes = new Uint8Array(imgBuf.buffer, imgBuf.byteOffset, imgBuf.byteLength);
+        lmMessages.push(vsLm.userMessage([new TextPart(prompt), DataPart.image(imgBytes, m[1])] as unknown as string));
+      } else {
+        return 'Current VS Code Language Model API does not support image attachments. Please switch AI provider in Settings (e.g. OpenAI, Qwen, Ollama, or OpenAI Compatible with a vision model).';
+      }
+    } else {
+      lmMessages.push(vsLm.userMessage(prompt));
+    }
     const response = await model.sendRequest(
       lmMessages,
       { justification: 'DocsView AI Assistant processes user-selected document excerpts and spreadsheet formulas.' },

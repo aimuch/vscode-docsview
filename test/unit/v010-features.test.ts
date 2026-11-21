@@ -1,4 +1,4 @@
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { degrees, PDFDocument, StandardFonts } from 'pdf-lib';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/webview/shared/api', () => ({
@@ -18,7 +18,7 @@ vi.mock('../../src/webview/shared/overlayStack', () => ({
 import { buildParagraphDiff, buildSheetsDiff } from '../../src/common/docDiff';
 import { diffInlineText, diffLineArrays } from '../../src/common/textDiff';
 import { readParquetFile, readSqliteDatabase } from '../../src/host/database';
-import { applyPdfMutations, extractPdfText } from '../../src/host/office';
+import { applyPdfMutations, extractPdfText, extractPdfTextWithMeta, OfficeSession } from '../../src/host/office';
 import { ExcelSession, rowsToXlsx } from '../../src/host/spreadsheet';
 import { extractChartDataset, renderChartSvg } from '../../src/webview/sheet/charts';
 import {
@@ -396,5 +396,160 @@ describe('v0.10.0 features', () => {
     expect(pq.columns).toEqual(['score']);
     expect(pq.rowCount).toBe(3);
     expect(pq.rows).toEqual([['10'], ['20'], ['30']]);
+  });
+
+  it('preserves cumulative Excel styles on save and protects formula cells during formatCells', async () => {
+    const xlsx = await rowsToXlsx(
+      [
+        ['Item', 'Price', 'Total'],
+        ['Apple', '12.5', '0'],
+      ],
+      'Sheet1',
+    );
+    const session = await ExcelSession.open(xlsx, 'test.xlsx');
+    // Convert C2 into a real evaluated formula cell (=B2*2 -> 25)
+    session.edit(0, [{ r: 1, c: 2, text: '=B2*2' }]);
+    // Apply 3 separate format patches sequentially: bold -> yellow fill -> currency numFmt
+    session.formatCells(0, 1, 2, 1, 2, { bold: true });
+    session.formatCells(0, 1, 2, 1, 2, { bg: '#FEF08A' });
+    session.formatCells(0, 1, 2, 1, 2, { numFmt: '#,##0.00' });
+
+    // Formula raw text must survive formatting intact in memory, while formatted display value updates!
+    const memCell = session.sheet(0)!.rows[1][2];
+    expect(typeof memCell).toBe('object');
+    if (memCell && typeof memCell === 'object') {
+      expect(memCell.raw).toBe('=B2*2');
+      expect(memCell.v).toBe('25.00');
+    }
+
+    // Export & reopen: BOTH bold AND yellow bg must be preserved (not wiped by later format op)!
+    const reopened = await ExcelSession.open(session.export(), 'test.xlsx');
+    const diskCell = reopened.sheet(0)!.rows[1][2];
+    expect(typeof diskCell).toBe('object');
+    if (diskCell && typeof diskCell === 'object') {
+      const style = reopened.sheet(0)!.styles?.[diskCell.s ?? -1];
+      expect(style?.bold).toBe(true);
+      expect(style?.bg?.toLowerCase()).toContain('fef08a');
+    }
+  });
+
+  it('fills SQLite INTEGER PRIMARY KEY from B-tree rowId and handles 0-byte empty DBs', () => {
+    expect(readSqliteDatabase(new Uint8Array(0)).tables).toEqual([]);
+
+    // Build synthetic SQLite with INTEGER PRIMARY KEY stored as NULL (serial type 0) in payload
+    const pageSize = 4096;
+    const buf = new Uint8Array(pageSize * 2);
+    const view = new DataView(buf.buffer);
+    buf.set(new TextEncoder().encode('SQLite format 3\0'), 0);
+    view.setUint16(16, pageSize, false);
+    buf[18] = 1;
+    buf[19] = 1;
+    view.setUint32(28, 2, false);
+    view.setUint32(56, 1, false);
+
+    const encVarint = (n: number): number[] => (n < 128 ? [n] : [((n >> 7) & 0x7f) | 0x80, n & 0x7f]);
+    const mkRec = (vals: (string | number | null)[]): Uint8Array => {
+      const serials: number[] = [];
+      const parts: Uint8Array[] = [];
+      for (const v of vals) {
+        if (v === null) {
+          serials.push(0);
+        } else if (typeof v === 'number') {
+          serials.push(1);
+          parts.push(new Uint8Array([v & 0xff]));
+        } else {
+          const b = new TextEncoder().encode(v);
+          serials.push(...encVarint(b.length * 2 + 13));
+          parts.push(b);
+        }
+      }
+      const hdr = 1 + serials.length;
+      const out = new Uint8Array(hdr + parts.reduce((s, p) => s + p.length, 0));
+      out[0] = hdr;
+      out.set(serials, 1);
+      let pos = hdr;
+      for (const p of parts) {
+        out.set(p, pos);
+        pos += p.length;
+      }
+      return out;
+    };
+    const writePage = (page0: number, rows: { rowId: number; rec: Uint8Array }[]) => {
+      const base = page0 * pageSize;
+      const hdrOff = page0 === 0 ? base + 100 : base;
+      buf[hdrOff] = 0x0d;
+      view.setUint16(hdrOff + 3, rows.length, false);
+      let cur = pageSize;
+      rows.forEach(({ rowId, rec }, i) => {
+        const pl = encVarint(rec.length);
+        const rid = encVarint(rowId);
+        cur -= pl.length + rid.length + rec.length;
+        let p = base + cur;
+        buf.set(pl, p);
+        p += pl.length;
+        buf.set(rid, p);
+        p += rid.length;
+        buf.set(rec, p);
+        view.setUint16(hdrOff + 8 + i * 2, cur, false);
+      });
+      view.setUint16(hdrOff + 5, cur, false);
+    };
+
+    writePage(0, [
+      { rowId: 1, rec: mkRec(['table', 'items', 'items', 2, 'CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)']) },
+    ]);
+    writePage(1, [{ rowId: 42, rec: mkRec([null, 'Widget']) }]);
+
+    const db = readSqliteDatabase(buf);
+    expect(db.tables[0].rows).toEqual([['42', 'Widget']]);
+  });
+
+  it('round-trips PDF image stamps & watermarks on rotated pages via Base64 backup and reports true page count', async () => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const p1 = doc.addPage([400, 600]);
+    p1.setRotation(degrees(90));
+    p1.drawText('Rotated Page', { x: 40, y: 300, size: 16, font });
+    doc.addPage([400, 600]);
+    const rawPdf = new Uint8Array(await doc.save());
+
+    const meta = await extractPdfTextWithMeta(rawPdf, 1);
+    expect(meta.totalPages).toBe(2);
+    expect(meta.pages).toHaveLength(1);
+
+    const session = await OfficeSession.open('pdf', rawPdf, 'rotated.pdf');
+    await session.apply({
+      kind: 'addPdfImageStamp',
+      page: 1,
+      rect: { x: 0.2, y: 0.2, w: 0.2, h: 0.1 },
+      pngBytes: ONE_BY_ONE_PNG,
+    });
+    await session.apply({
+      kind: 'addPdfWatermark',
+      watermarkPngBytes: ONE_BY_ONE_PNG,
+      pageNumbers: true,
+    });
+    const bkp = session.backup();
+    expect(bkp).toContain('pngBytesB64');
+    expect(bkp).toContain('watermarkPngBytesB64');
+
+    const restored = await OfficeSession.open('pdf', rawPdf, 'rotated.pdf');
+    await restored.restore(bkp);
+    expect(restored.dirty).toBe(true);
+    expect(restored.export().byteLength).toBeGreaterThan(rawPdf.byteLength);
+  });
+
+  it('skips formula cells during computeSplitColumn', () => {
+    const rows = [
+      ['Expr'],
+      [{ v: 'a,b', raw: '=CONCAT("a",",","b")' }],
+      ['x,y'],
+    ];
+    const split = computeSplitColumn(rows, 1, 0, ',');
+    expect(split.extraCols).toBe(1);
+    expect(split.changes).toEqual([
+      { r: 2, c: 0, text: 'x' },
+      { r: 2, c: 1, text: 'y' },
+    ]);
   });
 });

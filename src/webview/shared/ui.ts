@@ -576,6 +576,8 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
 
   const rightSep = divider();
   const overflowPop = el('div', { class: 'dv-menu dv-overflow-popover' });
+  overflowPop.setAttribute('role', 'dialog');
+  overflowPop.setAttribute('aria-label', t('moreTools'));
   overflowPop.hidden = true;
 
   const closeOverflow = () => {
@@ -612,8 +614,9 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
       restoreFocus: () => overflowBtn,
     });
     const rect = overflowBtn.getBoundingClientRect();
-    overflowPop.style.top = `${rect.bottom + 6}px`;
+    overflowPop.style.top = `${Math.min(window.innerHeight - 160, rect.bottom + 6)}px`;
     overflowPop.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    overflowPop.querySelector<HTMLElement>('button:not([disabled])')?.focus();
   };
 
   const overflowBtn = iconButton('chevronsRight', t('moreTools'), () => {
@@ -624,6 +627,8 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     openOverflow();
   });
   overflowBtn.classList.add('dv-overflow-btn');
+  overflowBtn.setAttribute('aria-haspopup', 'dialog');
+  overflowBtn.setAttribute('aria-expanded', 'false');
   overflowBtn.hidden = true;
 
   const bar = el('div', { class: 'dv-toolbar' }, [
@@ -797,10 +802,14 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
       }
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
+      const activeEl = document.activeElement as HTMLElement | null;
+      if (!activeEl || !drawer.contains(activeEl)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && activeEl === first) {
         e.preventDefault();
         last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
+      } else if (!e.shiftKey && activeEl === last) {
         e.preventDefault();
         first.focus();
       }
@@ -1062,9 +1071,12 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
 
     const children: HTMLElement[] = [head, zonesGrid];
 
-    if (hidden.length) {
+    // Avoid duplicating doc:* actions already shown with pin controls inside "This Document".
+    const poolIds = hidden.filter((id) => !id.startsWith('doc:'));
+    if (poolIds.length) {
       const pool = el('div', { class: 'dv-tb-pool' });
-      for (const id of hidden) {
+      const DIRECT_BTN_SLOTS = new Set<ToolbarItemId>(['nav', 'find', 'comments']);
+      for (const id of poolIds) {
         const chip = el('div', { class: 'dv-tb-pool-item' });
         chip.dataset.slotId = id;
         chip.draggable = true;
@@ -1077,18 +1089,25 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
         });
 
         const isSettingSlot = SETTING_SLOTS.has(id);
-        const useBtn = el('button', {
-          class: 'dv-tb-use-btn',
-          text: isSettingSlot ? t('toolbarGoSetting') : t('toolbarUseNow'),
-          title: isSettingSlot ? t('toolbarGoSetting') : t('toolbarUseNow'),
-        });
-        useBtn.type = 'button';
-        useBtn.addEventListener('click', () => {
-          if (isSettingSlot && focusDrawerSetting(id)) {
-            return;
-          }
-          invokeSlotDirectly(id);
-        });
+        const canDirectRun = slotActionHandlers.has(id) || DIRECT_BTN_SLOTS.has(id);
+        const btns: HTMLElement[] = [];
+        if (isSettingSlot || canDirectRun) {
+          const useBtn = el('button', {
+            class: 'dv-tb-use-btn',
+            text: isSettingSlot ? t('toolbarGoSetting') : t('toolbarUseNow'),
+            title: isSettingSlot ? t('toolbarGoSetting') : t('toolbarUseNow'),
+          });
+          useBtn.type = 'button';
+          useBtn.addEventListener('click', () => {
+            if (isSettingSlot && focusDrawerSetting(id)) {
+              return;
+            }
+            if (canDirectRun) {
+              invokeSlotDirectly(id);
+            }
+          });
+          btns.push(useBtn);
+        }
 
         const addLeft = el('button', { class: 'dv-tb-pin-btn', text: t('pinLeft'), title: t('toLeft') });
         addLeft.type = 'button';
@@ -1097,10 +1116,11 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
         const addRight = el('button', { class: 'dv-tb-pin-btn', text: t('pinRight'), title: t('toRight') });
         addRight.type = 'button';
         addRight.addEventListener('click', () => moveItem(id, 'right'));
+        btns.push(addLeft, addRight);
 
         chip.append(
           el('span', { class: 'dv-tb-name', text: slotTitle(id) }),
-          el('span', { class: 'dv-tb-btns' }, [useBtn, addLeft, addRight]),
+          el('span', { class: 'dv-tb-btns' }, btns),
         );
         pool.append(chip);
       }
@@ -1475,6 +1495,28 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
     const sub = typeof opts.subtitle === 'function' ? opts.subtitle() : (opts.subtitle ?? config.kind.toUpperCase());
     subtitleEl.textContent = sub;
     const scrollTop = contentEl.scrollTop;
+    // Capture stable focus locator before replacing drawer children so keyboard users never lose focus.
+    const activeEl = document.activeElement instanceof HTMLElement && contentEl.contains(document.activeElement)
+      ? document.activeElement
+      : undefined;
+    let restoreSelector: string | undefined;
+    let restoreBtnIdx = -1;
+    if (activeEl) {
+      const slotRow = activeEl.closest<HTMLElement>('[data-slot-id]');
+      const docRow = activeEl.closest<HTMLElement>('[data-doc-action]');
+      if (slotRow) {
+        const zone = slotRow.closest<HTMLElement>('[data-zone]')?.dataset.zone;
+        const containerSel = zone
+          ? `.dv-tb-list[data-zone="${zone}"] [data-slot-id="${slotRow.dataset.slotId}"]`
+          : `[data-slot-id="${slotRow.dataset.slotId}"]`;
+        restoreSelector = containerSel;
+        restoreBtnIdx = [...slotRow.querySelectorAll('button')].indexOf(activeEl as HTMLButtonElement);
+      } else if (docRow) {
+        restoreSelector = `[data-doc-action="${docRow.dataset.docAction}"]`;
+        restoreBtnIdx = [...docRow.querySelectorAll('button')].indexOf(activeEl as HTMLButtonElement);
+      }
+    }
+
     const docSection = buildDocumentSection();
     contentEl.replaceChildren(
       ...(docSection ? [docSection] : []),
@@ -1483,6 +1525,15 @@ export function customToolbar(opts: CustomToolbarOptions): CustomToolbar {
       buildToolbarSection(),
     );
     contentEl.scrollTop = scrollTop;
+
+    if (restoreSelector && restoreBtnIdx >= 0) {
+      const container = contentEl.querySelector<HTMLElement>(restoreSelector);
+      const btns = container?.querySelectorAll<HTMLButtonElement>('button');
+      const target = btns?.[restoreBtnIdx] ?? btns?.[0];
+      if (target && !target.disabled) {
+        target.focus();
+      }
+    }
   }
 
   function ensureDrawerMounted(): void {

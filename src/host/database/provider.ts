@@ -59,6 +59,10 @@ export class DatabasePreviewProvider implements vscode.CustomReadonlyEditorProvi
           editable: false,
           canStructure: false,
           supportsFormulas: false,
+          canCompare: false,
+          noticeText: pq.truncated
+            ? `Showing first ${pq.rows.length.toLocaleString()} of ${pq.rowCount.toLocaleString()} rows.`
+            : undefined,
         };
       } else {
         const db = readSqliteDatabase(bytes);
@@ -77,11 +81,16 @@ export class DatabasePreviewProvider implements vscode.CustomReadonlyEditorProvi
           });
         }
         const anyTrunc = db.tables.some((tbl) => tbl.truncated);
+        const notes: string[] = [];
+        if (db.isWal) notes.push('WAL mode detected: uncommitted -wal changes may not appear until checkpointed.');
+        if (anyTrunc) notes.push('Large tables truncated to first 50,000 rows.');
         doc.info = {
           sheets: doc.sheets.map((s) => ({ name: s.name })),
           editable: false,
           canStructure: false,
           supportsFormulas: false,
+          canCompare: false,
+          noticeText: notes.length ? notes.join(' ') : undefined,
         };
       }
     } catch (err) {

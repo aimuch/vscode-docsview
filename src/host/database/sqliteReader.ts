@@ -1,5 +1,6 @@
 // Pure TypeScript SQLite 3 binary B-tree reader (zero native or npm dependencies).
-// Parses the SQLite file header, sqlite_master schema, and table B-tree pages (interior + leaf + overflow).
+// Parses the SQLite file header, sqlite_master schema, table B-trees (0x05/0x0d),
+// WITHOUT ROWID index B-trees (0x02/0x0a), overflow pages, and INTEGER PRIMARY KEY rowid aliases.
 
 export interface SqliteTable {
   name: string;
@@ -12,27 +13,39 @@ export interface SqliteTable {
 export interface SqliteDatabase {
   tables: SqliteTable[];
   pageSize: number;
+  isWal?: boolean;
 }
 
-function readVarint(buf: Uint8Array, offset: number): { value: number; next: number } {
-  let value = 0;
+const MAX_PAYLOAD_BYTES = 32 * 1024 * 1024;
+
+function readVarintBig(buf: Uint8Array, offset: number): { value: bigint; next: number } {
+  let value = 0n;
   let i = 0;
   for (; i < 8 && offset + i < buf.length; i++) {
     const b = buf[offset + i];
-    value = value * 128 + (b & 0x7f);
+    value = (value << 7n) | BigInt(b & 0x7f);
     if ((b & 0x80) === 0) {
       return { value, next: offset + i + 1 };
     }
   }
   if (offset + 8 < buf.length) {
-    value = value * 256 + buf[offset + 8];
+    value = (value << 8n) | BigInt(buf[offset + 8]);
+    // 64-bit two's complement signed conversion
+    if (value >= 1n << 63n) {
+      value -= 1n << 64n;
+    }
     return { value, next: offset + 9 };
   }
   return { value, next: offset + i };
 }
 
+function readVarint(buf: Uint8Array, offset: number): { value: number; next: number } {
+  const r = readVarintBig(buf, offset);
+  return { value: Number(r.value), next: r.next };
+}
+
 function readSignedIntBE(buf: Uint8Array, offset: number, byteLen: number): number {
-  if (byteLen === 0) return 0;
+  if (byteLen === 0 || offset + byteLen > buf.length) return 0;
   let v = buf[offset] & 0x80 ? -1 : 0;
   for (let i = 0; i < byteLen; i++) {
     v = v * 256 + buf[offset + i];
@@ -60,11 +73,65 @@ function decodeText(bytes: Uint8Array, encoding: number): string {
   return new TextDecoder('utf-8').decode(bytes);
 }
 
-function parseCreateTableColumns(sql: string): string[] {
-  const open = sql.indexOf('(');
-  const close = sql.lastIndexOf(')');
-  if (open < 0 || close <= open) return [];
-  const body = sql.slice(open + 1, close);
+function stripSqlComments(sql: string): string {
+  let out = '';
+  let i = 0;
+  let quote: string | null = null;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (quote) {
+      out += ch;
+      if (ch === quote) {
+        if (sql[i + 1] === quote) {
+          out += sql[i + 1];
+          i += 2;
+          continue;
+        }
+        quote = null;
+      }
+      i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === '-' && sql[i + 1] === '-') {
+      while (i < sql.length && sql[i] !== '\n') i++;
+      continue;
+    }
+    if (ch === '/' && sql[i + 1] === '*') {
+      i += 2;
+      while (i < sql.length && !(sql[i] === '*' && sql[i + 1] === '/')) i++;
+      i += 2;
+      out += ' ';
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+interface ParsedCreateTable {
+  columns: string[];
+  rowidAliasCol: number;
+  withoutRowId: boolean;
+}
+
+function parseCreateTable(sql: string): ParsedCreateTable {
+  const clean = stripSqlComments(sql);
+  const open = clean.indexOf('(');
+  const close = clean.lastIndexOf(')');
+  if (open < 0 || close <= open) {
+    return { columns: [], rowidAliasCol: -1, withoutRowId: false };
+  }
+  const tail = clean.slice(close + 1);
+  const withoutRowId = /\bwithout\s+rowid\b/i.test(tail);
+  const body = clean.slice(open + 1, close);
+
   const parts: string[] = [];
   let depth = 0;
   let quote: string | null = null;
@@ -72,7 +139,13 @@ function parseCreateTableColumns(sql: string): string[] {
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
     if (quote) {
-      if (ch === quote) quote = null;
+      if (ch === quote) {
+        if (body[i + 1] === quote) {
+          i++;
+          continue;
+        }
+        quote = null;
+      }
       continue;
     }
     if (ch === '"' || ch === "'" || ch === '`' || ch === '[') {
@@ -89,34 +162,69 @@ function parseCreateTableColumns(sql: string): string[] {
   parts.push(body.slice(start).trim());
 
   const cols: string[] = [];
+  let rowidAliasCol = -1;
+  let tablePkCol: string | undefined;
   const constraintRe = /^(?:constraint|primary\s+key|unique|check|foreign\s+key)\b/i;
+
   for (const part of parts) {
-    if (!part || constraintRe.test(part)) continue;
+    if (!part) continue;
+    if (constraintRe.test(part)) {
+      const m = /primary\s+key\s*\(\s*([^,)]+)\s*\)/i.exec(part);
+      if (m) {
+        tablePkCol = m[1].trim().replace(/^["'`[]|["'`\]]$/g, '').toLowerCase();
+      }
+      continue;
+    }
     let name = '';
+    let rest = '';
     if (part[0] === '"' || part[0] === '`' || part[0] === "'") {
-      const end = part.indexOf(part[0], 1);
-      name = end > 0 ? part.slice(1, end) : part;
+      const q = part[0];
+      let j = 1;
+      while (j < part.length) {
+        if (part[j] === q) {
+          if (part[j + 1] === q) {
+            name += q;
+            j += 2;
+            continue;
+          }
+          break;
+        }
+        name += part[j++];
+      }
+      rest = part.slice(j + 1).trim();
     } else if (part[0] === '[') {
       const end = part.indexOf(']', 1);
       name = end > 0 ? part.slice(1, end) : part;
+      rest = end > 0 ? part.slice(end + 1).trim() : '';
     } else {
-      name = part.split(/\s+/)[0] ?? '';
+      const m = /^(\S+)([\s\S]*)$/.exec(part);
+      name = m?.[1] ?? '';
+      rest = m?.[2]?.trim() ?? '';
     }
-    if (name) cols.push(name);
+    if (!name) continue;
+    const colIdx = cols.length;
+    cols.push(name);
+    if (!withoutRowId && /^integer\b/i.test(rest) && /\bprimary\s+key\b/i.test(rest) && !/\bdesc\b/i.test(rest)) {
+      rowidAliasCol = colIdx;
+    } else if (!withoutRowId && tablePkCol && name.toLowerCase() === tablePkCol && /^integer\b/i.test(rest)) {
+      rowidAliasCol = colIdx;
+    }
   }
-  return cols;
+  return { columns: cols, rowidAliasCol, withoutRowId };
 }
 
 function decodeRecord(payload: Uint8Array, encoding: number): (string | number | null)[] {
   if (!payload.length) return [];
   const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
   const hdr = readVarint(payload, 0);
-  const headerEnd = Math.min(payload.length, hdr.value);
+  if (hdr.value <= 0 || hdr.value > payload.length) return [];
+  const headerEnd = hdr.value;
   const serialTypes: number[] = [];
   let pos = hdr.next;
   while (pos < headerEnd) {
     const st = readVarint(payload, pos);
     serialTypes.push(st.value);
+    if (st.next <= pos) break;
     pos = st.next;
   }
 
@@ -169,6 +277,9 @@ function decodeRecord(payload: Uint8Array, encoding: number): (string | number |
 
 /** Reads an SQLite 3 database buffer into tables with columns and stringified rows. */
 export function readSqliteDatabase(bytes: Uint8Array, maxRowsPerTable = 50_000): SqliteDatabase {
+  if (bytes.length === 0) {
+    return { tables: [], pageSize: 4096, isWal: false };
+  }
   if (bytes.length < 100) {
     throw new Error('Not a valid SQLite 3 database (file too short).');
   }
@@ -180,8 +291,15 @@ export function readSqliteDatabase(bytes: Uint8Array, maxRowsPerTable = 50_000):
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const rawPageSize = view.getUint16(16, false);
   const pageSize = rawPageSize === 1 ? 65536 : rawPageSize;
+  if (pageSize < 512 || (pageSize & (pageSize - 1)) !== 0) {
+    throw new Error(`Invalid SQLite page size (${pageSize}).`);
+  }
   const reserved = bytes[20];
   const usableSize = pageSize - reserved;
+  if (usableSize < 480) {
+    throw new Error(`Invalid SQLite usable page size (${usableSize}).`);
+  }
+  const isWal = bytes[18] === 2 || bytes[19] === 2;
   const encoding = view.getUint32(56, false) || 1;
   const totalPages = Math.floor(bytes.length / pageSize);
 
@@ -190,23 +308,40 @@ export function readSqliteDatabase(bytes: Uint8Array, maxRowsPerTable = 50_000):
   const assemblePayload = (
     localStart: number,
     payloadLen: number,
+    isIndex: boolean,
   ): Uint8Array => {
-    const maxLocal = usableSize - 35;
+    if (payloadLen <= 0 || payloadLen > MAX_PAYLOAD_BYTES || localStart < 0 || localStart >= bytes.length) {
+      return new Uint8Array(0);
+    }
+    const maxLocal = isIndex ? Math.floor(((usableSize - 12) * 64) / 255) - 23 : usableSize - 35;
     if (payloadLen <= maxLocal) {
       return bytes.subarray(localStart, Math.min(bytes.length, localStart + payloadLen));
     }
-    const minLocal = ((usableSize - 12) * 32) / 255 - 23;
-    const k = Math.floor(minLocal) + ((payloadLen - Math.floor(minLocal)) % (usableSize - 4));
-    const localLen = k <= maxLocal ? k : Math.floor(minLocal);
+    const minLocal = Math.floor(((usableSize - 12) * 32) / 255) - 23;
+    const k = minLocal + ((payloadLen - minLocal) % (usableSize - 4));
+    const localLen = k <= maxLocal ? k : minLocal;
+    if (localStart + localLen + 4 > bytes.length) {
+      return bytes.subarray(localStart, Math.min(bytes.length, localStart + Math.max(0, localLen)));
+    }
     const out = new Uint8Array(payloadLen);
-    out.set(bytes.subarray(localStart, Math.min(bytes.length, localStart + localLen)), 0);
+    out.set(bytes.subarray(localStart, localStart + localLen), 0);
     let written = localLen;
     let nextOverflow = view.getUint32(localStart + localLen, false);
     let guard = 0;
-    while (nextOverflow > 0 && nextOverflow <= totalPages && written < payloadLen && guard++ < 10_000) {
+    const seenOverflow = new Set<number>();
+    while (
+      nextOverflow > 0 &&
+      nextOverflow <= totalPages &&
+      !seenOverflow.has(nextOverflow) &&
+      written < payloadLen &&
+      guard++ < 10_000
+    ) {
+      seenOverflow.add(nextOverflow);
       const off = pageOffset(nextOverflow);
+      if (off + 4 > bytes.length) break;
       const next = view.getUint32(off, false);
-      const chunk = Math.min(payloadLen - written, usableSize - 4);
+      const chunk = Math.min(payloadLen - written, usableSize - 4, Math.max(0, bytes.length - (off + 4)));
+      if (chunk <= 0) break;
       out.set(bytes.subarray(off + 4, off + 4 + chunk), written);
       written += chunk;
       nextOverflow = next;
@@ -214,11 +349,11 @@ export function readSqliteDatabase(bytes: Uint8Array, maxRowsPerTable = 50_000):
     return out;
   };
 
-  const scanTableBTree = (
+  const scanBTree = (
     rootPage: number,
     limit: number,
-  ): { records: (string | number | null)[][]; truncated: boolean } => {
-    const records: (string | number | null)[][] = [];
+  ): { records: { rowId?: bigint; values: (string | number | null)[] }[]; truncated: boolean } => {
+    const records: { rowId?: bigint; values: (string | number | null)[] }[] = [];
     let truncated = false;
     const visited = new Set<number>();
 
@@ -227,22 +362,24 @@ export function readSqliteDatabase(bytes: Uint8Array, maxRowsPerTable = 50_000):
       visited.add(pageNo);
       const base = pageOffset(pageNo);
       const headerOff = pageNo === 1 ? base + 100 : base;
+      if (headerOff + 8 > bytes.length) return;
       const pageType = bytes[headerOff];
       const cellCount = view.getUint16(headerOff + 3, false);
 
       if (pageType === 0x05) {
-        // Interior table B-tree page
+        if (headerOff + 12 + cellCount * 2 > bytes.length) return;
         const rightMost = view.getUint32(headerOff + 8, false);
         const ptrArray = headerOff + 12;
         for (let i = 0; i < cellCount; i++) {
           const cellOff = base + view.getUint16(ptrArray + i * 2, false);
+          if (cellOff + 4 > bytes.length) continue;
           const childPage = view.getUint32(cellOff, false);
           visit(childPage);
           if (truncated) return;
         }
         visit(rightMost);
       } else if (pageType === 0x0d) {
-        // Leaf table B-tree page
+        if (headerOff + 8 + cellCount * 2 > bytes.length) return;
         const ptrArray = headerOff + 8;
         for (let i = 0; i < cellCount; i++) {
           if (records.length >= limit) {
@@ -250,11 +387,47 @@ export function readSqliteDatabase(bytes: Uint8Array, maxRowsPerTable = 50_000):
             return;
           }
           const cellOff = base + view.getUint16(ptrArray + i * 2, false);
+          if (cellOff >= bytes.length) continue;
           const pLen = readVarint(bytes, cellOff);
-          const rowId = readVarint(bytes, pLen.next);
-          const payload = assemblePayload(rowId.next, pLen.value);
-          const rec = decodeRecord(payload, encoding);
-          records.push(rec);
+          const rowId = readVarintBig(bytes, pLen.next);
+          const payload = assemblePayload(rowId.next, pLen.value, false);
+          const values = decodeRecord(payload, encoding);
+          records.push({ rowId: rowId.value, values });
+        }
+      } else if (pageType === 0x02) {
+        // Interior index B-tree page (used by WITHOUT ROWID tables)
+        if (headerOff + 12 + cellCount * 2 > bytes.length) return;
+        const rightMost = view.getUint32(headerOff + 8, false);
+        const ptrArray = headerOff + 12;
+        for (let i = 0; i < cellCount; i++) {
+          const cellOff = base + view.getUint16(ptrArray + i * 2, false);
+          if (cellOff + 4 > bytes.length) continue;
+          const childPage = view.getUint32(cellOff, false);
+          visit(childPage);
+          if (truncated) return;
+          if (records.length >= limit) {
+            truncated = true;
+            return;
+          }
+          const pLen = readVarint(bytes, cellOff + 4);
+          const payload = assemblePayload(pLen.next, pLen.value, true);
+          records.push({ values: decodeRecord(payload, encoding) });
+        }
+        visit(rightMost);
+      } else if (pageType === 0x0a) {
+        // Leaf index B-tree page (used by WITHOUT ROWID tables)
+        if (headerOff + 8 + cellCount * 2 > bytes.length) return;
+        const ptrArray = headerOff + 8;
+        for (let i = 0; i < cellCount; i++) {
+          if (records.length >= limit) {
+            truncated = true;
+            return;
+          }
+          const cellOff = base + view.getUint16(ptrArray + i * 2, false);
+          if (cellOff >= bytes.length) continue;
+          const pLen = readVarint(bytes, cellOff);
+          const payload = assemblePayload(pLen.next, pLen.value, true);
+          records.push({ values: decodeRecord(payload, encoding) });
         }
       }
     };
@@ -264,10 +437,11 @@ export function readSqliteDatabase(bytes: Uint8Array, maxRowsPerTable = 50_000):
   };
 
   // Read sqlite_master on page 1
-  const master = scanTableBTree(1, 5000);
+  const master = scanBTree(1, 5000);
   const tables: SqliteTable[] = [];
 
-  for (const rec of master.records) {
+  for (const entry of master.records) {
+    const rec = entry.values;
     const type = String(rec[0] ?? '');
     const name = String(rec[1] ?? '');
     const rootPage = Number(rec[3] ?? 0);
@@ -275,18 +449,24 @@ export function readSqliteDatabase(bytes: Uint8Array, maxRowsPerTable = 50_000):
     if (type !== 'table' || !name || name.startsWith('sqlite_') || rootPage < 1) {
       continue;
     }
-    const columns = parseCreateTableColumns(sql);
-    const { records, truncated } = scanTableBTree(rootPage, maxRowsPerTable);
-    const colCount = Math.max(columns.length, records[0]?.length ?? 0);
+    const { columns, rowidAliasCol } = parseCreateTable(sql);
+    const { records, truncated } = scanBTree(rootPage, maxRowsPerTable);
+    const colCount = Math.max(columns.length, records[0]?.values.length ?? 0);
     const finalCols =
       columns.length >= colCount
         ? columns
         : [...columns, ...Array.from({ length: colCount - columns.length }, (_, i) => `col_${columns.length + i + 1}`)];
-    const rows = records.map((r) =>
-      Array.from({ length: colCount }, (_, c) => (r[c] == null ? '' : String(r[c]))),
+    const rows = records.map(({ rowId, values }) =>
+      Array.from({ length: colCount }, (_, c) => {
+        const val = values[c];
+        if (val == null && c === rowidAliasCol && rowId !== undefined) {
+          return rowId.toString();
+        }
+        return val == null ? '' : String(val);
+      }),
     );
     tables.push({ name, sql, columns: finalCols, rows, truncated });
   }
 
-  return { tables, pageSize };
+  return { tables, pageSize, isWal };
 }

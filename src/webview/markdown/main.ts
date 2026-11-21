@@ -26,25 +26,29 @@ scroller.append(article);
 const sidebar = new Sidebar(t('toc'), undefined, { defaultOpen: true });
 let latestToc: TocEntry[] = [];
 const outline = new Outline((id) => scrollToAnchor(`#${id}`), {
-  onReorder: (fromKey, toKey) => {
+  onReorder: (fromKey, toKey, pos) => {
     const fromIdx = latestToc.findIndex((h) => h.id === fromKey);
     const toIdx = latestToc.findIndex((h) => h.id === toKey);
     if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
     const fromItem = latestToc[fromIdx];
     const toItem = latestToc[toIdx];
     const lines = getSourceLines();
-    let fromEnd = lines.length;
-    for (let i = fromIdx + 1; i < latestToc.length; i++) {
-      if (latestToc[i].level <= fromItem.level) {
-        fromEnd = latestToc[i].line;
-        break;
+    const sectionEnd = (idx: number): number => {
+      const lvl = latestToc[idx].level;
+      for (let i = idx + 1; i < latestToc.length; i++) {
+        if (latestToc[i].level <= lvl) {
+          return latestToc[i].line;
+        }
       }
-    }
+      return lines.length;
+    };
+    const fromEnd = sectionEnd(fromIdx);
+    const toLine = pos === 'after' ? sectionEnd(toIdx) : toItem.line;
     post({
       type: 'moveMarkdownLines',
       fromStart: fromItem.line,
       fromEnd,
-      toLine: toItem.line,
+      toLine,
     });
   },
 });
@@ -350,7 +354,7 @@ const ai = createAiAssistant({
         const trailing = expected.slice(stripped.length) || '\n';
         let nextBlock: string;
         if (m.selectedPhrase && stripped.includes(m.selectedPhrase)) {
-          nextBlock = stripped.replace(m.selectedPhrase, text.trim()) + trailing;
+          nextBlock = stripped.replace(m.selectedPhrase, () => text.trim()) + trailing;
         } else {
           nextBlock = text.trimEnd() + trailing;
         }
@@ -475,18 +479,41 @@ app.append(
 setEditMode(readState().mdEdit === true);
 setRtl(rtl);
 
+progressBar.setAttribute('role', 'progressbar');
+progressBar.setAttribute('aria-valuemin', '0');
+progressBar.setAttribute('aria-valuemax', '100');
+
+function updateReadingProgress() {
+  const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+  const scrollable = maxScroll > 20;
+  progressBar.hidden = !scrollable;
+  const pct = scrollable ? Math.min(100, Math.max(0, (scroller.scrollTop / maxScroll) * 100)) : 0;
+  progressFill.style.width = `${pct.toFixed(1)}%`;
+  progressBar.setAttribute('aria-valuenow', String(Math.round(pct)));
+}
+
+let progressRaf = 0;
 scroller.addEventListener(
   'scroll',
   () => {
-    const maxScroll = scroller.scrollHeight - scroller.clientHeight;
-    const pct = maxScroll > 0 ? Math.min(100, Math.max(0, (scroller.scrollTop / maxScroll) * 100)) : 0;
-    progressFill.style.width = `${pct.toFixed(1)}%`;
+    if (!progressRaf) {
+      progressRaf = requestAnimationFrame(() => {
+        progressRaf = 0;
+        updateReadingProgress();
+      });
+    }
   },
   { passive: true },
 );
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => updateReadingProgress()).observe(article);
+}
 
+// Use Alt+Z for Focus Mode so we never hijack VS Code's global Ctrl/Cmd+Shift+F search!
 window.addEventListener('keydown', (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+  const tag = (e.target as HTMLElement | null)?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     setFocusMode(!focusMode);
   }

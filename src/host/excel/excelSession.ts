@@ -991,6 +991,9 @@ export class ExcelSession {
     const sc0 = Math.max(0, Math.min(c0, c1));
     const sc1 = Math.min(Math.max(0, model.colCount - 1), Math.max(c0, c1));
 
+    const styleKeyMap = new Map<string, number>();
+    model.styles.forEach((st, idx) => styleKeyMap.set(JSON.stringify(st), idx));
+
     for (let r = sr0; r <= sr1; r++) {
       while (model.rows.length <= r) model.rows.push([]);
       const row = model.rows[r];
@@ -1009,18 +1012,26 @@ export class ExcelSession {
         if (patch.align !== undefined) baseStyle.align = patch.align;
         if (patch.bg !== undefined) baseStyle.bg = patch.bg || undefined;
         if (patch.color !== undefined) baseStyle.color = patch.color || undefined;
-        const newStyleIdx = model.styles.length;
-        model.styles.push(baseStyle);
-        obj.s = newStyleIdx;
+        const sk = JSON.stringify(baseStyle);
+        let styleIdx = styleKeyMap.get(sk);
+        if (styleIdx === undefined) {
+          styleIdx = model.styles.length;
+          model.styles.push(baseStyle);
+          styleKeyMap.set(sk, styleIdx);
+        }
+        obj.s = styleIdx;
 
         if (patch.numFmt !== undefined) {
           const coord = `${r},${c}`;
+          const isFormula = Boolean(obj.raw?.startsWith('='));
           if (patch.numFmt && patch.numFmt !== 'General') {
             loaded.numFmts.set(coord, patch.numFmt);
             const scalar = loaded.scalars.get(coord);
             if (typeof scalar === 'number') {
               obj.v = formatNumber(scalar, patch.numFmt, loaded.date1904);
-              obj.raw = String(scalar);
+              if (!isFormula) {
+                obj.raw = String(scalar);
+              }
               obj.n = true;
             }
           } else {
@@ -1028,7 +1039,9 @@ export class ExcelSession {
             const scalar = loaded.scalars.get(coord);
             if (typeof scalar === 'number') {
               obj.v = String(scalar);
-              delete obj.raw;
+              if (!isFormula) {
+                delete obj.raw;
+              }
               obj.n = true;
             }
           }

@@ -11,7 +11,7 @@ import { ExcelEditorProvider } from './host/excel/provider';
 import { initHistory, listVersions, showHistory, watchTextSaves } from './host/history';
 import { JsonlEditorProvider } from './host/jsonl/provider';
 import { MarkdownPreviewProvider } from './host/markdown/provider';
-import { MediaPreviewProvider } from './host/media/provider';
+import { cleanupMediaTempFiles, MediaPreviewProvider } from './host/media/provider';
 import { OfficeEditorProvider } from './host/office/provider';
 import { getViewerStates, onViewerStatus } from './host/status';
 import {
@@ -140,6 +140,6 @@ export function activate(context: vscode.ExtensionContext): {
   };
 }
 
-export function deactivate(): void {
-  // Nothing to clean up: everything is registered on context.subscriptions.
+export function deactivate(): Promise<void> {
+  return cleanupMediaTempFiles();
 }
