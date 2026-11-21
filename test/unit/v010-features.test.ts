@@ -1,4 +1,5 @@
-import { degrees, PDFDocument, StandardFonts } from 'pdf-lib';
+import { zlibSync } from 'fflate';
+import { degrees, PDFDocument, PDFName, StandardFonts } from 'pdf-lib';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/webview/shared/api', () => ({
@@ -19,6 +20,7 @@ import { buildParagraphDiff, buildSheetsDiff } from '../../src/common/docDiff';
 import { diffInlineText, diffLineArrays } from '../../src/common/textDiff';
 import { readParquetFile, readSqliteDatabase } from '../../src/host/database';
 import { applyPdfMutations, extractPdfText, extractPdfTextWithMeta, OfficeSession } from '../../src/host/office';
+import { decodeBytesWithCMap, parseToUnicodeCMap } from '../../src/host/office/pdfText';
 import { ExcelSession, rowsToXlsx } from '../../src/host/spreadsheet';
 import { extractChartDataset, renderChartSvg } from '../../src/webview/sheet/charts';
 import {
@@ -551,5 +553,127 @@ describe('v0.10.0 features', () => {
       { r: 2, c: 0, text: 'x' },
       { r: 2, c: 1, text: 'y' },
     ]);
+  });
+
+  it('parses /ToUnicode CMap bfchar, bfrange (scalar & array), ligatures, surrogate pairs, and mixed codespaces', () => {
+    const cmapText = `
+      /CIDInit /ProcSet findresource begin
+      12 dict begin
+      begincmap
+      % Mixed 1-byte ASCII + 2-byte CID codespace
+      2 begincodespacerange
+        <00> <7F>
+        <8100> <9FFF>
+      endcodespacerange
+      3 beginbfchar
+        <8101> <4E2D>
+        <8102> <00660069>
+        <8103> <D83DDE00>
+      endbfchar
+      2 beginbfrange
+        <8110> <8112> <4E00>
+        <8120> <8122> [<4F60> <597D> <FF01>]
+      endbfrange
+      endcmap
+    `;
+    const cmap = parseToUnicodeCMap(cmapText);
+    const sampleBytes = new Uint8Array([
+      0x41, // 1-byte 'A' (unmapped in bfchar -> ASCII fallback)
+      0x81, 0x01, // '中'
+      0x81, 0x02, // ligature 'fi'
+      0x81, 0x03, // emoji '😀'
+      0x81, 0x10, 0x81, 0x11, 0x81, 0x12, // scalar bfrange '一丁丂'
+      0x81, 0x20, 0x81, 0x21, 0x81, 0x22, // array bfrange '你好！'
+    ]);
+    expect(decodeBytesWithCMap(sampleBytes, cmap)).toBe('A中fi😀一丁丂你好！');
+
+    // Huge 65536-entry range must remain compact (O(1) entries) without OOM
+    const huge = parseToUnicodeCMap(
+      '1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0000> <FFFF> <0000> endbfrange',
+    );
+    expect(huge.bfranges).toHaveLength(1);
+    expect(huge.bfchar.size).toBe(0);
+    expect(decodeBytesWithCMap(new Uint8Array([0x4e, 0x2d, 0x65, 0x87]), huge)).toBe('中文');
+  });
+
+  it('extracts CJK text from PDFs using Flate-compressed /ToUnicode CMap, font switches, and Form XObjects', async () => {
+    const doc = await PDFDocument.create();
+    const helv = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage([400, 600]);
+
+    const cmapSource = `
+      /CIDInit /ProcSet findresource begin
+      12 dict begin
+      begincmap
+      1 begincodespacerange
+        <0000> <FFFF>
+      endcodespacerange
+      2 beginbfchar
+        <0001> <4E2D>
+        <0002> <6587>
+      endbfchar
+      1 beginbfrange
+        <0003> <0004> [<6D4B> <8BD5>]
+      endbfrange
+      1 beginbfchar
+        <0005> <5B8C>
+        <0006> <6210>
+      endbfchar
+      endcmap
+    `;
+    const compressedCMap = zlibSync(Buffer.from(cmapSource, 'latin1'));
+    const toUnicodeStream = doc.context.stream(compressedCMap, { Filter: 'FlateDecode' });
+    const toUnicodeRef = doc.context.register(toUnicodeStream);
+
+    const cidFontDict = doc.context.obj({
+      Type: 'Font',
+      Subtype: 'Type0',
+      BaseFont: 'DocsViewTestCJK',
+      Encoding: 'Identity-H',
+      ToUnicode: toUnicodeRef,
+    });
+    const cidFontRef = doc.context.register(cidFontDict);
+
+    // Form XObject that draws "完成" using /F2
+    const xobjContent = 'BT /F2 12 Tf <00050006> Tj ET';
+    const formXObj = doc.context.stream(zlibSync(Buffer.from(xobjContent, 'latin1')), {
+      Type: 'XObject',
+      Subtype: 'Form',
+      BBox: [0, 0, 200, 40],
+      Filter: 'FlateDecode',
+      Resources: doc.context.obj({ Font: { F2: cidFontRef } }),
+    });
+    const formXObjRef = doc.context.register(formXObj);
+
+    // Main content stream: /F1 ASCII + /F2 hex (<00010002> = 中文) + /F2 literal octal (\000\003\000\004 = 测试) + /Fm1 Do (完成)
+    const contentSource = [
+      'BT',
+      '/F1 12 Tf',
+      '(Title: ) Tj',
+      '/F2 12 Tf',
+      '<00010002> Tj',
+      '(\\000\\003\\000\\004) Tj',
+      'ET',
+      '/Fm1 Do',
+    ].join('\n');
+    const contentStream = doc.context.stream(zlibSync(Buffer.from(contentSource, 'latin1')), {
+      Filter: 'FlateDecode',
+    });
+    const contentRef = doc.context.register(contentStream);
+
+    page.node.set(
+      PDFName.of('Resources'),
+      doc.context.obj({
+        Font: { F1: helv.ref, F2: cidFontRef },
+        XObject: { Fm1: formXObjRef },
+      }),
+    );
+    page.node.set(PDFName.of('Contents'), contentRef);
+
+    const bytes = new Uint8Array(await doc.save());
+    const extracted = await extractPdfText(bytes);
+    expect(extracted).toHaveLength(1);
+    expect(extracted[0]).toContain('Title: 中文测试');
+    expect(extracted[0]).toContain('完成');
   });
 });
