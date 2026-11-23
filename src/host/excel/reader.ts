@@ -6,6 +6,7 @@ import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import * as XLSX from 'xlsx';
 import type { Cell, CellObject, CellStyle, MergeRange, SheetModel } from '../../common/protocol';
 import { colToIndex, expandSharedFormula } from './formula';
+import { attachImagesToSheetModel, extractWorkbookImages, type WorkbookImageExtraction } from './images';
 import { sheetPaths } from './xlsxPatcher';
 
 export interface LoadedSheet {
@@ -816,7 +817,7 @@ function canPatchOoxml(bytes: Uint8Array): boolean {
   }
 }
 
-async function loadWithExcelJs(bytes: Uint8Array): Promise<LoadedWorkbook> {
+async function loadWithExcelJs(bytes: Uint8Array, images: WorkbookImageExtraction): Promise<LoadedWorkbook> {
   const workbook = new ExcelJS.Workbook();
   const buffer = prepareBufferForExcelJs(bytes);
   await workbook.xlsx.load(buffer, { ignoreNodes: EXCELJS_IGNORE_NODES } as never);
@@ -825,6 +826,7 @@ async function loadWithExcelJs(bytes: Uint8Array): Promise<LoadedWorkbook> {
     let ref: ExcelJS.Worksheet | undefined = ws;
     return lazySheet(ws.name, date1904, () => {
       const out = buildExcelJsSheet(ref!);
+      attachImagesToSheetModel(out.model, images);
       ref = undefined;
       return out;
     });
@@ -894,13 +896,14 @@ function buildSheetJsSheet(name: string, ws: XLSX.WorkSheet, editable: boolean):
   return { model, numFmts, scalars };
 }
 
-function loadWithSheetJs(bytes: Uint8Array, editable = false): LoadedWorkbook {
+function loadWithSheetJs(bytes: Uint8Array, editable = false, images?: WorkbookImageExtraction): LoadedWorkbook {
   const workbook = XLSX.read(bytes, { type: 'array', dense: true, cellText: true, cellFormula: true, cellNF: true });
   const date1904 = Boolean(workbook.Workbook?.WBProps?.date1904);
   const sheets = workbook.SheetNames.map((name) => {
     let ref: XLSX.WorkSheet | undefined = workbook.Sheets[name];
     return lazySheet(name, date1904, () => {
       const out = buildSheetJsSheet(name, ref!, editable);
+      attachImagesToSheetModel(out.model, images);
       ref = undefined;
       return out;
     });
@@ -909,17 +912,18 @@ function loadWithSheetJs(bytes: Uint8Array, editable = false): LoadedWorkbook {
 }
 
 export async function loadWorkbook(bytes: Uint8Array, fileName: string): Promise<LoadedWorkbook> {
+  const images = extractWorkbookImages(bytes, fileName);
   if (/\.(xlsx|xlsm)$/i.test(fileName) && isZipArchive(bytes)) {
     try {
-      const loaded = await loadWithExcelJs(bytes);
+      const loaded = await loadWithExcelJs(bytes, images);
       if (loaded.sheets.length > 0) {
         return loaded;
       }
-      const fallback = loadWithSheetJs(bytes, canPatchOoxml(bytes));
+      const fallback = loadWithSheetJs(bytes, canPatchOoxml(bytes), images);
       return fallback.sheets.length > 0 ? fallback : loaded;
     } catch {
-      return loadWithSheetJs(bytes, canPatchOoxml(bytes));
+      return loadWithSheetJs(bytes, canPatchOoxml(bytes), images);
     }
   }
-  return loadWithSheetJs(bytes, false);
+  return loadWithSheetJs(bytes, false, images);
 }

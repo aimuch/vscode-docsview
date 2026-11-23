@@ -6,7 +6,7 @@
 //   left   - position:sticky left   -> row headers + frozen columns
 //   corner - sticky top and left    -> corner box + cells frozen in both directions
 // Only cells intersecting the viewport exist in the DOM.
-import type { Cell, CellChange, CellStyle, MergeRange } from '../../common/protocol';
+import type { Cell, CellChange, CellStyle, MergeRange, SheetImage } from '../../common/protocol';
 import './grid.css';
 
 export interface GridSource {
@@ -20,6 +20,10 @@ export interface GridSource {
   merges?: MergeRange[];
   frozenRows?: number;
   frozenCols?: number;
+  /** Deduplicated media data URLs referenced by `images`. */
+  media?: Record<string, string>;
+  /** Embedded (in-cell) and floating images anchored on this sheet. */
+  images?: SheetImage[];
   /** 'light' renders a white sheet regardless of theme (for workbooks with authored colours). */
   palette?: 'theme' | 'light';
   /** Row header text; defaults to the 1-based row index (a sorted view shows the original numbers). */
@@ -67,6 +71,10 @@ export interface GridOptions {
   onContextMenu?(area: 'cell' | 'row' | 'col', r: number, c: number, clientX: number, clientY: number): void;
   /** Live mirror of the in-cell editor text (for syncing the formula bar). */
   onEditorInput?(value: string): void;
+  /** Opens a full-size preview for an embedded or floating sheet image. */
+  onImagePreview?(img: SheetImage, src: string): void;
+  /** Tooltip hint appended to embedded/floating sheet images. */
+  imagePreviewHint?: string;
 }
 
 const ROW_HEIGHT = 24;
@@ -138,8 +146,11 @@ export class Grid {
   private mergeAnchors = new Map<string, MergeRange>();
   private sortedMerges: MergeRange[] = [];
   private maxMergeRows = 1;
+  private cellImages = new Map<string, SheetImage>();
+  private floatingImages: SheetImage[] = [];
 
   private pool = new Map<string, CellEl>();
+  private imagePool = new Map<string, { node: HTMLDivElement; img: SheetImage }>();
   private frame = 0;
   private frameTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -216,6 +227,7 @@ export class Grid {
     this.frozenCols = clamp(source.frozenCols ?? 0, 0, Math.max(0, source.colCount - 1));
     this.root.classList.toggle('grid-light', source.palette === 'light');
     this.buildMergeIndex(source.merges);
+    this.buildImageIndex(source.images);
     this.measure();
     if (!keepView) {
       this.active = { r: 0, c: 0 };
@@ -236,6 +248,10 @@ export class Grid {
       node.remove();
     }
     this.pool.clear();
+    for (const item of this.imagePool.values()) {
+      item.node.remove();
+    }
+    this.imagePool.clear();
     this.schedule();
   }
 
@@ -289,6 +305,22 @@ export class Grid {
     }
     this.sortedMerges = [...merges].sort((a, b) => a.r - b.r || a.c - b.c);
     this.maxMergeRows = maxRs;
+  }
+
+  private buildImageIndex(images: SheetImage[] | undefined): void {
+    this.cellImages.clear();
+    this.floatingImages = [];
+    if (!images?.length) {
+      return;
+    }
+    for (const img of images) {
+      if (img.kind === 'cell') {
+        const anchor = this.anchorOf(img.fromRow, img.fromCol);
+        this.cellImages.set(`${anchor.r},${anchor.c}`, img);
+      } else {
+        this.floatingImages.push(img);
+      }
+    }
   }
 
   /** First index in `sortedMerges` whose top row `m.r >= minRow`. */
@@ -443,7 +475,130 @@ export class Grid {
         this.pool.delete(key);
       }
     }
+    this.renderFloatingImages();
     this.paintSelection();
+  }
+
+  private floatingImageRect(img: SheetImage): { left: number; top: number; width: number; height: number } {
+    const z = this.zoom;
+    const { rowCount, colCount } = this.source;
+    const colCoord = (col: number, offPx: number) =>
+      this.headerW +
+      (col <= colCount ? this.colX[col] : this.colX[colCount] + (col - colCount) * 80 * z) +
+      offPx * z;
+    const rowCoord = (row: number, offPx: number) =>
+      this.headerH +
+      (row <= rowCount ? this.rowY[row] : this.rowY[rowCount] + (row - rowCount) * ROW_HEIGHT * z) +
+      offPx * z;
+
+    const left = colCoord(img.fromCol, img.fromX);
+    const top = rowCoord(img.fromRow, img.fromY);
+    if (img.toRow !== undefined && img.toCol !== undefined) {
+      const right = colCoord(img.toCol, img.toX ?? 0);
+      const bottom = rowCoord(img.toRow, img.toY ?? 0);
+      return {
+        left,
+        top,
+        width: Math.max(4, right - left),
+        height: Math.max(4, bottom - top),
+      };
+    }
+    return {
+      left,
+      top,
+      width: Math.max(4, (img.width ?? 120) * z),
+      height: Math.max(4, (img.height ?? 90) * z),
+    };
+  }
+
+  private imageTransform(img: SheetImage): string {
+    const parts: string[] = [];
+    if (img.rot) parts.push(`rotate(${img.rot}deg)`);
+    if (img.flipH) parts.push('scaleX(-1)');
+    if (img.flipV) parts.push('scaleY(-1)');
+    return parts.join(' ');
+  }
+
+  private renderFloatingImages(): void {
+    const usedImgs = new Set<string>();
+    const media = this.source.media;
+    if (this.floatingImages.length && media) {
+      const { scrollLeft, scrollTop, clientWidth, clientHeight } = this.viewport;
+      const cull = clientWidth > 0 && clientHeight > 0;
+      const viewLeft = this.headerW + scrollLeft - 320;
+      const viewRight = this.headerW + scrollLeft + clientWidth + 320;
+      const viewTop = this.headerH + scrollTop - 320;
+      const viewBottom = this.headerH + scrollTop + clientHeight + 320;
+
+      for (const img of this.floatingImages) {
+        const src = media[img.mediaId];
+        if (!src) continue;
+        const rect = this.floatingImageRect(img);
+        const layer = this.layerOf(img.fromRow, img.fromCol);
+        if (cull) {
+          if ((layer === 'body' || layer === 'top') && (rect.left + rect.width < viewLeft || rect.left > viewRight)) {
+            continue;
+          }
+          if ((layer === 'body' || layer === 'left') && (rect.top + rect.height < viewTop || rect.top > viewBottom)) {
+            continue;
+          }
+        }
+        usedImgs.add(img.id);
+        let entry = this.imagePool.get(img.id);
+        if (!entry) {
+          const wrap = document.createElement('div');
+          wrap.className = 'grid-floating-img';
+          const hint = this.opts.imagePreviewHint ?? '';
+          wrap.title = img.alt ? (hint ? `${img.alt} · ${hint}` : img.alt) : hint;
+
+          const pic = document.createElement('img');
+          pic.src = src;
+          pic.alt = img.alt ?? '';
+          pic.draggable = false;
+          const tf = this.imageTransform(img);
+          if (tf) pic.style.transform = tf;
+
+          const zoomBtn = document.createElement('button');
+          zoomBtn.type = 'button';
+          zoomBtn.className = 'grid-img-zoom-btn';
+          zoomBtn.title = hint || img.alt || 'Preview';
+          zoomBtn.setAttribute('aria-label', hint || img.alt || 'Preview');
+          zoomBtn.innerHTML =
+            '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/><path d="M5 7h4M7 5v4"/></svg>';
+          zoomBtn.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          });
+          zoomBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.opts.onImagePreview?.(img, src);
+          });
+
+          wrap.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            this.opts.onImagePreview?.(img, src);
+          });
+
+          wrap.append(pic, zoomBtn);
+          this.layers[layer].append(wrap);
+          entry = { node: wrap, img };
+          this.imagePool.set(img.id, entry);
+        }
+        const s = entry.node.style;
+        s.left = `${rect.left}px`;
+        s.top = `${rect.top}px`;
+        s.width = `${rect.width}px`;
+        s.height = `${rect.height}px`;
+      }
+    }
+
+    for (const [id, entry] of this.imagePool) {
+      if (!usedImgs.has(id)) {
+        entry.node.remove();
+        this.imagePool.delete(id);
+      }
+    }
   }
 
   private renderRegion(layer: LayerName, r0: number, r1: number, c0: number, c1: number, used: Set<string>): void {
@@ -518,6 +673,20 @@ export class Grid {
         }
       }
     }
+    const cellImg = this.cellImages.get(`${r},${c}`);
+    const cellImgSrc = cellImg ? this.source.media?.[cellImg.mediaId] : undefined;
+    if (cellImg && cellImgSrc) {
+      node.classList.add('grid-cell-has-img');
+      const hint = this.opts.imagePreviewHint ?? '';
+      node.title = cellImg.alt ? (hint ? `${cellImg.alt} · ${hint}` : cellImg.alt) : hint;
+      const pic = document.createElement('img');
+      pic.className = 'grid-cell-img';
+      pic.src = cellImgSrc;
+      pic.alt = cellImg.alt ?? '';
+      pic.draggable = false;
+      node.append(pic);
+    }
+
     const condBg = this.source.cellBgOverlay?.(r, c);
     if (condBg) {
       s.setProperty('--cell-cond-bg', condBg);
@@ -935,6 +1104,14 @@ export class Grid {
       this.editor.style.left = `${this.headerW + this.colX[c]}px`;
       this.editor.style.width = `${Math.max(60, this.colX[Math.min(colCount, c + (merge?.cs ?? 1))] - this.colX[c])}px`;
     }
+    for (const entry of this.imagePool.values()) {
+      const rect = this.floatingImageRect(entry.img);
+      const s = entry.node.style;
+      s.left = `${rect.left}px`;
+      s.top = `${rect.top}px`;
+      s.width = `${rect.width}px`;
+      s.height = `${rect.height}px`;
+    }
   }
 
   private startResize(col: number, startX: number): void {
@@ -1173,13 +1350,23 @@ export class Grid {
         }
       }
     }
+    const hit = this.hitTest(e.clientX, e.clientY);
+    if (hit.area === 'cell') {
+      const anchor = this.anchorOf(hit.r, hit.c);
+      const cellImg = this.cellImages.get(`${anchor.r},${anchor.c}`);
+      const cellImgSrc = cellImg ? this.source.media?.[cellImg.mediaId] : undefined;
+      if (cellImg && cellImgSrc && this.opts.onImagePreview) {
+        e.preventDefault();
+        this.opts.onImagePreview(cellImg, cellImgSrc);
+        return;
+      }
+    }
     if (!this.opts.editable) {
-      if (this.hitTest(e.clientX, e.clientY).area === 'cell') {
+      if (hit.area === 'cell') {
         this.opts.onBlockedEdit?.();
       }
       return;
     }
-    const hit = this.hitTest(e.clientX, e.clientY);
     if (hit.area === 'cell') {
       this.startEdit();
     }

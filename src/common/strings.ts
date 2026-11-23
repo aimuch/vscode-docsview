@@ -471,6 +471,11 @@ const en = {
   toolbarGoSetting: 'Configure',
   aiRetry: 'Retry',
   sheetName: 'Sheet',
+  sheetImageTitle: 'Embedded image',
+  sheetImagePreviewHint: 'Double-click to view full size',
+  sheetImageFit: 'Fit',
+  sheetImageActual: '100%',
+  sheetImageAskAi: 'Analyze with AI',
 };
 
 const zh: typeof en = {
@@ -942,6 +947,11 @@ const zh: typeof en = {
   toolbarGoSetting: '去设置',
   aiRetry: '重试',
   sheetName: '工作表',
+  sheetImageTitle: '表格图片预览',
+  sheetImagePreviewHint: '双击查看大图',
+  sheetImageFit: '适应窗口',
+  sheetImageActual: '原始大小',
+  sheetImageAskAi: 'AI 分析图片',
 };
 
 export type StringKey = keyof typeof en;

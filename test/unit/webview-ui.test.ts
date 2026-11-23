@@ -803,4 +803,72 @@ describe("grid lock and column menu", () => {
     expect(truncated).toBe(1);
     parent.remove();
   });
+
+  it("renders floating and in-cell Excel images in Grid and invokes onImagePreview on double-click", async () => {
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const previews: { id: string; src: string }[] = [];
+    const dataUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const g = new grid.Grid(parent, {
+      editable: false,
+      onEdit: () => undefined,
+      onImagePreview: (img, src) => previews.push({ id: img.id, src }),
+      imagePreviewHint: "Double-click to preview",
+    });
+    g.setData({
+      rowCount: 6,
+      colCount: 5,
+      cell: () => "",
+      colWidths: [80, 100, 100, 100, 100],
+      media: { m0: dataUrl },
+      images: [
+        {
+          id: "float1",
+          mediaId: "m0",
+          kind: "floating",
+          fromRow: 1,
+          fromCol: 1,
+          fromX: 4,
+          fromY: 2,
+          toRow: 3,
+          toCol: 3,
+          toX: 10,
+          toY: 6,
+          alt: "Chart Snapshot",
+          rot: 90,
+        },
+        {
+          id: "cell1",
+          mediaId: "m0",
+          kind: "cell",
+          fromRow: 0,
+          fromCol: 0,
+          fromX: 0,
+          fromY: 0,
+          alt: "Avatar",
+        },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 200));
+
+    const floatingWrap = parent.querySelector<HTMLElement>(".grid-floating-img");
+    expect(floatingWrap).not.toBeNull();
+    expect(floatingWrap!.querySelector("img")?.getAttribute("src")).toBe(dataUrl);
+    expect(floatingWrap!.querySelector("img")?.style.transform).toContain("rotate(90deg)");
+    expect(parseFloat(floatingWrap!.style.width)).toBeCloseTo(206, 0);
+
+    const cellImg = parent.querySelector<HTMLImageElement>(".grid-cell-has-img .grid-cell-img");
+    expect(cellImg).not.toBeNull();
+    expect(cellImg!.getAttribute("src")).toBe(dataUrl);
+
+    // Double-click floating image opens preview
+    floatingWrap!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    expect(previews).toEqual([{ id: "float1", src: dataUrl }]);
+
+    // Zoom button click also opens preview
+    floatingWrap!.querySelector<HTMLButtonElement>(".grid-img-zoom-btn")!.click();
+    expect(previews).toHaveLength(2);
+    parent.remove();
+  });
 });

@@ -1,6 +1,15 @@
 // Table view for CSV/TSV, JSONL and Excel workbooks.
 import { extractFormulaFromAiResponse, extractTableFromAiResponse } from '../../common/aiResponseParser';
-import type { AiSheetSchemaContext, Cell, CellChange, CellFormatPatch, SheetModel, StructureOp, WorkbookInfo } from '../../common/protocol';
+import type {
+  AiSheetSchemaContext,
+  Cell,
+  CellChange,
+  CellFormatPatch,
+  SheetImage,
+  SheetModel,
+  StructureOp,
+  WorkbookInfo,
+} from '../../common/protocol';
 import { cellRaw, cellText, columnName, Grid, type GridSource, type Selection } from '../grid/grid';
 import '../shared/base.css';
 import { createAiAssistant } from '../shared/aiAssistant';
@@ -1594,6 +1603,7 @@ function sourceFor(index: number, model: SheetModel): GridSource {
   const map = rowMap;
   let rowHeights = model.rowHeights;
   let merges = model.merges;
+  let images = model.images;
   if (map) {
     // Heights follow their rows; merges only survive inside the fixed header rows.
     const fixed = fixedRows(model, view);
@@ -1601,6 +1611,36 @@ function sourceFor(index: number, model: SheetModel): GridSource {
       ? Object.fromEntries(map.map((r, i) => [i, model.rowHeights![r]]).filter(([, h]) => h !== undefined))
       : undefined;
     merges = model.merges?.filter((m) => m.r + m.rs <= fixed);
+    if (model.images?.length) {
+      const srcToDisp = new Map<number, number>();
+      map.forEach((srcR, dispR) => srcToDisp.set(srcR, dispR));
+      const remapped: SheetImage[] = [];
+      for (const img of model.images) {
+        if (img.kind === 'cell') {
+          const dispR = srcToDisp.get(img.fromRow);
+          if (dispR !== undefined) {
+            remapped.push({ ...img, fromRow: dispR });
+          }
+        } else if (img.fromRow < fixed && (img.toRow ?? img.fromRow) < fixed) {
+          remapped.push(img);
+        } else if (
+          img.toRow === undefined ||
+          img.toRow === img.fromRow ||
+          (img.toRow === img.fromRow + 1 && (img.toY ?? 0) === 0)
+        ) {
+          const dispR = srcToDisp.get(img.fromRow);
+          if (dispR !== undefined) {
+            const rowSpan = img.toRow !== undefined ? img.toRow - img.fromRow : undefined;
+            remapped.push({
+              ...img,
+              fromRow: dispR,
+              toRow: rowSpan !== undefined ? dispR + rowSpan : undefined,
+            });
+          }
+        }
+      }
+      images = remapped.length ? remapped : undefined;
+    }
   }
   const frozenR = effectiveFrozenRows(index, model);
   const frozenC = effectiveFrozenCols(index, model);
@@ -1628,6 +1668,8 @@ function sourceFor(index: number, model: SheetModel): GridSource {
     merges,
     frozenRows: frozenR,
     frozenCols: frozenC,
+    media: model.media,
+    images,
     palette: !plain && model.styles?.some((s) => s.color || s.bg) ? 'light' : 'theme',
     rowLabel: map ? (r) => String(map[r] + 1) : undefined,
     colBadge: (c) => {
@@ -2065,11 +2107,58 @@ function ensureGrid(): Grid {
       onColumnAutoFit: (col) => autoFitColumn(col),
       onColumnMenu: (col, anchor) => openColumnMenu(col, anchor),
       onContextMenu: (_area, _r, _c, x, y) => openGridContextMenu(x, y),
+      onImagePreview: (img, src) => openImageLightbox(img, src),
+      imagePreviewHint: t('sheetImagePreviewHint'),
     });
     grid.setRtl(rtl);
     grid.setZoom(sheetZoom);
   }
   return grid;
+}
+
+function openImageLightbox(img: SheetImage, src: string) {
+  const title = img.alt || t('sheetImageTitle');
+  const dims = el('span', { class: 'dv-label sheet-img-dims' });
+  let actual = false;
+  const stage = el('div', { class: 'sheet-img-stage' });
+  const preview = document.createElement('img');
+  preview.src = src;
+  preview.alt = title;
+  preview.draggable = false;
+  const syncDims = () => {
+    if (preview.naturalWidth > 0 && preview.naturalHeight > 0) {
+      dims.textContent = `${preview.naturalWidth} × ${preview.naturalHeight}`;
+    }
+  };
+  preview.addEventListener('load', syncDims);
+  syncDims();
+  stage.append(preview);
+
+  const fitBtn = textButton(t('sheetImageActual'), t('sheetImageActual'), () => {
+    actual = !actual;
+    stage.classList.toggle('sheet-img-actual', actual);
+    fitBtn.textContent = actual ? t('sheetImageFit') : t('sheetImageActual');
+    fitBtn.title = fitBtn.textContent;
+  });
+  let handle: ReturnType<typeof openAccessibleModal> | undefined;
+  const aiBtn = textButton(t('sheetImageAskAi'), t('sheetImageAskAi'), () => {
+    handle?.close();
+    ai.open({
+      presetAction: 'visionChart',
+      capturedOverride: { ...captureSheetAiContext(), imageDataUrl: src, badge: title },
+      autoRun: true,
+    });
+  });
+
+  handle = openAccessibleModal({
+    id: 'sheetImageLightbox',
+    title,
+    width: 'min(920px, 94vw)',
+    headExtra: [dims],
+    body: [stage],
+    footer: [fitBtn, aiBtn],
+    onClose: () => grid?.focus(),
+  });
 }
 
 function edit(changes: CellChange[]) {

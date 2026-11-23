@@ -225,3 +225,72 @@
 .grid-rtl .grid-editor {
   direction: rtl;
 }
+
+/* Embedded in-cell images (WPS DISPIMG / Excel 365 Place in Cell). */
+.grid-cell.grid-cell-has-img {
+  padding: 2px;
+  justify-content: center;
+  align-items: center;
+  cursor: zoom-in;
+}
+
+.grid-cell-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Floating DrawingML / ODS images anchored above the grid. */
+.grid-floating-img {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  overflow: hidden;
+  user-select: none;
+  cursor: zoom-in;
+}
+
+.grid-floating-img:hover {
+  outline: 1.5px solid var(--grid-accent);
+  outline-offset: -1px;
+}
+
+.grid-floating-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+.grid-img-zoom-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.62);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background-color 0.12s ease;
+}
+
+.grid-floating-img:hover .grid-img-zoom-btn,
+.grid-img-zoom-btn:focus-visible {
+  opacity: 1;
+}
+
+.grid-img-zoom-btn:hover {
+  background: var(--grid-accent);
+}

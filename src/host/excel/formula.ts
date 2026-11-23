@@ -1339,6 +1339,10 @@ function evalFunction(name: string, args: AstNode[], ctx: FormulaContext): EvalR
       return Math.random();
 
     // ---- Text functions
+    case 'DISPIMG':
+    case '_XLFN.DISPIMG':
+      // WPS Office embedded-in-cell image formula: actual image is rendered via SheetModel.images.
+      return '';
     case 'CONCAT':
     case 'CONCATENATE':
       return flattenValues(args.map((_, i) => evalArg(i)))

@@ -51,6 +51,37 @@ export interface MergeRange {
   cs: number;
 }
 
+export interface SheetImage {
+  /** Unique id within the sheet. */
+  id: string;
+  /** Key into SheetModel.media (`data:...` URL). */
+  mediaId: string;
+  /** 'cell' = embedded inside a cell (WPS DISPIMG / Excel 365 Place in Cell); 'floating' = anchored over grid. */
+  kind: 'cell' | 'floating';
+  /** Start anchor cell (0-based). For absolute anchors, fromRow/fromCol are 0 and fromX/fromY are absolute px. */
+  fromRow: number;
+  fromCol: number;
+  /** Pixel offset from top-left of (fromRow, fromCol) at zoom=1. */
+  fromX: number;
+  fromY: number;
+  /** End anchor cell (0-based) for twoCellAnchor. Omit for oneCellAnchor, absoluteAnchor, or cell images. */
+  toRow?: number;
+  toCol?: number;
+  /** Pixel offset from top-left of (toRow, toCol) at zoom=1. */
+  toX?: number;
+  toY?: number;
+  /** Explicit pixel dimensions at zoom=1 (used for oneCellAnchor & absoluteAnchor). */
+  width?: number;
+  height?: number;
+  /** Optional alt text / name from cNvPr/@descr or @name. */
+  alt?: string;
+  /** Clockwise rotation in degrees. */
+  rot?: number;
+  /** Horizontal / vertical flip. */
+  flipH?: boolean;
+  flipV?: boolean;
+}
+
 export interface SheetModel {
   name: string;
   rowCount: number;
@@ -65,6 +96,10 @@ export interface SheetModel {
   frozenRows?: number;
   frozenCols?: number;
   styles?: CellStyle[];
+  /** Deduplicated image data URLs referenced by `images` (`mediaId -> data:...`). */
+  media?: Record<string, string>;
+  /** Embedded and floating images anchored on this sheet. */
+  images?: SheetImage[];
 }
 
 export interface WorkbookInfo {

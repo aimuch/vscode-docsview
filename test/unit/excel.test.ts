@@ -545,3 +545,220 @@ describe('formula engine', () => {
     expect(renameSheetInFormula('Data!A1 + Other!B2', 'Data', 'Q1 Report')).toBe("'Q1 Report'!A1 + Other!B2");
   });
 });
+
+describe('Excel embedded & floating images', () => {
+  const TINY_PNG_B64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  const TINY_PNG = Uint8Array.from(Buffer.from(TINY_PNG_B64, 'base64'));
+
+  it('extracts floating DrawingML images (twoCellAnchor & oneCellAnchor), expands bounds, shifts on edits, and preserves on save', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Gallery');
+    ws.getCell('A1').value = 'Header';
+    const imgId = wb.addImage({ base64: TINY_PNG_B64, extension: 'png' });
+    // Two-cell anchored image spanning C2:F8
+    ws.addImage(imgId, 'C2:F8');
+    // One-cell anchored image placed far right/bottom past text cells (M48)
+    ws.addImage(imgId, { tl: { col: 12, row: 47 }, ext: { width: 160, height: 120 } });
+
+    const bytes = new Uint8Array(await wb.xlsx.writeBuffer());
+    const session = await ExcelSession.open(bytes, 'gallery.xlsx');
+    const model = session.sheet(0)!;
+
+    expect(model.images).toHaveLength(2);
+    // Same media binary is deduplicated to a single entry
+    expect(Object.keys(model.media ?? {})).toHaveLength(1);
+    const mediaId = model.images![0].mediaId;
+    expect(model.media![mediaId]).toMatch(/^data:image\/png;base64,/);
+
+    const twoCell = model.images!.find((i) => i.toRow !== undefined)!;
+    expect(twoCell.kind).toBe('floating');
+    expect(twoCell.fromCol).toBe(2);
+    expect(twoCell.fromRow).toBe(1);
+    // ExcelJS writes exclusive end-edge of C2:F8 as start of col G (6) and row 9 (8)
+    expect(twoCell.toCol).toBe(6);
+    expect(twoCell.toRow).toBe(8);
+
+    const oneCell = model.images!.find((i) => i.toRow === undefined)!;
+    expect(oneCell.fromCol).toBe(12);
+    expect(oneCell.fromRow).toBe(47);
+    expect(oneCell.width).toBeCloseTo(160, 0);
+    expect(oneCell.height).toBeCloseTo(120, 0);
+    // Grid bounds expanded to cover the distant image
+    expect(model.colCount).toBeGreaterThanOrEqual(14);
+    expect(model.rowCount).toBeGreaterThanOrEqual(52);
+
+    // Inserting 2 rows at row 0 shifts image anchors and undo restores them cleanly
+    const ins = session.structure(0, 'insertRow', 0, 2)!;
+    expect(session.sheet(0)!.images![0].fromRow).toBe(3);
+    expect(session.sheet(0)!.images![1].fromRow).toBe(49);
+    ins.undo();
+    expect(session.sheet(0)!.images![0].fromRow).toBe(1);
+    expect(session.sheet(0)!.media?.[mediaId]).toMatch(/^data:image\/png;base64,/);
+
+    // Editing a text cell and exporting preserves the original drawings & media in the saved xlsx
+    session.edit(0, [{ r: 0, c: 0, text: 'Updated Header' }]);
+    const reopened = await ExcelSession.open(session.export(), 'gallery.xlsx');
+    expect(reopened.sheet(0)!.images).toHaveLength(2);
+    expect(Object.keys(reopened.sheet(0)!.media ?? {})).toHaveLength(1);
+  });
+
+  it('extracts namespace-less wsDr, mc:AlternateContent (no duplicates), absoluteAnchor, and rotation/flip', async () => {
+    const base = await makeWorkbook();
+    const files = unzipSync(base);
+    files['xl/media/logo.png'] = TINY_PNG;
+    files['xl/worksheets/_rels/sheet1.xml.rels'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rIdDr1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>' +
+        '</Relationships>',
+    );
+    files['xl/drawings/_rels/drawing1.xml.rels'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rIdImg1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="/xl/media/logo.png"/>' +
+        '</Relationships>',
+    );
+    files['xl/drawings/drawing1.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<wsDr xmlns="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">' +
+        '<absoluteAnchor>' +
+        '<pos x="95250" y="190500"/>' +
+        '<ext cx="952500" cy="476250"/>' +
+        '<mc:AlternateContent>' +
+        '<mc:Choice Requires="a14"><pic><nvPicPr><cNvPr id="2" name="Logo" descr="Brand Logo"/></nvPicPr>' +
+        '<blipFill><a:blip r:embed="rIdImg1"/></blipFill>' +
+        '<spPr><a:xfrm rot="5400000" flipH="1"/></spPr></pic></mc:Choice>' +
+        '<mc:Fallback><pic><nvPicPr><cNvPr id="2" name="Dup"/></nvPicPr>' +
+        '<blipFill><a:blip r:embed="rIdImg1"/></blipFill><spPr/></pic></mc:Fallback>' +
+        '</mc:AlternateContent>' +
+        '</absoluteAnchor></wsDr>',
+    );
+
+    const session = await ExcelSession.open(zipSync(files), 'alt.xlsx');
+    const imgs = session.sheet(0)!.images!;
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0]).toMatchObject({
+      kind: 'floating',
+      fromRow: 0,
+      fromCol: 0,
+      fromX: 10,
+      fromY: 20,
+      width: 100,
+      height: 50,
+      alt: 'Brand Logo',
+      rot: 90,
+      flipH: true,
+    });
+  });
+
+  it('extracts WPS Office in-cell images (xl/cellimages.xml + =DISPIMG) without #NAME? errors', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Catalog');
+    ws.getCell('A1').value = 'Product';
+    ws.getCell('B1').value = 'Photo';
+    ws.getCell('A2').value = 'Camera';
+    ws.getCell('B2').value = { formula: 'DISPIMG("ID_CAM01",1)', result: { error: '#NAME?' } };
+    const files = unzipSync(new Uint8Array(await wb.xlsx.writeBuffer()));
+
+    files['xl/media/cam.png'] = TINY_PNG;
+    files['xl/_rels/cellimages.xml.rels'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/cam.png"/>' +
+        '</Relationships>',
+    );
+    files['xl/cellimages.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<etc:cellImages xmlns:etc="http://www.wps.cn/officeDocument/2017/etCustomData" ' +
+        'xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        '<etc:cellImage><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="ID_CAM01" descr="Camera Photo"/></xdr:nvPicPr>' +
+        '<xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill></xdr:pic></etc:cellImage>' +
+        '</etc:cellImages>',
+    );
+
+    const session = await ExcelSession.open(zipSync(files), 'wps.xlsx');
+    const model = session.sheet(0)!;
+    expect(model.images).toHaveLength(1);
+    expect(model.images![0]).toMatchObject({
+      kind: 'cell',
+      fromRow: 1,
+      fromCol: 1,
+      alt: 'Camera Photo',
+    });
+    const cell = model.rows[1][1] as CellObject;
+    expect(cell.v).toBe('');
+    expect(cell.raw).toContain('DISPIMG("ID_CAM01",1)');
+
+    // Editing another cell triggers formula recalculation: DISPIMG must stay empty instead of #NAME?
+    session.edit(0, [{ r: 1, c: 0, text: 'Camera Pro' }]);
+    expect((session.sheet(0)!.rows[1][1] as CellObject).v).toBe('');
+  });
+
+  it('extracts Microsoft Excel 365 Place-in-Cell images (xl/metadata.xml + xl/richData/*)', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Rich');
+    ws.getCell('A1').value = 'Item';
+    ws.getCell('B2').value = { error: '#VALUE!' };
+    const files = unzipSync(new Uint8Array(await wb.xlsx.writeBuffer()));
+
+    // Inject vm="1" on cell B2 (Excel 365 Place-in-Cell reference)
+    files['xl/worksheets/sheet1.xml'] = strToU8(
+      strFromU8(files['xl/worksheets/sheet1.xml']).replace('<c r="B2"', '<c r="B2" vm="1"'),
+    );
+    files['xl/media/e365.png'] = TINY_PNG;
+    files['xl/metadata.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+        '<metadataTypes count="2">' +
+        '<metadataType name="XLDAPR"/>' +
+        '<metadataType name="XLRICHVALUE"/>' +
+        '</metadataTypes>' +
+        '<valueMetadata count="1"><bk><rc t="2" v="0"/></bk></valueMetadata>' +
+        '</metadata>',
+    );
+    files['xl/richData/rdrichvaluestructure.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<rvStructures xmlns="http://schemas.microsoft.com/office/spreadsheetml/2017/richdata" count="1">' +
+        '<s t="_localImage"><k n="_rvRel:LocalImageIdentifier" t="i"/><k n="Text" t="s"/></s>' +
+        '</rvStructures>',
+    );
+    files['xl/richData/rdrichvalue.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<rvData xmlns="http://schemas.microsoft.com/office/spreadsheetml/2017/richdata" count="1">' +
+        '<rv s="0"><v>0</v><v>Product Thumbnail</v></rv>' +
+        '</rvData>',
+    );
+    files['xl/richData/richValueRel.xml'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<richValueRels xmlns="http://schemas.microsoft.com/office/spreadsheetml/2022/richvaluerel" ' +
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        '<rel r:id="rId1"/>' +
+        '</richValueRels>',
+    );
+    files['xl/richData/_rels/richValueRel.xml.rels'] = strToU8(
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/e365.png"/>' +
+        '</Relationships>',
+    );
+
+    const session = await ExcelSession.open(zipSync(files), 'e365.xlsx');
+    const model = session.sheet(0)!;
+    expect(model.images).toHaveLength(1);
+    expect(model.images![0]).toMatchObject({
+      kind: 'cell',
+      fromRow: 1,
+      fromCol: 1,
+      alt: 'Product Thumbnail',
+    });
+    expect(model.media?.[model.images![0].mediaId]).toMatch(/^data:image\/png;base64,/);
+    // #VALUE! placeholder is cleared
+    expect(model.rows[1][1]).toBe('');
+  });
+});

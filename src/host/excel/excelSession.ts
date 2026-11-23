@@ -6,6 +6,7 @@ import type {
   CellStyle,
   HostMessage,
   MergeRange,
+  SheetImage,
   SheetModel,
   StructureOp,
   WorkbookInfo,
@@ -76,6 +77,8 @@ function cloneModel(m: SheetModel): SheetModel {
     frozenRows: m.frozenRows,
     frozenCols: m.frozenCols,
     styles: m.styles ? m.styles.map((s) => ({ ...s })) : undefined,
+    media: m.media,
+    images: m.images ? m.images.map((img) => ({ ...img })) : undefined,
   };
 }
 
@@ -166,6 +169,54 @@ function shiftMerges(merges: MergeRange[] | undefined, op: StructureOp, at: numb
     if (rs >= 1 && cs >= 1 && (rs > 1 || cs > 1)) {
       out.push({ r: r0, c: c0, rs, cs });
     }
+  }
+  return out.length ? out : undefined;
+}
+
+function shiftImages(
+  images: SheetImage[] | undefined,
+  op: StructureOp,
+  at: number,
+  count: number,
+): SheetImage[] | undefined {
+  if (!images?.length) {
+    return undefined;
+  }
+  const isRow = op === 'insertRow' || op === 'deleteRows';
+  const isInsert = op.startsWith('insert');
+  const shiftIndex = (idx: number): number => {
+    if (isInsert) return idx >= at ? idx + count : idx;
+    if (idx >= at + count) return idx - count;
+    if (idx >= at) return at;
+    return idx;
+  };
+  const out: SheetImage[] = [];
+  for (const img of images) {
+    if (img.kind === 'cell') {
+      const targetIdx = isRow ? img.fromRow : img.fromCol;
+      if (!isInsert && targetIdx >= at && targetIdx < at + count) {
+        continue;
+      }
+      out.push({
+        ...img,
+        fromRow: isRow ? shiftIndex(img.fromRow) : img.fromRow,
+        fromCol: isRow ? img.fromCol : shiftIndex(img.fromCol),
+      });
+      continue;
+    }
+    const next: SheetImage = { ...img };
+    if (isRow) {
+      next.fromRow = shiftIndex(img.fromRow);
+      if (img.toRow !== undefined) {
+        next.toRow = Math.max(next.fromRow, shiftIndex(img.toRow));
+      }
+    } else {
+      next.fromCol = shiftIndex(img.fromCol);
+      if (img.toCol !== undefined) {
+        next.toCol = Math.max(next.fromCol, shiftIndex(img.toCol));
+      }
+    }
+    out.push(next);
   }
   return out.length ? out : undefined;
 }
@@ -736,6 +787,7 @@ export class ExcelSession {
     }
 
     model.merges = shiftMerges(model.merges, op, at, count);
+    model.images = shiftImages(model.images, op, at, count);
 
     // 2. Shift numFmts, scalars and userFormulas keys on the target sheet.
     const nextFmts = new Map<string, string>();
